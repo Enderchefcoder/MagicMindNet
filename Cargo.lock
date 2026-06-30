@@ -805,6 +805,7 @@ dependencies = [
 name = "mmn-io"
 version = "0.1.0"
 dependencies = [
+ "half",
  "mmn-core",
  "mmn-models",
  "ndarray",

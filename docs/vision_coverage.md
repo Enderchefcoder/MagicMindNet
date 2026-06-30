@@ -70,6 +70,6 @@ When `vision=true`, safetensors checkpoints include:
 
 ## Roadmap
 
-- External HF model import (GQA / BF16→F32 conversion when shapes differ)
+- External HF model import (classifier HF IO)
 
 See also [training.md](training.md), [checkpoint_coverage.md](checkpoint_coverage.md), and [limitations.md](limitations.md).

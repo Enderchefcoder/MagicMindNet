@@ -53,6 +53,10 @@
 - Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
 - Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
 
+### Added (GQA expansion and BF16/F16 dtype import)
+- Expand grouped-query `k_proj`/`v_proj` to full `[d_model, d_model]` using `num_attention_heads` / `num_key_value_heads` meta
+- HF safetensors import decodes **F16** and **BF16** tensors to F32 via `half` crate
+
 ### Added (DatasetQA disk image paths for vision training)
 - Optional `image` JSON column (`image_row` config); resolves relative paths against the QA manifest directory
 - `vision_rgb_patch_from_image_path` resizes PNG/JPEG to 8×8×3 NCHW; grayscale fallback for legacy patch-only models

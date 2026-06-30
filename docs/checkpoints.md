@@ -30,6 +30,8 @@ Header `__metadata__` includes `format: mmn-hf-safetensors-v1` and a JSON `meta`
 - **Llama SwiGLU** (`mlp.gate_proj` + `mlp.up_proj`) → element-wise product into `blocks.N.ffn`; `mlp.down_proj` → `ffn2`
 - **Tied embeddings** — missing `lm_head` copies `embed`
 - **RMSNorm-only** checkpoints — missing LayerNorm β defaults to 0, γ to 1
+- **GQA** — smaller `k_proj`/`v_proj` expanded to MMN MHA shape using `num_attention_heads` / `num_key_value_heads` in meta (or head-dim heuristic)
+- **F16 / BF16** weights decoded to F32 on import
 
 ### Chatbot — `mmn-bin-v1` (architecture stub only)
 

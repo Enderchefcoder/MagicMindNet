@@ -8,6 +8,7 @@ use crate::checkpoint_util::{
 };
 use mmn_core::{MmnError, Tensor};
 use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
+use half::{bf16, f16};
 use safetensors::tensor::{Dtype, TensorView};
 use safetensors::{serialize, SafeTensorError, SafeTensors};
 use std::collections::HashMap;
@@ -23,13 +24,24 @@ fn tensor_bytes_f32(t: &Tensor) -> (Vec<usize>, Vec<u8>) {
 }
 
 fn tensor_from_view(name: &str, view: &TensorView<'_>) -> Result<Tensor, MmnError> {
-    if view.dtype() != Dtype::F32 {
-        return Err(MmnError::Other {
-            message: format!("tensor {name}: HF safetensors dtype {:?} not supported (F32 only)", view.dtype()),
-        });
-    }
     let shape: Vec<usize> = view.shape().to_vec();
     let data = view.data();
+    let floats = match view.dtype() {
+        Dtype::F32 => decode_f32_tensor(data, &shape, name)?,
+        Dtype::F16 => decode_f16_tensor(data, &shape, name)?,
+        Dtype::BF16 => decode_bf16_tensor(data, &shape, name)?,
+        other => {
+            return Err(MmnError::Other {
+                message: format!(
+                    "tensor {name}: HF safetensors dtype {other:?} not supported (F32/F16/BF16 only)"
+                ),
+            });
+        }
+    };
+    Ok(Tensor::from_array(floats, true))
+}
+
+fn decode_f32_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
     if data.len() % 4 != 0 {
         return Err(MmnError::Other {
             message: format!("tensor {name}: invalid F32 byte length {}", data.len()),
@@ -39,12 +51,39 @@ fn tensor_from_view(name: &str, view: &TensorView<'_>) -> Result<Tensor, MmnErro
     for chunk in data.chunks_exact(4) {
         floats.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
-    let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), floats).map_err(|e| {
-        MmnError::Other {
-            message: format!("tensor {name}: {e}"),
-        }
-    })?;
-    Ok(Tensor::from_array(arr, true))
+    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), floats).map_err(|e| MmnError::Other {
+        message: format!("tensor {name}: {e}"),
+    })
+}
+
+fn decode_f16_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
+    if data.len() % 2 != 0 {
+        return Err(MmnError::Other {
+            message: format!("tensor {name}: invalid F16 byte length {}", data.len()),
+        });
+    }
+    let floats: Vec<f32> = data
+        .chunks_exact(2)
+        .map(|chunk| f16::from_le_bytes([chunk[0], chunk[1]]).to_f32())
+        .collect();
+    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), floats).map_err(|e| MmnError::Other {
+        message: format!("tensor {name}: {e}"),
+    })
+}
+
+fn decode_bf16_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
+    if data.len() % 2 != 0 {
+        return Err(MmnError::Other {
+            message: format!("tensor {name}: invalid BF16 byte length {}", data.len()),
+        });
+    }
+    let floats: Vec<f32> = data
+        .chunks_exact(2)
+        .map(|chunk| bf16::from_le_bytes([chunk[0], chunk[1]]).to_f32())
+        .collect();
+    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), floats).map_err(|e| MmnError::Other {
+        message: format!("tensor {name}: {e}"),
+    })
 }
 
 fn chatbot_meta_json(model: &Chatbot, bpe_checkpoint: Option<&str>) -> serde_json::Value {
@@ -528,6 +567,118 @@ mod tests {
         assert_eq!(loaded.blocks[0].attn.q_proj.weight.data[[0, 0]], 0.0);
         assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[0, 0]], 0.04);
         assert_eq!(loaded.blocks[0].ffn.weight.data[[0, 0]], 0.12);
+    }
+
+    #[test]
+    fn import_external_gqa_checkpoint_expands_kv() {
+        let d_model = 8usize;
+        let head_dim = 2usize;
+        let n_heads = 4usize;
+        let n_kv_heads = 2usize;
+        let kv_dim = n_kv_heads * head_dim;
+        let vocab = 16usize;
+        let mut storages: Vec<(String, Vec<usize>, Vec<f32>)> = Vec::new();
+        let mut push = |name: &str, shape: &[usize], fill: f32| {
+            let n: usize = shape.iter().product();
+            storages.push((name.to_string(), shape.to_vec(), vec![fill; n]));
+        };
+        push("model.embed_tokens.weight", &[vocab, d_model], 0.1);
+        push("model.layers.0.self_attn.q_proj.weight", &[d_model, d_model], 0.2);
+        push("model.layers.0.self_attn.k_proj.weight", &[kv_dim, d_model], 0.3);
+        push("model.layers.0.self_attn.v_proj.weight", &[kv_dim, d_model], 0.4);
+        push("model.layers.0.self_attn.o_proj.weight", &[d_model, d_model], 0.5);
+        push("model.layers.0.mlp.gate_proj.weight", &[d_model * 4, d_model], 1.0);
+        push("model.layers.0.mlp.down_proj.weight", &[d_model, d_model * 4], 0.6);
+        push("model.layers.0.input_layernorm.weight", &[d_model], 1.0);
+        push("model.layers.0.post_attention_layernorm.weight", &[d_model], 1.0);
+        let mut byte_storages: Vec<(String, Vec<usize>, Vec<u8>)> = Vec::new();
+        for (name, shape, data) in storages {
+            let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
+            byte_storages.push((name, shape, bytes));
+        }
+        let mut views: HashMap<String, TensorView<'_>> = HashMap::new();
+        for (name, shape, bytes) in &byte_storages {
+            views.insert(
+                name.clone(),
+                TensorView::new(Dtype::F32, shape.clone(), bytes).unwrap(),
+            );
+        }
+        let meta = serde_json::json!({
+            "vocab_size": vocab,
+            "n_layer": 1,
+            "d_model": d_model,
+            "ffn_dim": d_model * 4,
+            "num_attention_heads": n_heads,
+            "num_key_value_heads": n_kv_heads,
+            "vision": false,
+        });
+        let mut metadata = HashMap::new();
+        metadata.insert("meta".to_string(), meta.to_string());
+        let bytes = serialize(views, Some(metadata)).unwrap();
+        let loaded = import_hf_safetensors_bytes(&bytes).unwrap();
+        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data.shape(), &[d_model, d_model]);
+        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[0, 0]], 0.3);
+        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[2, 0]], 0.3);
+        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[4, 0]], 0.3);
+    }
+
+    #[test]
+    fn import_bf16_tensor_converts_to_f32() {
+        let d_model = 4usize;
+        let vocab = 8usize;
+        let embed_bf16: Vec<u8> = (0..vocab * d_model)
+            .flat_map(|i| bf16::from_f32(i as f32 * 0.25).to_le_bytes())
+            .collect();
+        let mut byte_storages: Vec<(String, Vec<usize>, Vec<u8>)> = Vec::new();
+        byte_storages.push((
+            "model.embed_tokens.weight".to_string(),
+            vec![vocab, d_model],
+            embed_bf16,
+        ));
+        let push_fill_f32 = |storages: &mut Vec<(String, Vec<usize>, Vec<u8>)>, name: &str, shape: &[usize], val: f32| {
+            let n: usize = shape.iter().product();
+            let bytes: Vec<u8> = vec![val; n].iter().flat_map(|f| f.to_le_bytes()).collect();
+            storages.push((name.to_string(), shape.to_vec(), bytes));
+        };
+        push_fill_f32(&mut byte_storages, "model.layers.0.self_attn.q_proj.weight", &[d_model, d_model], 0.2);
+        push_fill_f32(&mut byte_storages, "model.layers.0.self_attn.k_proj.weight", &[d_model, d_model], 0.3);
+        push_fill_f32(&mut byte_storages, "model.layers.0.self_attn.v_proj.weight", &[d_model, d_model], 0.4);
+        push_fill_f32(&mut byte_storages, "model.layers.0.self_attn.o_proj.weight", &[d_model, d_model], 0.5);
+        push_fill_f32(&mut byte_storages, "model.layers.0.mlp.gate_proj.weight", &[d_model * 4, d_model], 1.0);
+        push_fill_f32(&mut byte_storages, "model.layers.0.mlp.down_proj.weight", &[d_model, d_model * 4], 0.6);
+        let ln: Vec<u8> = vec![1.0f32; d_model]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        for key in [
+            "model.layers.0.input_layernorm.weight",
+            "model.layers.0.post_attention_layernorm.weight",
+        ] {
+            byte_storages.push((key.to_string(), vec![d_model], ln.clone()));
+        }
+        let mut views: HashMap<String, TensorView<'_>> = HashMap::new();
+        for (name, shape, bytes) in &byte_storages {
+            let dtype = if name.contains("embed") {
+                Dtype::BF16
+            } else {
+                Dtype::F32
+            };
+            views.insert(
+                name.clone(),
+                TensorView::new(dtype, shape.clone(), bytes).unwrap(),
+            );
+        }
+        let meta = serde_json::json!({
+            "vocab_size": vocab,
+            "n_layer": 1,
+            "d_model": d_model,
+            "vision": false,
+        });
+        let mut metadata = HashMap::new();
+        metadata.insert("meta".to_string(), meta.to_string());
+        let bytes = serialize(views, Some(metadata)).unwrap();
+        let loaded = import_hf_safetensors_bytes(&bytes).unwrap();
+        assert!((loaded.embed.weight.data[[0, 1]] - 0.25).abs() < 0.01);
     }
 
     #[test]
