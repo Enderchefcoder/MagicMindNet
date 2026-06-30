@@ -473,6 +473,20 @@ mod image_tests {
     use super::*;
 
     #[test]
+    fn image_gen_resolve_image_path_relative_to_manifest() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mmn_img_resolve.json");
+        fs::write(
+            &path,
+            r#"[{"prompt":"cat","image":"samples/cat.png"}]"#,
+        )
+        .unwrap();
+        let ds = DatasetImageGen::load(path.to_str().unwrap()).unwrap();
+        let resolved = ds.resolve_image_path("samples/cat.png");
+        assert!(resolved.ends_with("samples/cat.png"));
+    }
+
+    #[test]
     fn image_gen_loads_negative_prompt() {
         let dir = std::env::temp_dir();
         let path = dir.join("mmn_img_gen.json");
@@ -511,6 +525,7 @@ pub struct ImageSample {
 pub struct DatasetImageGen {
     pub meta: DatasetMeta,
     pub samples: Vec<ImageSample>,
+    pub manifest_path: String,
 }
 
 impl DatasetImageGen {
@@ -549,7 +564,15 @@ impl DatasetImageGen {
                 dataset_type: DatasetType::ImageGen,
             },
             samples,
+            manifest_path: manifest.to_string(),
         })
+    }
+
+    pub fn resolve_image_path(&self, rel: &str) -> std::path::PathBuf {
+        let base = std::path::Path::new(&self.manifest_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        base.join(rel)
     }
 }
 

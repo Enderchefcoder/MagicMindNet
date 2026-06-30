@@ -5,7 +5,8 @@ use rand::{Rng, SeedableRng};
 mod kv_cache;
 pub use kv_cache::{
     apply_rope_with_position_offset, block_forward_with_kv_cache, mha_forward_with_kv_cache,
-    rerope_k_cache_after_front_drop, scaled_dot_product_attention_with_kv, slide_rope_kv_window_one,
+    rerope_k_cache_after_front_drop, rerope_k_cache_shift_down_from,
+    scaled_dot_product_attention_with_kv, slide_rope_kv_window_at, slide_rope_kv_window_one,
     LayerKvCache, TransformerKvCache,
 };
 
@@ -2137,6 +2138,13 @@ pub struct UNet2D {
     pub up: Conv2d,
 }
 
+/// Activations cached for UNet backward (noise prediction head).
+pub struct UNetForwardCache {
+    pub x: Tensor,
+    pub h1: Tensor,
+    pub h2: Tensor,
+}
+
 impl UNet2D {
     pub fn new() -> Self {
         Self {
@@ -2147,9 +2155,33 @@ impl UNet2D {
     }
 
     pub fn forward(&self, x: &Tensor, _t_emb: &Tensor) -> Result<Tensor> {
-        let h = self.down.forward(x)?;
-        let h = self.mid.forward(&h)?;
-        self.up.forward(&h)
+        let (out, _) = self.forward_with_cache(x, _t_emb)?;
+        Ok(out)
+    }
+
+    pub fn forward_with_cache(&self, x: &Tensor, _t_emb: &Tensor) -> Result<(Tensor, UNetForwardCache)> {
+        let h1 = self.down.forward(x)?;
+        let h2 = self.mid.forward(&h1)?;
+        let out = self.up.forward(&h2)?;
+        Ok((
+            out,
+            UNetForwardCache {
+                x: x.clone(),
+                h1,
+                h2,
+            },
+        ))
+    }
+
+    pub fn backward(
+        &self,
+        cache: &UNetForwardCache,
+        grad_out: &ndarray::ArrayD<f32>,
+    ) -> Result<[ndarray::ArrayD<f32>; 3]> {
+        let (grad_h2, grad_up) = self.up.backward(&cache.h2, grad_out)?;
+        let (grad_h1, grad_mid) = self.mid.backward(&cache.h1, &grad_h2)?;
+        let (_grad_x, grad_down) = self.down.backward(&cache.x, &grad_h1)?;
+        Ok([grad_down, grad_mid, grad_up])
     }
 }
 

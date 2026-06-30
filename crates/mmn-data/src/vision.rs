@@ -64,6 +64,34 @@ pub fn rgb_patches_from_image_bytes(bytes: &[u8], grid: usize) -> Result<Vec<Vec
     rgb_patches_from_rgb_image(&img.to_rgb8(), grid)
 }
 
+/// Load a single 8×8 RGB image as an NCHW tensor `[1, 3, 8, 8]` in `[0, 1]`.
+pub fn rgb_nchw_tensor_from_image_bytes(bytes: &[u8]) -> Result<mmn_core::Tensor, MmnError> {
+    let flat = rgb_patch_from_image_bytes(bytes)?;
+    let mut planes = vec![0.0f32; VISION_RGB_CHANNELS * VISION_RGB_SPATIAL * VISION_RGB_SPATIAL];
+    for c in 0..VISION_RGB_CHANNELS {
+        let off = c * VISION_PATCH_DIM;
+        for i in 0..VISION_PATCH_DIM {
+            planes[c * VISION_PATCH_DIM + i] = flat[off + i];
+        }
+    }
+    Ok(mmn_core::Tensor::from_array(
+        ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[1, VISION_RGB_CHANNELS, VISION_RGB_SPATIAL, VISION_RGB_SPATIAL]),
+            planes,
+        )
+        .unwrap(),
+        false,
+    ))
+}
+
+/// Load an on-disk image as `[1, 3, 8, 8]` NCHW.
+pub fn rgb_nchw_tensor_from_image_path(path: &Path) -> Result<mmn_core::Tensor, MmnError> {
+    let bytes = std::fs::read(path).map_err(|e| MmnError::Other {
+        message: format!("failed to read image {}: {e}", path.display()),
+    })?;
+    rgb_nchw_tensor_from_image_bytes(&bytes)
+}
+
 /// Resize an image to 8×8 RGB and flatten as NCHW planes in `[0, 1]`.
 pub fn rgb_patch_from_image_bytes(bytes: &[u8]) -> Result<Vec<f32>, MmnError> {
     Ok(rgb_patches_from_image_bytes(bytes, DEFAULT_VISION_PATCH_GRID)?

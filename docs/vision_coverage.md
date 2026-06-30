@@ -62,7 +62,7 @@ When `vision=true`, safetensors checkpoints include:
 
 - Corpus LM training does not attach patches (text-only); QA training uses disk `image` paths when present, else `vision_rgb_patch_from_text(input)` when conv is loaded.
 - `DatasetImageGen` / `DatasetImageEdit` remain diffusion stubs, not `Chatbot` training.
-- Vision KV-cache sliding-window RoPE incremental slide is text-only; vision prefix uses full re-prefill on overflow.
+- Vision KV-cache sliding-window RoPE evicts the oldest **text** row when `n_vision_prefix > 0` (`slide_rope_kv_window_at`); parity: `vision_sliding_window_past_max_ctx_*`, `rope_kv_slide_at_prefix_*`
 
 ## Diffusion / Conv2d
 

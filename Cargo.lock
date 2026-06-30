@@ -795,6 +795,7 @@ dependencies = [
  "arrow",
  "image",
  "mmn-core",
+ "ndarray",
  "parquet",
  "serde",
  "serde_json",

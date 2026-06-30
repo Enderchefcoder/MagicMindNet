@@ -24,52 +24,52 @@ impl LayerKvCache {
 
     /// Drop the first `n` cached sequence rows from K/V (sliding-window eviction).
     pub fn truncate_front(&mut self, n: usize) -> Result<()> {
-        if n == 0 {
-            return Ok(());
+        for _ in 0..n {
+            self.truncate_at(0)?;
         }
+        Ok(())
+    }
+
+    /// Drop row `index` from cached K/V (used for sliding text past a vision prefix).
+    pub fn truncate_at(&mut self, index: usize) -> Result<()> {
         let len = self.len();
-        if n > len {
+        if index >= len {
             return Err(MmnError::Shape {
-                message: format!("truncate_front {n} exceeds KV cache len {len}"),
+                message: format!("truncate_at index {index} invalid for KV cache len {len}"),
             });
         }
-        if n == len {
+        if len == 1 {
             self.clear();
             return Ok(());
         }
         if let (Some(k), Some(v)) = (&self.k, &self.v) {
-            self.k = Some(slice_sequence_rows(k, n, len)?);
-            self.v = Some(slice_sequence_rows(v, n, len)?);
+            let head = slice_sequence_rows(k, 0, index)?;
+            let tail = slice_sequence_rows(k, index + 1, len)?;
+            self.k = Some(concat_sequence_rows(&head, &tail)?);
+            let head_v = slice_sequence_rows(v, 0, index)?;
+            let tail_v = slice_sequence_rows(v, index + 1, len)?;
+            self.v = Some(concat_sequence_rows(&head_v, &tail_v)?);
         }
         Ok(())
     }
 }
 
-/// Re-index RoPE-encoded K rows after dropping the front cache row (absolute positions shift down by 1).
-pub fn rerope_k_cache_after_front_drop(
+/// Re-index RoPE-encoded K rows from `row_start` after deleting one row at that index.
+pub fn rerope_k_cache_shift_down_from(
     k: &mut Tensor,
     n_kv_heads: usize,
     theta: f32,
+    row_start: usize,
 ) -> Result<()> {
     let rows = k.shape[0];
-    if rows == 0 {
+    if row_start >= rows {
         return Ok(());
     }
     let kv_dim = k.shape[1];
-    if kv_dim % n_kv_heads != 0 {
-        return Err(MmnError::Shape {
-            message: format!("k width {kv_dim} not divisible by n_kv_heads {n_kv_heads}"),
-        });
-    }
     let head_dim = kv_dim / n_kv_heads;
-    if head_dim % 2 != 0 {
-        return Err(MmnError::Shape {
-            message: format!("head_dim {head_dim} must be even for RoPE rerope"),
-        });
-    }
     let half = head_dim / 2;
     let mut data = (*k.data).clone();
-    for r in 0..rows {
+    for r in row_start..rows {
         let from_pos = r + 1;
         let to_pos = r;
         for h in 0..n_kv_heads {
@@ -89,6 +89,29 @@ pub fn rerope_k_cache_after_front_drop(
         }
     }
     *k = Tensor::from_array(data, k.requires_grad);
+    Ok(())
+}
+
+/// Re-index RoPE-encoded K rows after dropping the front cache row (absolute positions shift down by 1).
+pub fn rerope_k_cache_after_front_drop(
+    k: &mut Tensor,
+    n_kv_heads: usize,
+    theta: f32,
+) -> Result<()> {
+    rerope_k_cache_shift_down_from(k, n_kv_heads, theta, 0)
+}
+
+/// Drop one cached row at `index` and fix RoPE K positions from that row onward.
+pub fn slide_rope_kv_window_at(
+    cache: &mut LayerKvCache,
+    index: usize,
+    n_kv_heads: usize,
+    theta: f32,
+) -> Result<()> {
+    cache.truncate_at(index)?;
+    if let Some(k) = cache.k.as_mut() {
+        rerope_k_cache_shift_down_from(k, n_kv_heads, theta, index)?;
+    }
     Ok(())
 }
 
@@ -486,6 +509,50 @@ mod tests {
             let a = slide.data[[0, i]];
             let b = full.data[[4, i]];
             assert!((a - b).abs() < 1e-4, "dim {i}: slide={a} full={b}");
+        }
+    }
+
+    #[test]
+    fn rope_kv_slide_at_prefix_matches_windowed_block_forward() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(202);
+        let d_model = 32;
+        let block = TransformerBlock::new_rng_rope_gqa(d_model, 4, 2, 64, Some(10_000.0), &mut rng);
+        let total = 7usize;
+        let mut rows = vec![0.0f32; total * d_model];
+        for (i, v) in rows.iter_mut().enumerate() {
+            *v = ((i % 23) as f32) * 0.03 - 0.15;
+        }
+        let row_tensor = |start: usize| {
+            Tensor::from_array(
+                ArrayD::from_shape_vec(
+                    IxDyn(&[1, d_model]),
+                    rows[start * d_model..(start + 1) * d_model].to_vec(),
+                )
+                .unwrap(),
+                false,
+            )
+        };
+        let mut win_rows = Vec::with_capacity(5 * d_model);
+        for idx in [0usize, 2, 3, 4, 5] {
+            win_rows.extend_from_slice(&rows[idx * d_model..(idx + 1) * d_model]);
+        }
+        let window = Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[5, d_model]), win_rows).unwrap(),
+            false,
+        );
+        let full = block.forward(&window).unwrap();
+
+        let mut cache = LayerKvCache::default();
+        for pos in 0..5 {
+            block_forward_with_kv_cache(&block, &row_tensor(pos), &mut cache, pos).unwrap();
+        }
+        slide_rope_kv_window_at(&mut cache, 1, block.attn.n_kv_heads, 10_000.0).unwrap();
+        let slide = block_forward_with_kv_cache(&block, &row_tensor(5), &mut cache, 4).unwrap();
+
+        for i in 0..d_model {
+            let a = slide.data[[0, i]];
+            let b = full.data[[4, i]];
+            assert!((a - b).abs() < 1e-4, "dim {i}: prefix-slide={a} full={b}");
         }
     }
 }

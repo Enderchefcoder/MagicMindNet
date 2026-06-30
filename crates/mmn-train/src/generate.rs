@@ -99,7 +99,7 @@ pub fn truncate_at_stop_strings(text: &str, stop_strings: &[String]) -> String {
 }
 
 fn max_context_len(model: &Chatbot) -> usize {
-    if model.use_learned_pos_embed {
+    if model.use_learned_pos_embed || model.uses_rope() {
         model.max_seq_len
     } else {
         512
@@ -280,7 +280,6 @@ fn forward_logits_after_append(
         let overflow = tokens.len() - max_ctx;
         if model.uses_rope()
             && overflow == 1
-            && cache.n_vision_prefix == 0
             && cache.seq_len.saturating_sub(cache.n_vision_prefix) >= max_ctx
         {
             model.slide_kv_cache_one(cache)?;
@@ -655,6 +654,46 @@ mod tests {
         let full_ids = generate_token_ids(
             &model,
             "hi",
+            None,
+            &GenerateConfig {
+                use_kv_cache: false,
+                ..cfg
+            },
+        )
+        .unwrap();
+        assert_eq!(kv_ids, full_ids);
+    }
+
+    #[test]
+    fn vision_sliding_window_past_max_ctx_matches_full_forward() {
+        use mmn_models::vision_patch_from_text;
+
+        let model = Chatbot::new_with_position_options(
+            true,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(44),
+            false,
+            4,
+            true,
+            10_000.0,
+            None,
+            None,
+        );
+        let patch = vision_patch_from_text("scene");
+        let cfg = GenerateConfig {
+            max_new_tokens: 10,
+            temperature: 0.0,
+            vision_patches: Some(vec![patch]),
+            ..Default::default()
+        };
+        let kv_ids = generate_token_ids(&model, "abcd", None, &cfg).unwrap();
+        assert_eq!(kv_ids.len(), 10);
+        let full_ids = generate_token_ids(
+            &model,
+            "abcd",
             None,
             &GenerateConfig {
                 use_kv_cache: false,

@@ -2,6 +2,15 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (vision-prefix KV slide + diffusion training)
+- RoPE KV-cache slide evicts oldest **text** row at `n_vision_prefix` (`slide_rope_kv_window_at`, `truncate_at`, `rerope_k_cache_shift_down_from`)
+- Vision + RoPE sliding-window generation parity past `max_seq_len` (`vision_sliding_window_past_max_ctx_*`); RoPE models honor `max_seq_len` as generation context
+- UNet2D `forward_with_cache` + `backward`; `Diffusion::train_step_denoise` / `denoise_loss` (deterministic noise per `(image, t)`)
+- `train_diffusion` on `DatasetImageGen`; Python `TrainDiffusion`, `denoise_loss_on_image`
+- `rgb_nchw_tensor_from_image_*`, `DatasetImageGen::resolve_image_path`, fixture `tests/fixtures/samples/cat.png`
+- Tests: `rope_kv_slide_at_prefix_*`, `train_diffusion_*`, `test_train_diffusion.py`; example `examples/diffusion_train.py`
+- **287** Rust tests / **571** pytest (`verify_gate`)
+
 ### Added
 - Rust workspace (`mmn-core` … `mmn-py`) and Python package `magicmindnet`
 - Datasets: QA, Corpus, Classification, ImageGen, ImageEdit; ChatXML formatting

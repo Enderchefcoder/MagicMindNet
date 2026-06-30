@@ -24,7 +24,7 @@ use io::{
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
 use tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
-use train::{RL, SPIN, Train, TrainClassifier};
+use train::{RL, SPIN, Train, TrainClassifier, TrainDiffusion};
 use train_config::PyTrainConfig;
 use vision::{vision_rgb_patch_from_image_path_py, vision_rgb_patches_from_image_path_py};
 
@@ -43,6 +43,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDiffusion>()?;
     m.add_function(wrap_pyfunction!(Train, m)?)?;
     m.add_function(wrap_pyfunction!(TrainClassifier, m)?)?;
+    m.add_function(wrap_pyfunction!(TrainDiffusion, m)?)?;
     m.add_function(wrap_pyfunction!(RL, m)?)?;
     m.add_function(wrap_pyfunction!(SPIN, m)?)?;
     m.add_function(wrap_pyfunction!(merge, m)?)?;

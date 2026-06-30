@@ -1,9 +1,12 @@
 use mmn_core::{enable_grad, Device, Result};
-use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA, QaSample, TextEncoderRef};
+use mmn_data::{
+    BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetImageGen, DatasetQA, QaSample,
+    TextEncoderRef,
+};
 use mmn_models::{
-    targets_with_vision_prefix, validate_dataset_for_classifier, vision_patch_from_text,
-    vision_rgb_patch_from_image_path, vision_rgb_patches_from_image_path,
-    vision_rgb_patch_from_text, Chatbot, Classifier,
+    targets_with_vision_prefix, validate_dataset_for_classifier, validate_dataset_for_diffusion,
+    vision_patch_from_text, vision_rgb_patch_from_image_path, vision_rgb_patches_from_image_path,
+    vision_rgb_patch_from_text, Chatbot, Classifier, Diffusion,
 };
 use std::path::{Path, PathBuf};
 use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
@@ -518,6 +521,45 @@ pub fn train_classifier(
     Ok(())
 }
 
+pub fn train_diffusion(
+    model: &mut Diffusion,
+    dataset: &DatasetImageGen,
+    config: &TrainConfig,
+) -> Result<()> {
+    Device::require_cuda_available_checked(config.cuda, mmn_cuda::is_available())?;
+    validate_dataset_for_diffusion(&dataset.meta.dataset_type)?;
+    if dataset.samples.is_empty() {
+        return Err(mmn_core::MmnError::DataMismatch {
+            message: "image_gen manifest has no samples".into(),
+            fix: "Add prompt/image rows to the manifest JSON.".into(),
+            explanation: "Diffusion training needs at least one image path.".into(),
+        });
+    }
+    enable_grad(true);
+    let mut adamw = AdamW::new(AdamWConfig {
+        lr: config.learning_rate,
+        ..Default::default()
+    });
+    let mut param_id = 0usize;
+    for _epoch in 0..config.epochs {
+        let mut rng = rand::thread_rng();
+        let mut indices: Vec<usize> = (0..dataset.samples.len()).collect();
+        for i in 0..indices.len() {
+            let j = rng.gen_range(0..indices.len());
+            indices.swap(i, j);
+        }
+        for &idx in &indices {
+            let sample = &dataset.samples[idx];
+            let path = dataset.resolve_image_path(&sample.image_path);
+            let x = mmn_data::rgb_nchw_tensor_from_image_path(&path)?;
+            let t = rng.gen_range(0..1000);
+            model.train_step_denoise(&x, t, &mut adamw, &mut param_id)?;
+        }
+    }
+    enable_grad(false);
+    Ok(())
+}
+
 pub fn rl(
     model: &mut Chatbot,
     dataset: &DatasetQA,
@@ -887,6 +929,42 @@ mod tests {
             after < before,
             "batch_size=2 TrainClassifier should reduce mean loss: before={before} after={after}"
         );
+    }
+
+    #[test]
+    fn train_diffusion_fixture_reduces_denoise_loss() {
+        use mmn_data::DatasetImageGen;
+        use mmn_models::Diffusion;
+        let manifest = format!(
+            "{}/../../tests/fixtures/image_gen.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let ds = DatasetImageGen::load(&manifest).unwrap();
+        let path = ds.resolve_image_path(&ds.samples[0].image_path);
+        let x = mmn_data::rgb_nchw_tensor_from_image_path(&path).unwrap();
+        let mut model = Diffusion::new();
+        let before = model.denoise_loss(&x, 7).unwrap();
+        let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
+        let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        for _ in 0..12 {
+            model.train_step_denoise(&x, 7, &mut adamw, &mut pid).unwrap();
+        }
+        let after = model.denoise_loss(&x, 7).unwrap();
+        assert_ne!(model.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+        assert!(
+            after <= before,
+            "denoise loss should decrease at fixed t: before={before} after={after}"
+        );
+        let cfg = TrainConfig {
+            epochs: 2,
+            learning_rate: 0.05,
+            ..Default::default()
+        };
+        train_diffusion(&mut model, &ds, &cfg).unwrap();
     }
 
     #[test]

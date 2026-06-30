@@ -1,13 +1,13 @@
 use mmn_train::{
     rl_with_encoder, spin_with_encoder, train_classifier, train_corpus_with_encoder,
-    train_with_encoder,
+    train_diffusion, train_with_encoder,
 };
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetClassification, PyDatasetCorpus, PyDatasetQA};
 use crate::encoder_util::resolve_text_encoder;
 use crate::errors::{mmn_err_to_py, DataMismatchError};
-use crate::models::{PyChatbot, PyClassifier};
+use crate::models::{PyChatbot, PyClassifier, PyDiffusion};
 use crate::tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
 use crate::train_config::PyTrainConfig;
 
@@ -56,6 +56,27 @@ pub fn TrainClassifier(
     } else {
         Err(PyErr::new::<DataMismatchError, _>(
             "TrainClassifier requires DatasetClassification.\nFix: Use DatasetClassification(file, text_col, tags_col).\nExplanation: QA/Corpus datasets cannot train a Classifier.".to_string(),
+        ))
+    }
+}
+
+#[pyfunction]
+pub fn TrainDiffusion(
+    model: &mut PyDiffusion,
+    dataset: &Bound<'_, PyAny>,
+    config: &PyTrainConfig,
+) -> PyResult<()> {
+    use crate::datasets::PyDatasetImageGen;
+    if let Ok(ds) = dataset.downcast::<PyDatasetImageGen>() {
+        train_diffusion(
+            &mut model.inner,
+            &ds.borrow().inner,
+            &config.to_train_config(),
+        )
+        .map_err(mmn_err_to_py)
+    } else {
+        Err(PyErr::new::<DataMismatchError, _>(
+            "TrainDiffusion requires DatasetImageGen.\nFix: Use DatasetImageGen(file) with prompt/image rows.\nExplanation: QA/Corpus/Classification datasets cannot train Diffusion.".to_string(),
         ))
     }
 }

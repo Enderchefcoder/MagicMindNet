@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 mmn-core.workspace = true
+ndarray.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

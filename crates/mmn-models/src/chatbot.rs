@@ -7,6 +7,7 @@ use mmn_nn::{
     TransformerBlock,
 };
 use ndarray::ArrayD;
+use rand::SeedableRng;
 use std::collections::HashMap;
 
 /// Default maximum sequence length for learned position embeddings.
@@ -895,11 +896,20 @@ impl Chatbot {
         }
         for (i, block) in self.blocks.iter().enumerate() {
             let theta = block.attn.rope_theta.unwrap_or(self.rope_theta);
-            mmn_nn::slide_rope_kv_window_one(
-                &mut cache.transformer.layers[i],
-                block.attn.n_kv_heads,
-                theta,
-            )?;
+            if cache.n_vision_prefix > 0 {
+                mmn_nn::slide_rope_kv_window_at(
+                    &mut cache.transformer.layers[i],
+                    cache.n_vision_prefix,
+                    block.attn.n_kv_heads,
+                    theta,
+                )?;
+            } else {
+                mmn_nn::slide_rope_kv_window_one(
+                    &mut cache.transformer.layers[i],
+                    block.attn.n_kv_heads,
+                    theta,
+                )?;
+            }
         }
         cache.seq_len = cache.seq_len.saturating_sub(1);
         Ok(())
@@ -2000,6 +2010,14 @@ pub struct Diffusion {
     pub latent_channels: usize,
 }
 
+fn denoise_loss_seed(x: &Tensor, t: usize) -> u64 {
+    let mut h = t as u64 ^ 0x9E37_79B9_7F4A_7C15;
+    for &v in x.data.iter().take(64) {
+        h = h.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(v.to_bits() as u64);
+    }
+    h
+}
+
 impl Diffusion {
     pub fn new() -> Self {
         Self {
@@ -2027,6 +2045,76 @@ impl Diffusion {
         );
         self.unet.forward(x, &t_emb)
     }
+
+    /// MSE between UNet noise prediction and sampled Gaussian noise (eval only).
+    /// Noise is deterministic for a fixed `(x, t)` pair so loss is comparable across calls.
+    pub fn denoise_loss(&self, x: &Tensor, t: usize) -> Result<f32> {
+        let t_emb = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1]), t as f32),
+            false,
+        );
+        let latent = self.vae.encode(x)?;
+        let seed = denoise_loss_seed(x, t);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let noise = Tensor::randn_rng(&mut rng, &latent.shape, false);
+        let noisy = latent.add(&noise)?;
+        let pred = self.unet.forward(&noisy, &t_emb)?;
+        let n = pred.data.len() as f32;
+        let mut loss = 0.0f32;
+        for (&p, &n_) in pred.data.iter().zip(noise.data.iter()) {
+            let diff = p - n_;
+            loss += diff * diff;
+        }
+        Ok(loss / n)
+    }
+
+    /// One DDPM-style denoise step; updates UNet conv weights via AdamW.
+    pub fn train_step_denoise(
+        &mut self,
+        x: &Tensor,
+        t: usize,
+        adamw: &mut mmn_optim::AdamW,
+        param_id: &mut usize,
+    ) -> Result<f32> {
+        let t_emb = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1]), t as f32),
+            false,
+        );
+        let latent = self.vae.encode(x)?;
+        let seed = denoise_loss_seed(x, t);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let noise = Tensor::randn_rng(&mut rng, &latent.shape, false);
+        let noisy = latent.add(&noise)?;
+        let (pred, cache) = self.unet.forward_with_cache(&noisy, &t_emb)?;
+        let n = pred.data.len() as f32;
+        let mut loss = 0.0f32;
+        let mut grad_out = Vec::with_capacity(pred.data.len());
+        for (&p, &n_) in pred.data.iter().zip(noise.data.iter()) {
+            let diff = p - n_;
+            loss += diff * diff;
+            grad_out.push(2.0 * diff / n);
+        }
+        loss /= n;
+        let grad_out_arr =
+            ndarray::ArrayD::from_shape_vec(pred.shape.clone(), grad_out).map_err(|e| {
+                mmn_core::MmnError::Shape {
+                    message: format!("denoise grad reshape: {e}"),
+                }
+            })?;
+        let grads = self.unet.backward(&cache, &grad_out_arr)?;
+        let weights = [
+            &mut self.unet.down.weight,
+            &mut self.unet.mid.weight,
+            &mut self.unet.up.weight,
+        ];
+        for (w, g) in weights.into_iter().zip(grads) {
+            let mut data = w.data.as_ref().clone();
+            adamw.step_param(*param_id, &mut data, &g);
+            *param_id += 1;
+            *w = Tensor::from_array(data, true);
+        }
+        Ok(loss)
+    }
 }
 
 #[cfg(test)]
@@ -2040,6 +2128,29 @@ mod diffusion_tests {
         let x = Tensor::randn(&[1, 3, 8, 8], false);
         let out = d.training_step(&x, 3).unwrap();
         assert!(out.data.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn train_step_denoise_updates_unet_and_reduces_loss() {
+        let mut d = Diffusion::new();
+        let x = Tensor::randn(&[1, 3, 8, 8], false);
+        let before = d.denoise_loss(&x, 2).unwrap();
+        let w_before = d.unet.down.weight.data[[0, 0, 0, 0]];
+        let mut adamw = mmn_optim::AdamW::new(mmn_optim::AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        let mut last = before;
+        for _ in 0..8 {
+            last = d.train_step_denoise(&x, 2, &mut adamw, &mut pid).unwrap();
+        }
+        let after = d.denoise_loss(&x, 2).unwrap();
+        assert_ne!(d.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+        assert!(
+            after <= before || last <= before,
+            "denoise loss should not increase sharply: before={before} after={after} last={last}"
+        );
     }
 }
 

@@ -43,7 +43,7 @@ def test_train_config_has_documented_fields():
         assert hasattr(cfg, field)
 
 
-@pytest.mark.parametrize("fn_name", ["Train", "TrainClassifier", "RL", "SPIN"])
+@pytest.mark.parametrize("fn_name", ["Train", "TrainClassifier", "TrainDiffusion", "RL", "SPIN"])
 def test_training_entrypoints_callable(fn_name: str):
     assert callable(getattr(ai, fn_name))
 
