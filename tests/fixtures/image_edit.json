@@ -1,0 +1,8 @@
+[
+  {
+    "prompt": "remove the logo",
+    "image": "samples/photo.png",
+    "mask_image": "samples/mask.png",
+    "negative_prompt": "artifacts"
+  }
+]

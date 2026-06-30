@@ -1,0 +1,3 @@
+[
+  {"prompt": "a red cat on grass", "image": "samples/cat.png", "negative_prompt": "blur, low quality"}
+]
