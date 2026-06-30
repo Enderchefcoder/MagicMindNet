@@ -11,7 +11,10 @@ use rand::Rng;
 
 mod generate;
 
-pub use generate::{decode_tokens, generate_text, GenerateConfig};
+pub use generate::{
+    decode_tokens, generate_text, generate_token_ids, tokenize_for_generate, truncate_at_stop_strings,
+    GenerateConfig,
+};
 
 #[derive(Clone, Debug)]
 pub struct TrainConfig {
@@ -774,7 +777,7 @@ mod tests {
     #[test]
     fn train_batch_size_two_accumulates_and_reduces_loss() {
         let ds = toy_dataset();
-        let mut model = Chatbot::new(false, None, 256, Some(2), Some(32));
+        let mut model = Chatbot::new_with_seed(false, None, 256, Some(2), Some(32), Some(42));
         let mean_before = mean_qa_loss(&model, &ds).unwrap();
         let cfg = TrainConfig {
             epochs: 3,

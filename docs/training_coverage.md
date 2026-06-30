@@ -30,6 +30,16 @@ Regression coverage for `mmn-train` and Python `Train` / `TrainClassifier` / `RL
 | FFN2 updates (positive control) | `train_step_updates_embed_and_ffn2` | `test_train_block_params_py.py` |
 | Embed + lm_head update | — | `test_train_block_params_py.py` (`test_train_changes_embed_and_lm_head`) |
 
+## Generation (`Chatbot.generate`)
+
+| Behavior | Rust (`mmn-train`) | Python |
+|----------|-------------------|--------|
+| Greedy deterministic | `greedy_generate_is_deterministic` | `test_generate_py.py` |
+| `max_new_tokens` cap | `generate_respects_max_new_tokens` | `test_generate_tokens_returns_ids` |
+| Long prompt (no 32-token train cap) | `tokenize_for_generate_allows_long_prompt` | `test_generate_long_prompt_not_truncated_to_32` |
+| `stop_token_ids` | `stop_token_id_limits_output` | `test_generate_stop_token_ids` |
+| BPE decode roundtrip | `bpe_decode_roundtrip_ascii` | `test_bpe_decode_roundtrip` |
+
 ## Classification (`TrainClassifier`)
 
 | Behavior | Rust | Python |

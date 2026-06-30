@@ -5,9 +5,7 @@ use mmn_data::BytePairEncoder;
 use mmn_models::Chatbot;
 use rand::Rng;
 
-use crate::tokenize_lm;
-
-/// Sampling options for `generate_text`.
+/// Sampling options for `generate_text` / `generate_token_ids`.
 #[derive(Clone, Debug)]
 pub struct GenerateConfig {
     pub max_new_tokens: usize,
@@ -15,6 +13,10 @@ pub struct GenerateConfig {
     pub temperature: f32,
     /// Keep only the top-k logits before sampling (`0` = disabled).
     pub top_k: usize,
+    /// Stop when a sampled token id is in this set (token is excluded from output).
+    pub stop_token_ids: Vec<usize>,
+    /// Stop when decoded new text contains any of these substrings (suffix removed).
+    pub stop_strings: Vec<String>,
 }
 
 impl Default for GenerateConfig {
@@ -23,7 +25,30 @@ impl Default for GenerateConfig {
             max_new_tokens: 32,
             temperature: 0.0,
             top_k: 0,
+            stop_token_ids: Vec::new(),
+            stop_strings: Vec::new(),
         }
+    }
+}
+
+/// Tokenize a prompt for generation (no training 32-token cap; bounded by `max_tokens`).
+pub fn tokenize_for_generate(
+    text: &str,
+    vocab_size: usize,
+    bpe: Option<&BytePairEncoder>,
+    max_tokens: usize,
+) -> Vec<usize> {
+    match bpe {
+        Some(enc) => {
+            let mut ids = enc.encode(text);
+            ids.truncate(max_tokens);
+            ids
+        }
+        None => text
+            .bytes()
+            .map(|b| (b as usize) % vocab_size)
+            .take(max_tokens)
+            .collect(),
     }
 }
 
@@ -36,6 +61,20 @@ pub fn decode_tokens(ids: &[usize], bpe: Option<&BytePairEncoder>) -> String {
             String::from_utf8_lossy(&bytes).into_owned()
         }
     }
+}
+
+/// Trim decoded text at the earliest `stop_strings` match.
+pub fn truncate_at_stop_strings(text: &str, stop_strings: &[String]) -> String {
+    let mut end = text.len();
+    for stop in stop_strings {
+        if stop.is_empty() {
+            continue;
+        }
+        if let Some(pos) = text.find(stop) {
+            end = end.min(pos);
+        }
+    }
+    text[..end].to_string()
 }
 
 fn max_context_len(model: &Chatbot) -> usize {
@@ -83,18 +122,18 @@ fn sample_next_token(scores: &mut [f32], temperature: f32, top_k: usize, rng: &m
     probs.len().saturating_sub(1)
 }
 
-/// Greedy or temperature-sampled continuation from `prompt`.
-pub fn generate_text(
+/// Sample new token ids after `prompt` (does not include prompt tokens).
+pub fn generate_token_ids(
     model: &Chatbot,
     prompt: &str,
     bpe: Option<&BytePairEncoder>,
     config: &GenerateConfig,
-) -> Result<String> {
+) -> Result<Vec<usize>> {
     let vocab = model.shape.vocab_size;
-    let prompt_tokens = tokenize_lm(prompt, vocab, bpe);
-    let prompt_len = prompt_tokens.len();
-    let mut tokens = prompt_tokens;
     let max_ctx = max_context_len(model);
+    let prompt_tokens = tokenize_for_generate(prompt, vocab, bpe, max_ctx);
+    let mut tokens = prompt_tokens;
+    let prompt_len = tokens.len();
     let mut rng = rand::thread_rng();
 
     for _ in 0..config.max_new_tokens {
@@ -122,10 +161,44 @@ pub fn generate_text(
         } else {
             sample_next_token(&mut scores, config.temperature, config.top_k, &mut rng)
         };
+
+        if config.stop_token_ids.contains(&next) {
+            break;
+        }
         tokens.push(next);
+
+        if !config.stop_strings.is_empty() {
+            let new_text = decode_tokens(&tokens[prompt_len..], bpe);
+            let trimmed = truncate_at_stop_strings(&new_text, &config.stop_strings);
+            if trimmed.len() < new_text.len() {
+                let mut out_ids = Vec::new();
+                for i in 1..=(tokens.len() - prompt_len) {
+                    let partial = decode_tokens(&tokens[prompt_len..prompt_len + i], bpe);
+                    if partial == trimmed {
+                        out_ids.extend_from_slice(&tokens[prompt_len..prompt_len + i]);
+                        return Ok(out_ids);
+                    }
+                    if partial.len() > trimmed.len() {
+                        break;
+                    }
+                }
+                return Ok(out_ids);
+            }
+        }
     }
 
-    Ok(decode_tokens(&tokens[prompt_len..], bpe))
+    Ok(tokens[prompt_len..].to_vec())
+}
+
+/// Greedy or temperature-sampled continuation from `prompt`.
+pub fn generate_text(
+    model: &Chatbot,
+    prompt: &str,
+    bpe: Option<&BytePairEncoder>,
+    config: &GenerateConfig,
+) -> Result<String> {
+    let ids = generate_token_ids(model, prompt, bpe, config)?;
+    Ok(decode_tokens(&ids, bpe))
 }
 
 #[cfg(test)]
@@ -134,12 +207,26 @@ mod tests {
     use mmn_models::Chatbot;
 
     #[test]
+    fn tokenize_for_generate_allows_long_prompt() {
+        let long = "a".repeat(48);
+        let ids = tokenize_for_generate(&long, 256, None, 512);
+        assert_eq!(ids.len(), 48);
+    }
+
+    #[test]
+    fn truncate_at_stop_strings_cuts_earliest() {
+        let out = truncate_at_stop_strings("hello\nworld", &["\n".into()]);
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
     fn greedy_generate_is_deterministic() {
         let model = Chatbot::new_with_seed(false, None, 128, Some(1), Some(16), Some(42));
         let cfg = GenerateConfig {
             max_new_tokens: 8,
             temperature: 0.0,
             top_k: 0,
+            ..Default::default()
         };
         let a = generate_text(&model, "hi", None, &cfg).unwrap();
         let b = generate_text(&model, "hi", None, &cfg).unwrap();
@@ -153,7 +240,35 @@ mod tests {
             max_new_tokens: 4,
             ..Default::default()
         };
-        let out = generate_text(&model, "x", None, &cfg).unwrap();
-        assert!(out.len() <= 4);
+        let ids = generate_token_ids(&model, "x", None, &cfg).unwrap();
+        assert_eq!(ids.len(), 4);
+    }
+
+    #[test]
+    fn stop_token_id_limits_output() {
+        let model = Chatbot::new_with_seed(false, None, 128, Some(1), Some(16), Some(99));
+        let one = generate_token_ids(
+            &model,
+            "z",
+            None,
+            &GenerateConfig {
+                max_new_tokens: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(one.len(), 1);
+        let stopped = generate_token_ids(
+            &model,
+            "z",
+            None,
+            &GenerateConfig {
+                max_new_tokens: 8,
+                stop_token_ids: vec![one[0]],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(stopped.is_empty());
     }
 }

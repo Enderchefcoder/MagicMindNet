@@ -257,7 +257,7 @@ impl PyChatbot {
     }
 
     /// Autoregressive continuation from `prompt` (greedy when `temperature=0`).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None, stop_token_ids=None, stop_strings=None))]
     fn generate(
         &self,
         prompt: &str,
@@ -265,13 +265,40 @@ impl PyChatbot {
         temperature: f32,
         top_k: usize,
         bpe_encoder: Option<&PyBytePairEncoder>,
+        stop_token_ids: Option<Vec<usize>>,
+        stop_strings: Option<Vec<String>>,
     ) -> PyResult<String> {
         let bpe = bpe_encoder.map(|e| &e.inner);
         let cfg = mmn_train::GenerateConfig {
             max_new_tokens,
             temperature,
             top_k,
+            stop_token_ids: stop_token_ids.unwrap_or_default(),
+            stop_strings: stop_strings.unwrap_or_default(),
         };
         mmn_train::generate_text(&self.inner, prompt, bpe, &cfg).map_err(mmn_err_to_py)
+    }
+
+    /// Sample new token ids after `prompt` (excludes prompt tokens).
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None, stop_token_ids=None, stop_strings=None))]
+    fn generate_tokens(
+        &self,
+        prompt: &str,
+        max_new_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+        stop_token_ids: Option<Vec<usize>>,
+        stop_strings: Option<Vec<String>>,
+    ) -> PyResult<Vec<usize>> {
+        let bpe = bpe_encoder.map(|e| &e.inner);
+        let cfg = mmn_train::GenerateConfig {
+            max_new_tokens,
+            temperature,
+            top_k,
+            stop_token_ids: stop_token_ids.unwrap_or_default(),
+            stop_strings: stop_strings.unwrap_or_default(),
+        };
+        mmn_train::generate_token_ids(&self.inner, prompt, bpe, &cfg).map_err(mmn_err_to_py)
     }
 }

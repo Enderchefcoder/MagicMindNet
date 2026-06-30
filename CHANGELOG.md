@@ -53,6 +53,11 @@
 - Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
 - Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
 
+### Added (generation stop sequences and long prompts)
+- `stop_token_ids` and `stop_strings` on `GenerateConfig` / `Chatbot.generate`
+- `generate_token_ids` + Python `generate_tokens`; `tokenize_for_generate` without training 32-token cap
+- Stabilize `train_batch_size_two` test with fixed init seed
+
 ### Added (Chatbot autoregressive generation)
 - `Chatbot.generate(prompt, ...)` with greedy (`temperature=0`) and temperature/top-k sampling
 - `BytePairEncoder.decode` for BPE token roundtrip; `mmn-train::generate_text`

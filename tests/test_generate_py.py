@@ -42,3 +42,24 @@ def test_bpe_decode_roundtrip():
     ids = enc.encode("hello")
     decoded = enc.decode(ids)
     assert decoded == "hello"
+
+
+def test_generate_tokens_returns_ids():
+    bot = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, seed=2)
+    ids = bot.generate_tokens("hi", max_new_tokens=5, temperature=0.0)
+    assert isinstance(ids, list)
+    assert len(ids) == 5
+
+
+def test_generate_stop_token_ids():
+    bot = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, seed=99)
+    first = bot.generate_tokens("z", max_new_tokens=1)[0]
+    stopped = bot.generate_tokens("z", max_new_tokens=8, stop_token_ids=[first])
+    assert stopped == []
+
+
+def test_generate_long_prompt_not_truncated_to_32():
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=16, seed=4)
+    prompt = "a" * 48
+    ids = bot.generate_tokens(prompt, max_new_tokens=2, temperature=0.0)
+    assert len(ids) == 2

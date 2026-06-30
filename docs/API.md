@@ -143,7 +143,9 @@ bot = ai.Chatbot(
 
 - `compute_loss(input_str, target_str) -> float`
 - `compute_mean_loss(dataset_qa | dataset_corpus, bpe_encoder=None) -> float`
-- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None) -> str` — greedy when `temperature=0`
+- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None) -> str`
+- `generate_tokens(...)` — same kwargs; returns new token ids only
+- `stop_token_ids` / `stop_strings` optional on both (generation halts early)
 - `compute_loss(input, target, bpe_encoder=None) -> float` — same tokenization as `Train`
 
 ### Classifier
