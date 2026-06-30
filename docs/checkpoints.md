@@ -61,6 +61,16 @@ assert clf2.input_dim == clf.input_dim and clf2.num_labels == clf.num_labels
 
 **Tensors:** `backbone`, `head`
 
+## Classifier — `mmn-hf-classifier-v1` (binary)
+
+```python
+ai.export_classifier(clf, "hf-safetensors", "clf.safetensors")
+clf2 = ai.import_classifier("hf-safetensors", ["clf.safetensors"])
+# or: ai.import_classifier("safetensors", ["clf.safetensors"])  # auto-detect
+```
+
+Format id `mmn-hf-classifier-v1` in header metadata. Tensor keys `backbone`, `head` (aliases: `encoder.weight`, `classifier.weight`). Import rejects Chatbot `mmn-hf-safetensors-v1` files and vice versa.
+
 ## Quantization
 
 ```python

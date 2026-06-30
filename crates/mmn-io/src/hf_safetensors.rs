@@ -8,83 +8,13 @@ use crate::checkpoint_util::{
 };
 use mmn_core::{MmnError, Tensor};
 use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
-use half::{bf16, f16};
+use crate::hf_tensor_codec::{hf_err, is_hf_binary_bytes, tensor_bytes_f32, tensor_from_view};
 use safetensors::tensor::{Dtype, TensorView};
-use safetensors::{serialize, SafeTensorError, SafeTensors};
+use safetensors::{serialize, SafeTensors};
 use std::collections::HashMap;
 use std::fs;
 
-pub const HF_FORMAT: &str = "mmn-hf-safetensors-v1";
-
-fn tensor_bytes_f32(t: &Tensor) -> (Vec<usize>, Vec<u8>) {
-    let arr = t.data.as_standard_layout().into_owned();
-    let shape = arr.shape().to_vec();
-    let bytes: Vec<u8> = arr.iter().flat_map(|f| f.to_le_bytes()).collect();
-    (shape, bytes)
-}
-
-fn tensor_from_view(name: &str, view: &TensorView<'_>) -> Result<Tensor, MmnError> {
-    let shape: Vec<usize> = view.shape().to_vec();
-    let data = view.data();
-    let floats = match view.dtype() {
-        Dtype::F32 => decode_f32_tensor(data, &shape, name)?,
-        Dtype::F16 => decode_f16_tensor(data, &shape, name)?,
-        Dtype::BF16 => decode_bf16_tensor(data, &shape, name)?,
-        other => {
-            return Err(MmnError::Other {
-                message: format!(
-                    "tensor {name}: HF safetensors dtype {other:?} not supported (F32/F16/BF16 only)"
-                ),
-            });
-        }
-    };
-    Ok(Tensor::from_array(floats, true))
-}
-
-fn decode_f32_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
-    if data.len() % 4 != 0 {
-        return Err(MmnError::Other {
-            message: format!("tensor {name}: invalid F32 byte length {}", data.len()),
-        });
-    }
-    let mut floats = Vec::with_capacity(data.len() / 4);
-    for chunk in data.chunks_exact(4) {
-        floats.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
-    }
-    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), floats).map_err(|e| MmnError::Other {
-        message: format!("tensor {name}: {e}"),
-    })
-}
-
-fn decode_f16_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
-    if data.len() % 2 != 0 {
-        return Err(MmnError::Other {
-            message: format!("tensor {name}: invalid F16 byte length {}", data.len()),
-        });
-    }
-    let floats: Vec<f32> = data
-        .chunks_exact(2)
-        .map(|chunk| f16::from_le_bytes([chunk[0], chunk[1]]).to_f32())
-        .collect();
-    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), floats).map_err(|e| MmnError::Other {
-        message: format!("tensor {name}: {e}"),
-    })
-}
-
-fn decode_bf16_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
-    if data.len() % 2 != 0 {
-        return Err(MmnError::Other {
-            message: format!("tensor {name}: invalid BF16 byte length {}", data.len()),
-        });
-    }
-    let floats: Vec<f32> = data
-        .chunks_exact(2)
-        .map(|chunk| bf16::from_le_bytes([chunk[0], chunk[1]]).to_f32())
-        .collect();
-    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(shape), floats).map_err(|e| MmnError::Other {
-        message: format!("tensor {name}: {e}"),
-    })
-}
+pub const HF_FORMAT: &str = crate::hf_tensor_codec::HF_CHATBOT_FORMAT;
 
 fn chatbot_meta_json(model: &Chatbot, bpe_checkpoint: Option<&str>) -> serde_json::Value {
     let mut meta = serde_json::json!({
@@ -186,13 +116,7 @@ pub fn export_hf_safetensors(
 }
 
 pub fn is_hf_safetensors_bytes(bytes: &[u8]) -> bool {
-    !bytes.is_empty() && bytes[0] != b'{'
-}
-
-fn hf_err(e: SafeTensorError) -> MmnError {
-    MmnError::Other {
-        message: e.to_string(),
-    }
+    is_hf_binary_bytes(bytes)
 }
 
 /// Map HF / MMN tensor names to canonical MMN checkpoint keys.
@@ -371,6 +295,13 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
         .unwrap_or_else(|| serde_json::json!({}));
     if let Some(m) = file_meta.as_ref() {
         if let Some(fmt) = m.get("format") {
+            if fmt == crate::hf_tensor_codec::HF_CLASSIFIER_FORMAT {
+                return Err(MmnError::Other {
+                    message: format!(
+                        "Expected {HF_FORMAT}, got classifier format {fmt}"
+                    ),
+                });
+            }
             if fmt != HF_FORMAT {
                 return Err(MmnError::Other {
                     message: format!("Expected {HF_FORMAT} metadata format, got {fmt}"),
@@ -426,6 +357,7 @@ fn count_block_layers(tensors: &HashMap<String, Tensor>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use half::bf16;
     use mmn_models::Chatbot;
 
     #[test]

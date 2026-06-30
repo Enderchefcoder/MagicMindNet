@@ -223,8 +223,10 @@ Wrong dataset type → `DataMismatchError`. See [training_coverage.md](training_
 | `export(bot, "bin", path)` | `mmn-bin-v1` | Architecture meta only |
 | `import_model("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary; strict tensor validation |
 | `import_model("hf-safetensors", [path])` | `mmn-hf-safetensors-v1` | Binary HF safetensors only |
-| `export_classifier(clf, "safetensors", path)` | `mmn-classifier-v1` | backbone + head |
-| `import_classifier("safetensors", [path])` | — | First path only |
+| `export_classifier(clf, "safetensors", path)` | `mmn-classifier-v1` | backbone + head (JSON) |
+| `export_classifier(clf, "hf-safetensors", path)` | `mmn-hf-classifier-v1` | backbone + head (binary HF) |
+| `import_classifier("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary |
+| `import_classifier("hf-safetensors", [path])` | `mmn-hf-classifier-v1` | Binary HF classifier only |
 | `merge(a, b)` | — | Average Chatbot weights; shape must match |
 | `merge_classifier(a, b)` | — | Labels + `input_dim` must match |
 | `quantize(model, "int8" \| "int4")` | — | In-place Chatbot weights |

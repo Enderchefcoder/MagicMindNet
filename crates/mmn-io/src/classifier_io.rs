@@ -35,9 +35,19 @@ pub fn export_classifier(model: &Classifier, path: &str) -> Result<(), MmnError>
 }
 
 pub fn import_classifier(path: &str) -> Result<Classifier, MmnError> {
-    let text = fs::read_to_string(path).map_err(|e| MmnError::Other {
+    let bytes = fs::read(path).map_err(|e| MmnError::Other {
         message: e.to_string(),
     })?;
+    if crate::hf_tensor_codec::is_hf_binary_bytes(&bytes) {
+        return crate::hf_classifier_safetensors::import_hf_classifier_safetensors_bytes(&bytes);
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|e| MmnError::Other {
+        message: e.to_string(),
+    })?;
+    import_classifier_json(text)
+}
+
+fn import_classifier_json(text: &str) -> Result<Classifier, MmnError> {
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| MmnError::Other {
         message: e.to_string(),
     })?;

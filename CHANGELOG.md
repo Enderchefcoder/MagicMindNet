@@ -57,6 +57,11 @@
 - Expand grouped-query `k_proj`/`v_proj` to full `[d_model, d_model]` using `num_attention_heads` / `num_key_value_heads` meta
 - HF safetensors import decodes **F16** and **BF16** tensors to F32 via `half` crate
 
+### Added (Classifier Hugging Face binary safetensors)
+- `export_classifier(clf, "hf-safetensors", path)` / `import_classifier("hf-safetensors", [path])` — `mmn-hf-classifier-v1`
+- `import_classifier("safetensors", …)` auto-detects binary vs JSON; cross-format guards vs Chatbot HF
+- Shared `hf_tensor_codec` module for F32/F16/BF16 decode; `examples/classifier_hf_safetensors_roundtrip.py`
+
 ### Added (DatasetQA disk image paths for vision training)
 - Optional `image` JSON column (`image_row` config); resolves relative paths against the QA manifest directory
 - `vision_rgb_patch_from_image_path` resizes PNG/JPEG to 8×8×3 NCHW; grayscale fallback for legacy patch-only models

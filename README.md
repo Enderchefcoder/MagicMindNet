@@ -124,7 +124,7 @@ flowchart TB
 | **Classifier** | `from_classification`, `with_labels`, CE training, `predict` probs |
 | **Training** | `Train`, `TrainClassifier`, batch accumulation, hybrid AdamW+Muon |
 | **RL / SPIN** | Toy alignment loops on small models |
-| **IO** | `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF), `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** (no partial load) |
+| **IO** | `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE + UNet foundation (structural; not production SD) |
@@ -215,7 +215,7 @@ Full API reference: [docs/API.md](docs/API.md).
 
 ## Checkpoints & strict IO
 
-MagicMindNet checkpoints: JSON `mmn-safetensors-v1` (default) or binary `mmn-hf-safetensors-v1` (Hugging Face tooling compatible). Classifier weights remain JSON-only.
+MagicMindNet checkpoints: JSON `mmn-safetensors-v1` / `mmn-classifier-v1` (default) or binary `mmn-hf-safetensors-v1` / `mmn-hf-classifier-v1` (Hugging Face tooling compatible).
 
 **Strict import guarantees:**
 
@@ -267,8 +267,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **252**
-- pytest: **530**
+- Rust `#[test]`: **255**
+- pytest: **532**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

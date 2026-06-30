@@ -1,7 +1,8 @@
 use mmn_io::{
-    export_bin, export_classifier, export_hf_safetensors, export_safetensors, import_bin,
-    import_classifier, import_hf_safetensors, import_safetensors, merge_classifiers, merge_models,
-    quantize_classifier, quantize_model,
+    export_bin, export_classifier, export_hf_classifier_safetensors, export_hf_safetensors,
+    export_safetensors, import_bin, import_classifier, import_hf_classifier_safetensors,
+    import_hf_safetensors, import_safetensors, merge_classifiers, merge_models, quantize_classifier,
+    quantize_model,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -96,6 +97,9 @@ pub fn quantize(model: &mut PyChatbot, quant: &str) -> PyResult<()> {
 pub fn export_classifier_model(model: &PyClassifier, format: &str, path: &str) -> PyResult<()> {
     match format {
         "safetensors" => export_classifier(&model.inner, path).map_err(mmn_err_to_py),
+        "hf-safetensors" | "hf_safetensors" => {
+            export_hf_classifier_safetensors(&model.inner, path).map_err(mmn_err_to_py)
+        }
         _ => Err(PyValueError::new_err(format!("Unknown format: {format}"))),
     }
 }
@@ -107,6 +111,9 @@ pub fn import_classifier_model(format: &str, files: Vec<String>) -> PyResult<PyC
         .ok_or_else(|| PyValueError::new_err("files required"))?;
     let m = match format {
         "safetensors" => import_classifier(path).map_err(mmn_err_to_py)?,
+        "hf-safetensors" | "hf_safetensors" => {
+            import_hf_classifier_safetensors(path).map_err(mmn_err_to_py)?
+        }
         _ => return Err(PyValueError::new_err(format!("Unknown format: {format}"))),
     };
     Ok(PyClassifier { inner: m })

@@ -31,6 +31,9 @@ Write-Host "== examples/rope_roundtrip train =="
 Write-Host "== examples/classifier_roundtrip =="
 & $PY examples/classifier_roundtrip.py
 
+Write-Host "== examples/classifier_hf_safetensors_roundtrip =="
+& $PY examples/classifier_hf_safetensors_roundtrip.py
+
 Write-Host "== examples/classification =="
 & $PY examples/classification.py
 

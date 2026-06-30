@@ -22,6 +22,9 @@ echo "== examples/rope_roundtrip train =="
 echo "== examples/classifier_roundtrip =="
 "$PY" examples/classifier_roundtrip.py
 
+echo "== examples/classifier_hf_safetensors_roundtrip =="
+"$PY" examples/classifier_hf_safetensors_roundtrip.py
+
 echo "== examples/classification =="
 "$PY" examples/classification.py
 
