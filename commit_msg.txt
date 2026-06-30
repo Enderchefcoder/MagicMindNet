@@ -1,6 +1,1 @@
-[Cursor] Diffusion compute_mean_denoise_loss and checkpoint IO matrix tests
-
-Add mean denoise loss over ImageGen/ImageEdit manifests, Python
-compute_mean_denoise_loss, parametric mmn-diffusion-v1 IO coverage, quantize
-roundtrip sample test, and diffusion_edit_roundtrip example (309 Rust / 625
-pytest).
+[Cursor] Remove accidental commit_msg.txt from repository
