@@ -2,6 +2,11 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (eval_mean_loss diffusion modes + mean loss training regression)
+- `eval_mean_loss.py` modes `diffusion` and `diffusion-edit` with optional `--train`
+- `mean_denoise_loss_decreases_after_fixed_t_training` Rust regression
+- Diffusion section in `docs/checkpoint_coverage.md`; README diffusion status updated
+
 ### Added (diffusion mean denoise loss + IO matrix + edit roundtrip)
 - `mean_denoise_loss` / `mean_denoise_loss_masked`; Python `Diffusion.compute_mean_denoise_loss`
 - Parametric diffusion checkpoint IO matrix (`test_io_diffusion_matrix_py.py`)

@@ -37,6 +37,12 @@ echo "== examples/eval_mean_loss cls =="
 echo "== examples/eval_mean_loss corpus =="
 "$PY" examples/eval_mean_loss.py corpus
 
+echo "== examples/eval_mean_loss diffusion =="
+"$PY" examples/eval_mean_loss.py diffusion
+
+echo "== examples/eval_mean_loss diffusion-edit =="
+"$PY" examples/eval_mean_loss.py diffusion-edit
+
 echo "== examples/eval_mean_loss qa rope =="
 "$PY" examples/eval_mean_loss.py qa --rope
 

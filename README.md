@@ -104,7 +104,7 @@ flowchart TB
 |-------|------|
 | `mmn-core` | `Tensor`, CPU ops, autograd tape, CE / embedding backward |
 | `mmn-nn` | `Linear`, `LayerNorm`, GELU, transformer block pieces |
-| `mmn-models` | `Chatbot`, `Classifier`, autoset budgets, diffusion stubs |
+| `mmn-models` | `Chatbot`, `Classifier`, `Diffusion` (VAE + UNet training/sampling) |
 | `mmn-train` | LM + classifier training loops, RL, SPIN, loss APIs |
 | `mmn-io` | Safetensors JSON wrapper, merge, quantize, bin stub |
 | `mmn-optim` | AdamW, Newton–Schulz Muon, hybrid optimizer, grad accumulation |
@@ -127,7 +127,7 @@ flowchart TB
 | **IO** | `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
-| **Diffusion** | VAE + UNet foundation (structural; not production SD) |
+| **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
 | **Errors** | Typed Python exceptions: `CUDAError`, `DataMismatchError`, `ModelMismatchError`, … |
 
 Known gaps: see [docs/limitations.md](docs/limitations.md) (external HF model import, full diffusion backward, etc.).
@@ -267,8 +267,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **309**
-- pytest: **625**
+- Rust `#[test]`: **310**
+- pytest: **628**
 
 Test area map: [docs/testing.md](docs/testing.md).
 
@@ -345,7 +345,7 @@ MagicMindNet/
 | M5 Classification + vision flag | Done |
 | M6 IO / merge / quantize / limit | Done |
 | M7 RL + SPIN | Done |
-| M8–M9 Diffusion / latent pipeline | Foundation (VAE + UNet stubs) |
+| M8–M9 Diffusion / latent pipeline | TrainDiffusion, inpainting, sample/export/merge/quantize |
 | M10 Release hardening | CI + strict IO tests + coverage matrix |
 
 ---

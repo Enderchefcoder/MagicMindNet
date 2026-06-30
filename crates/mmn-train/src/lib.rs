@@ -1105,6 +1105,36 @@ mod tests {
     }
 
     #[test]
+    fn mean_denoise_loss_decreases_after_fixed_t_training() {
+        use mmn_data::DatasetImageGen;
+        use mmn_models::Diffusion;
+        let manifest = format!(
+            "{}/../../tests/fixtures/image_gen.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let ds = DatasetImageGen::load(&manifest).unwrap();
+        let path = ds.resolve_image_path(&ds.samples[0].image_path);
+        let x = mmn_data::rgb_nchw_tensor_from_image_path(&path).unwrap();
+        let mut model = Diffusion::new();
+        let before = mean_denoise_loss(&model, &ds, 7).unwrap();
+        let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        for _ in 0..15 {
+            model
+                .train_step_denoise(&x, 7, &mut adamw, &mut pid)
+                .unwrap();
+        }
+        let after = mean_denoise_loss(&model, &ds, 7).unwrap();
+        assert!(
+            after <= before,
+            "mean denoise loss should decrease at fixed t: before={before} after={after}"
+        );
+    }
+
+    #[test]
     fn train_reduces_loss() {
         let ds = toy_dataset();
         let mut model = Chatbot::new(false, None, 256, Some(2), Some(32));

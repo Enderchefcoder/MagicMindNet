@@ -278,6 +278,25 @@ def test_eval_mean_loss_cls_train_runs(run_example):
     assert "mean classification loss after:" in proc.stdout
 
 
+def test_eval_mean_loss_diffusion_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "diffusion")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean diffusion denoise loss:" in proc.stdout
+
+
+def test_eval_mean_loss_diffusion_edit_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "diffusion-edit")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean diffusion-edit denoise loss:" in proc.stdout
+
+
+def test_eval_mean_loss_diffusion_train_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "diffusion", "--train")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean diffusion loss before:" in proc.stdout
+    assert "mean diffusion loss after:" in proc.stdout
+
+
 def test_vision_chatbot_example_runs(run_example):
     proc = run_example("vision_chatbot.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

@@ -1,4 +1,4 @@
-"""Print mean CE for a Chatbot (QA/corpus) or Classifier (classification) dataset."""
+"""Print mean CE for Chatbot/Classifier or mean denoise loss for Diffusion datasets."""
 
 import json
 import sys
@@ -8,15 +8,17 @@ from pathlib import Path
 import magicmindnet as ai
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
-MODES = ("qa", "cls", "corpus")
+MODES = ("qa", "cls", "corpus", "diffusion", "diffusion-edit")
 TRAIN_CFG = ai.TrainConfig(epochs=3, batch_size=1, learning_rate=0.05)
 CLS_TRAIN_CFG = ai.TrainConfig(epochs=5, batch_size=1, learning_rate=0.08)
+DIFFUSION_TRAIN_CFG = ai.TrainConfig(epochs=8, batch_size=1, learning_rate=0.05, cuda=False)
 BPE_VOCAB = 512
 
 
 def _usage() -> None:
     print(
-        "Usage: python examples/eval_mean_loss.py qa|cls|corpus "
+        "Usage: python examples/eval_mean_loss.py "
+        "qa|cls|corpus|diffusion|diffusion-edit "
         "[--train] [--learned-pe] [--rope] [--bpe] [--bpe-file PATH]"
     )
     raise SystemExit(2)
@@ -105,9 +107,39 @@ def main() -> None:
     if learned_pe and use_rope:
         print("Use either --learned-pe or --rope, not both.")
         raise SystemExit(2)
-    if use_rope and mode == "cls":
+    if use_rope and mode in ("cls", "diffusion", "diffusion-edit"):
         print("--rope applies only to qa or corpus chatbot modes.")
         raise SystemExit(2)
+    if learned_pe and mode in ("cls", "diffusion", "diffusion-edit"):
+        print("--learned-pe applies only to qa or corpus chatbot modes.")
+        raise SystemExit(2)
+    if (use_bpe or bpe_file) and mode in ("cls", "diffusion", "diffusion-edit"):
+        print("--bpe and --bpe-file apply only to qa or corpus modes.")
+        raise SystemExit(2)
+
+    if mode == "diffusion":
+        ds = ai.DatasetImageGen(file=str(FIXTURES / "image_gen.json"))
+        d = ai.Diffusion()
+        if do_train:
+            before = d.compute_mean_denoise_loss(ds, t=7)
+            ai.TrainDiffusion(d, ds, DIFFUSION_TRAIN_CFG)
+            after = d.compute_mean_denoise_loss(ds, t=7)
+            _print_train_delta("diffusion", before, after)
+        else:
+            print("mean diffusion denoise loss:", d.compute_mean_denoise_loss(ds, t=7))
+        return
+
+    if mode == "diffusion-edit":
+        ds = ai.DatasetImageEdit(file=str(FIXTURES / "image_edit.json"))
+        d = ai.Diffusion()
+        if do_train:
+            before = d.compute_mean_denoise_loss(ds, t=5)
+            ai.TrainDiffusion(d, ds, DIFFUSION_TRAIN_CFG)
+            after = d.compute_mean_denoise_loss(ds, t=5)
+            _print_train_delta("diffusion-edit", before, after)
+        else:
+            print("mean diffusion-edit denoise loss:", d.compute_mean_denoise_loss(ds, t=5))
+        return
 
     if mode == "qa":
         ds = ai.DatasetQA(

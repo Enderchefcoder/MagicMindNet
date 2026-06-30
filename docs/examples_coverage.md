@@ -6,7 +6,7 @@ Runnable scripts under `examples/` and how they are regression-tested.
 |--------|---------|--------------------------|-------------------------------------|
 | [quickstart.py](../examples/quickstart.py) | Minimal QA train + export; `--learned-pe` | yes | yes |
 | [benchmark_train.py](../examples/benchmark_train.py) | QA mean loss before/after `Train`; `--learned-pe` | yes | yes |
-| [eval_mean_loss.py](../examples/eval_mean_loss.py) | Mean CE snapshot (`qa` / `cls` / `corpus`); `--learned-pe`, `--train` | yes (all modes) | yes (+ flag variants) |
+| [eval_mean_loss.py](../examples/eval_mean_loss.py) | Mean CE (`qa` / `cls` / `corpus`) or denoise loss (`diffusion` / `diffusion-edit`); `--learned-pe`, `--train` | yes (all modes) | yes (+ flag variants) |
 | [corpus_benchmark.py](../examples/corpus_benchmark.py) | Corpus LM train delta; `--learned-pe` for learned `pos_embed` | yes | yes |
 | [classification.py](../examples/classification.py) | Classifier train + predict | yes | yes |
 | [classification_benchmark.py](../examples/classification_benchmark.py) | Classification train delta | yes | yes |

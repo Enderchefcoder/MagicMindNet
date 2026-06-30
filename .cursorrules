@@ -178,3 +178,4 @@
 [X] Inpainting diffusion (masked train, ImageEdit paths, merge_diffusion, RGB clamp); 301 Rust / 587 pytest, verify_gate — pushed 06bf5a3
 [X] Diffusion inpaint sampling, quantize_diffusion, PNG export, masked denoise loss; 306 Rust / 595 pytest, verify_gate — pushed a826a8d
 [X] Diffusion compute_mean_denoise_loss, IO matrix tests, edit roundtrip example; 309 Rust / 625 pytest, verify_gate
+[X] eval_mean_loss diffusion modes, fixed-t denoise loss regression, quantize roundtrip test fix; 310 Rust / 628 pytest, verify_gate

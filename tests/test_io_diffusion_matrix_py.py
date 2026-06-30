@@ -94,8 +94,8 @@ def test_quantize_diffusion_changes_tensor_matrix_py(tmp_path: Path, mode: str, 
 
 def test_quantize_diffusion_export_import_preserves_sample(tmp_path: Path):
     d = ai.Diffusion()
-    patch_before = d.sample_rgb_patch(steps=4, seed=9)
     ai.quantize_diffusion(d, "int8")
+    patch_before = d.sample_rgb_patch(steps=4, seed=9)
     path = tmp_path / "quant.mmn"
     ai.export_diffusion(d, "safetensors", str(path))
     loaded = ai.import_diffusion("safetensors", [str(path)])

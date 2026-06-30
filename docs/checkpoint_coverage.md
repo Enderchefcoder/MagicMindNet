@@ -108,6 +108,25 @@ See [position_encoding_coverage.md](position_encoding_coverage.md).
 
 **Multi-block test file:** `tests/test_io_multiblock_chatbot_py.py`
 
+## Diffusion (`mmn-diffusion-v1`)
+
+Seven conv weight tensors: `vae_enc_conv1`, `vae_enc_conv2`, `vae_dec_conv1`, `vae_dec_conv2`, `unet_down`, `unet_mid`, `unet_up`. Meta: `latent_channels`, `spatial`.
+
+| Tensor key | Missing import | Shape mismatch | Merge average | int8 quantize | int4 quantize |
+|------------|----------------|----------------|---------------|---------------|---------------|
+| All 7 keys | `test_io_diffusion_matrix_py.py` | matrix (same element count) | matrix | matrix (subset) | matrix (subset) |
+
+| Behavior | Rust | Python |
+|----------|------|--------|
+| Roundtrip preserves sample | `diffusion_export_import_roundtrip_preserves_sample` | `test_diffusion_export_import_roundtrip` |
+| Reject chatbot checkpoint | `import_diffusion_rejects_chatbot_checkpoint` | `test_import_diffusion_rejects_chatbot_checkpoint` |
+| Quantize export/import sample | — | `test_quantize_diffusion_export_import_preserves_sample` |
+| Merge `latent_channels` mismatch | `merge_diffusion_rejects_latent_channel_mismatch` | — |
+
+**Matrix test file:** `tests/test_io_diffusion_matrix_py.py`
+
+See [diffusion_coverage.md](diffusion_coverage.md).
+
 ## Running coverage checks
 
 ```powershell
