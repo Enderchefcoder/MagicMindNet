@@ -67,6 +67,9 @@ Write-Host "== examples/benchmark_train rope =="
 Write-Host "== examples/generate_reply =="
 & $PY examples/generate_reply.py
 
+Write-Host "== examples/gqa_rope_generate =="
+& $PY examples/gqa_rope_generate.py
+
 Write-Host "== examples/unigram_train_generate =="
 & $PY examples/unigram_train_generate.py
 

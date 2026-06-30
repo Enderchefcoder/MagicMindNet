@@ -53,6 +53,12 @@
 - Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
 - Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
 
+### Added (inference KV cache for generation)
+- Per-layer K/V cache in `mmn-nn::kv_cache` with RoPE position offsets and GQA-aware attention
+- `Chatbot.forward_logits_with_kv_cache` / `reset_kv_cache_prefill`; `GenerateConfig.use_kv_cache` (default `true`)
+- Python `use_kv_cache=` on `generate` / `generate_tokens`; parity tests vs full forward
+- `examples/gqa_rope_generate.py` GQA+RoPE train + KV benchmark smoke
+
 ### Added (unigram tokenizer and nucleus sampling)
 - `UnigramEncoder`: Viterbi segmentation, EM training, `mmn-unigram-v1` JSON save/load; Python `train` / `train_from_qa` / `train_from_corpus`
 - `Train` / `RL` / `SPIN` / `compute_mean_loss` accept `unigram_encoder=` (mutually exclusive with `bpe_encoder`)

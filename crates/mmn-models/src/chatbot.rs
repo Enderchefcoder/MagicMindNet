@@ -72,6 +72,13 @@ pub fn targets_with_vision_prefix(
     out
 }
 
+/// Inference KV cache for autoregressive generation.
+#[derive(Clone, Default)]
+pub struct ChatbotKvCache {
+    pub transformer: mmn_nn::TransformerKvCache,
+    pub seq_len: usize,
+}
+
 pub struct Chatbot {
     pub shape: ModelShape,
     pub embed: Embedding,
@@ -702,6 +709,90 @@ impl Chatbot {
     ) -> Result<Tensor> {
         self.lm_head
             .forward(&self.forward_hidden_with_patches(token_ids, patches)?)
+    }
+
+    /// Initialize an empty inference KV cache (one slot per transformer block).
+    pub fn init_kv_cache(&self) -> ChatbotKvCache {
+        ChatbotKvCache {
+            transformer: mmn_nn::TransformerKvCache::new(self.blocks.len()),
+            seq_len: 0,
+        }
+    }
+
+    fn apply_position_encoding_at_offset(
+        &self,
+        h: Tensor,
+        position_offset: usize,
+    ) -> Result<Tensor> {
+        if self.use_rope {
+            return Ok(h);
+        }
+        let seq = h.shape[0];
+        if seq == 0 {
+            return Ok(h);
+        }
+        if let Some(pe) = &self.pos_embed {
+            if position_offset + seq > self.max_seq_len {
+                return Err(mmn_core::MmnError::Shape {
+                    message: format!(
+                        "sequence positions {}..{} exceed max_seq_len {}",
+                        position_offset,
+                        position_offset + seq,
+                        self.max_seq_len
+                    ),
+                });
+            }
+            let pos_ids: Vec<usize> = (position_offset..position_offset + seq).collect();
+            let pos = pe.forward(&pos_ids)?;
+            return h.add(&pos);
+        }
+        let d_model = h.shape[1];
+        let pe = mmn_nn::sinusoidal_position_encoding(position_offset + seq, d_model);
+        let pe_slice =
+            mmn_nn::slice_sequence_rows(&pe, position_offset, position_offset + seq)?;
+        h.add(&pe_slice)
+    }
+
+    /// Forward `token_ids` while appending attention K/V into `cache` (text-only; no vision patches).
+    pub fn forward_logits_with_kv_cache(
+        &self,
+        token_ids: &[usize],
+        cache: &mut ChatbotKvCache,
+    ) -> Result<Tensor> {
+        if token_ids.is_empty() {
+            return Err(mmn_core::MmnError::Shape {
+                message: "forward_logits_with_kv_cache requires at least one token".into(),
+            });
+        }
+        if self.vision && self.has_vision_patch_encoder() {
+            return Err(mmn_core::MmnError::Other {
+                message: "KV cache generation does not support vision prefix patches".into(),
+            });
+        }
+        let start_pos = cache.seq_len;
+        let mut h = self.embed.forward(token_ids)?;
+        h = self.apply_position_encoding_at_offset(h, start_pos)?;
+        for (i, block) in self.blocks.iter().enumerate() {
+            h = mmn_nn::block_forward_with_kv_cache(
+                block,
+                &h,
+                &mut cache.transformer.layers[i],
+                start_pos,
+            )?;
+        }
+        cache.seq_len += token_ids.len();
+        self.lm_head.forward(&h)
+    }
+
+    /// Clear cache and run a full prefill pass (used when the context window is reset).
+    pub fn reset_kv_cache_prefill(
+        &self,
+        token_ids: &[usize],
+        cache: &mut ChatbotKvCache,
+    ) -> Result<Tensor> {
+        cache.transformer.clear();
+        cache.seq_len = 0;
+        self.forward_logits_with_kv_cache(token_ids, cache)
     }
 
     pub fn loss_on_batch(&self, token_ids: &[usize], targets: &[usize]) -> Result<f32> {

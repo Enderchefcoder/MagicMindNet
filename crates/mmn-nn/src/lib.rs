@@ -2,6 +2,12 @@ use mmn_core::{MmnError, Result, Tensor};
 use ndarray::{ArrayD, IxDyn};
 use rand::{Rng, SeedableRng};
 
+mod kv_cache;
+pub use kv_cache::{
+    apply_rope_with_position_offset, block_forward_with_kv_cache, mha_forward_with_kv_cache,
+    scaled_dot_product_attention_with_kv, LayerKvCache, TransformerKvCache,
+};
+
 fn transpose_tensor(t: &Tensor) -> Result<Tensor> {
     let v = t
         .data

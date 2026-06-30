@@ -21,6 +21,8 @@ pub struct GenerateConfig {
     pub stop_token_ids: Vec<usize>,
     /// Stop when decoded new text contains any of these substrings (suffix removed).
     pub stop_strings: Vec<String>,
+    /// Reuse per-layer K/V cache during generation (faster; text-only Chatbot).
+    pub use_kv_cache: bool,
 }
 
 impl Default for GenerateConfig {
@@ -33,6 +35,7 @@ impl Default for GenerateConfig {
             repetition_penalty: 1.0,
             stop_token_ids: Vec::new(),
             stop_strings: Vec::new(),
+            use_kv_cache: true,
         }
     }
 }
@@ -182,6 +185,102 @@ fn sample_next_token(
     probs.len().saturating_sub(1)
 }
 
+fn last_token_scores(
+    logits: &mmn_core::Tensor,
+    vocab: usize,
+    tokens: &[usize],
+    repetition_penalty: f32,
+) -> Result<Vec<f32>> {
+    if logits.shape.len() != 2 {
+        return Err(MmnError::Shape {
+            message: "generate expected logits [seq, vocab]".into(),
+        });
+    }
+    let last = logits.shape[0] - 1;
+    let vocab_size = logits.shape[1].min(vocab);
+    let mut scores: Vec<f32> = (0..vocab_size).map(|i| logits.data[[last, i]]).collect();
+    apply_repetition_penalty(&mut scores, tokens, repetition_penalty);
+    Ok(scores)
+}
+
+fn pick_next_token(
+    scores: &mut [f32],
+    temperature: f32,
+    top_k: usize,
+    top_p: f32,
+    rng: &mut impl Rng,
+) -> usize {
+    if temperature <= 0.0 {
+        scores
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    } else {
+        sample_next_token(scores, temperature, top_k, top_p, rng)
+    }
+}
+
+fn generate_token_ids_with_kv_cache(
+    model: &Chatbot,
+    tokens: &mut Vec<usize>,
+    prompt_len: usize,
+    max_ctx: usize,
+    encoder: Option<TextEncoderRef<'_>>,
+    config: &GenerateConfig,
+) -> Result<Vec<usize>> {
+    let vocab = model.shape.vocab_size;
+    let mut cache = model.init_kv_cache();
+    let mut rng = rand::thread_rng();
+    let mut logits = model.reset_kv_cache_prefill(tokens, &mut cache)?;
+    let mut scores = last_token_scores(&logits, vocab, tokens, config.repetition_penalty)?;
+
+    for _ in 0..config.max_new_tokens {
+        if tokens.len() >= max_ctx {
+            break;
+        }
+        let next = pick_next_token(
+            &mut scores,
+            config.temperature,
+            config.top_k,
+            config.top_p,
+            &mut rng,
+        );
+        if config.stop_token_ids.contains(&next) {
+            break;
+        }
+        tokens.push(next);
+
+        if !config.stop_strings.is_empty() {
+            let new_text = decode_tokens(&tokens[prompt_len..], encoder);
+            let trimmed = truncate_at_stop_strings(&new_text, &config.stop_strings);
+            if trimmed.len() < new_text.len() {
+                let mut out_ids = Vec::new();
+                for i in 1..=(tokens.len() - prompt_len) {
+                    let partial = decode_tokens(&tokens[prompt_len..prompt_len + i], encoder);
+                    if partial == trimmed {
+                        out_ids.extend_from_slice(&tokens[prompt_len..prompt_len + i]);
+                        return Ok(out_ids);
+                    }
+                    if partial.len() > trimmed.len() {
+                        break;
+                    }
+                }
+                return Ok(out_ids);
+            }
+        }
+
+        if tokens.len() >= max_ctx {
+            break;
+        }
+        logits = model.forward_logits_with_kv_cache(&[next], &mut cache)?;
+        scores = last_token_scores(&logits, vocab, tokens, config.repetition_penalty)?;
+    }
+
+    Ok(tokens[prompt_len..].to_vec())
+}
+
 /// Sample new token ids after `prompt` (does not include prompt tokens).
 pub fn generate_token_ids(
     model: &Chatbot,
@@ -194,6 +293,18 @@ pub fn generate_token_ids(
     let prompt_tokens = tokenize_for_generate(prompt, vocab, encoder, max_ctx);
     let mut tokens = prompt_tokens;
     let prompt_len = tokens.len();
+
+    if config.use_kv_cache && !model.vision {
+        return generate_token_ids_with_kv_cache(
+            model,
+            &mut tokens,
+            prompt_len,
+            max_ctx,
+            encoder,
+            config,
+        );
+    }
+
     let mut rng = rand::thread_rng();
 
     for _ in 0..config.max_new_tokens {
@@ -203,31 +314,14 @@ pub fn generate_token_ids(
         let start = tokens.len().saturating_sub(max_ctx);
         let ctx = &tokens[start..];
         let logits = model.forward_logits(ctx)?;
-        if logits.shape.len() != 2 {
-            return Err(MmnError::Shape {
-                message: "generate expected logits [seq, vocab]".into(),
-            });
-        }
-        let last = logits.shape[0] - 1;
-        let vocab_size = logits.shape[1].min(vocab);
-        let mut scores: Vec<f32> = (0..vocab_size).map(|i| logits.data[[last, i]]).collect();
-        apply_repetition_penalty(&mut scores, &tokens, config.repetition_penalty);
-        let next = if config.temperature <= 0.0 {
-            scores
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(i, _)| i)
-                .unwrap_or(0)
-        } else {
-            sample_next_token(
-                &mut scores,
-                config.temperature,
-                config.top_k,
-                config.top_p,
-                &mut rng,
-            )
-        };
+        let mut scores = last_token_scores(&logits, vocab, &tokens, config.repetition_penalty)?;
+        let next = pick_next_token(
+            &mut scores,
+            config.temperature,
+            config.top_k,
+            config.top_p,
+            &mut rng,
+        );
 
         if config.stop_token_ids.contains(&next) {
             break;
@@ -326,6 +420,30 @@ mod tests {
         assert!((probs[3] - 0.0).abs() < 1e-6);
         let sum: f32 = probs.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn kv_cache_generation_matches_full_forward() {
+        let model = Chatbot::new_with_pe_options(
+            false, None, 128, Some(1), Some(16), Some(55), true, 64,
+        );
+        let cfg = GenerateConfig {
+            max_new_tokens: 6,
+            temperature: 0.0,
+            ..Default::default()
+        };
+        let kv_ids = generate_token_ids(&model, "hello", None, &cfg).unwrap();
+        let full_ids = generate_token_ids(
+            &model,
+            "hello",
+            None,
+            &GenerateConfig {
+                use_kv_cache: false,
+                ..cfg.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(kv_ids, full_ids);
     }
 
     #[test]
