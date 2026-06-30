@@ -21,6 +21,18 @@ def test_benchmark_train_bpe_example_runs(run_example):
     assert "mean loss before" in proc.stdout
 
 
+def test_bpe_roundtrip_example_runs(run_example):
+    proc = run_example("bpe_roundtrip.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "bpe roundtrip ok:" in proc.stdout
+
+
+def test_bpe_roundtrip_train_example_runs(run_example):
+    proc = run_example("bpe_roundtrip.py", "--train")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "trained with BPE:" in proc.stdout
+
+
 def test_quickstart_example_runs(run_example):
     proc = run_example("quickstart.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

@@ -40,6 +40,12 @@ Write-Host "== examples/benchmark_train learned-pe =="
 Write-Host "== examples/benchmark_train bpe =="
 & $PY examples/benchmark_train.py --bpe
 
+Write-Host "== examples/bpe_roundtrip =="
+& $PY examples/bpe_roundtrip.py
+
+Write-Host "== examples/bpe_roundtrip train =="
+& $PY examples/bpe_roundtrip.py --train
+
 Write-Host "== examples/rl_spin =="
 & $PY examples/rl_spin.py
 
