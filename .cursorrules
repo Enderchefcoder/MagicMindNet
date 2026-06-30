@@ -148,3 +148,5 @@
 [X] Pass 112 — BPE-aware loss eval + benchmark_train --bpe; 210 Rust / 474 pytest
 [X] Pass 113 — mmn-bpe-v1 save/load + corpus_benchmark --bpe; 213 Rust / 477 pytest
 [X] Pass 114 — bpe_roundtrip example + smoke; 213 Rust / 479 pytest
+[X] Pass 115 — eval_mean_loss --bpe/--bpe-file + quickstart --bpe; 213 Rust / 484 pytest
+[ ] Pass 116 — chatbot export meta bpe_path sidecar hint; RL/SPIN bpe_encoder optional

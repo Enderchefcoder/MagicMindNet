@@ -69,6 +69,18 @@ Regression coverage for `mmn-train` and Python `Train` / `TrainClassifier` / `RL
 | `quickstart.py` | `--learned-pe` | `test_quickstart_learned_pe_example_runs` |
 | `learned_pos_embed_roundtrip.py` | `--train` | `test_learned_pos_embed_roundtrip_train_example_runs` |
 
+## Example scripts (BPE flags)
+
+| Script | Flags | pytest |
+|--------|-------|--------|
+| `benchmark_train.py` | `--bpe` | `test_benchmark_train_bpe_example_runs` |
+| `corpus_benchmark.py` | `--bpe` | `test_corpus_benchmark_bpe_example_runs` |
+| `eval_mean_loss.py` | `qa\|corpus --bpe` | `test_eval_mean_loss_qa_bpe_runs`, `test_eval_mean_loss_corpus_bpe_runs` |
+| `eval_mean_loss.py` | `qa --bpe --train` | `test_eval_mean_loss_qa_bpe_train_runs` |
+| `eval_mean_loss.py` | `--bpe-file PATH` | `test_eval_mean_loss_bpe_py.py` |
+| `quickstart.py` | `--bpe` | `test_quickstart_bpe_example_runs` |
+| `bpe_roundtrip.py` | `--train` | `test_bpe_roundtrip_train_example_runs` |
+
 ## Example scripts (monitoring)
 
 | Script | Mode | pytest |

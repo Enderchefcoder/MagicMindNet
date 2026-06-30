@@ -42,6 +42,13 @@ def test_quickstart_learned_pe_example_runs(run_example):
     proc = run_example("quickstart.py", "--learned-pe")
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "use_learned_pos_embed: True" in proc.stdout
+
+
+def test_quickstart_bpe_example_runs(run_example):
+    proc = run_example("quickstart.py", "--bpe")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "bpe merges:" in proc.stdout
+    assert "Training finished." in proc.stdout
     assert "Training finished." in proc.stdout
 
 
@@ -145,6 +152,27 @@ def test_eval_mean_loss_corpus_learned_pe_runs(run_example):
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "use_learned_pos_embed: True" in proc.stdout
     assert "mean corpus loss:" in proc.stdout
+
+
+def test_eval_mean_loss_qa_bpe_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "qa", "--bpe")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "bpe merges:" in proc.stdout
+    assert "mean QA loss:" in proc.stdout
+
+
+def test_eval_mean_loss_corpus_bpe_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "corpus", "--bpe")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "bpe merges:" in proc.stdout
+    assert "mean corpus loss:" in proc.stdout
+
+
+def test_eval_mean_loss_qa_bpe_train_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "qa", "--bpe", "--train")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean QA loss before:" in proc.stdout
+    assert "mean QA loss after:" in proc.stdout
 
 
 def test_eval_mean_loss_qa_train_runs(run_example):

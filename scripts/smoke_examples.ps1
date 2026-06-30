@@ -7,6 +7,9 @@ $PY = & "$PSScriptRoot\venv_python.ps1"
 Write-Host "== examples/quickstart =="
 & $PY examples/quickstart.py
 
+Write-Host "== examples/quickstart bpe =="
+& $PY examples/quickstart.py --bpe
+
 Write-Host "== examples/checkpoint_roundtrip =="
 & $PY examples/checkpoint_roundtrip.py
 
@@ -30,6 +33,9 @@ Write-Host "== examples/eval_mean_loss cls =="
 
 Write-Host "== examples/eval_mean_loss corpus =="
 & $PY examples/eval_mean_loss.py corpus
+
+Write-Host "== examples/eval_mean_loss qa bpe =="
+& $PY examples/eval_mean_loss.py qa --bpe
 
 Write-Host "== examples/benchmark_train =="
 & $PY examples/benchmark_train.py
