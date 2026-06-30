@@ -9,6 +9,8 @@ __pycache__/
 .ruff_cache/
 *.pyc
 *.pyo
+*.pyd
+*.pdb
 .DS_Store
 examples/_roundtrip_*.mmn
 examples/_tmp_labels.json
