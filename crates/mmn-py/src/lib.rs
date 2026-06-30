@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 
 mod datasets;
+mod encoder_util;
 mod errors;
 mod io;
 mod models;
@@ -22,7 +23,7 @@ use io::{
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
-use tokenizer::PyBytePairEncoder;
+use tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
 use train::{RL, SPIN, Train, TrainClassifier};
 use train_config::PyTrainConfig;
 use vision::{vision_rgb_patch_from_image_path_py, vision_rgb_patches_from_image_path_py};
@@ -36,6 +37,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDatasetImageGen>()?;
     m.add_class::<PyDatasetImageEdit>()?;
     m.add_class::<PyBytePairEncoder>()?;
+    m.add_class::<PyUnigramEncoder>()?;
     m.add_class::<PyChatbot>()?;
     m.add_class::<PyClassifier>()?;
     m.add_class::<PyDiffusion>()?;

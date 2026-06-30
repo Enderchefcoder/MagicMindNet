@@ -53,6 +53,12 @@
 - Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
 - Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
 
+### Added (unigram tokenizer and nucleus sampling)
+- `UnigramEncoder`: Viterbi segmentation, EM training, `mmn-unigram-v1` JSON save/load; Python `train` / `train_from_qa` / `train_from_corpus`
+- `Train` / `RL` / `SPIN` / `compute_mean_loss` accept `unigram_encoder=` (mutually exclusive with `bpe_encoder`)
+- Generation: `top_p` nucleus sampling and `repetition_penalty` on `GenerateConfig` / `Chatbot.generate`
+- `examples/unigram_train_generate.py` + smoke; `tests/test_unigram_tokenizer_py.py`
+
 ### Added (generation stop sequences and long prompts)
 - `stop_token_ids` and `stop_strings` on `GenerateConfig` / `Chatbot.generate`
 - `generate_token_ids` + Python `generate_tokens`; `tokenize_for_generate` without training 32-token cap

@@ -166,4 +166,5 @@
 [X] Native GQA forward in attention + HF import without KV expansion; 258 Rust / 532 pytest — pushed 9702629
 [X] Python GQA API (n_heads/n_kv_heads getters, param count, tests); 258 Rust / 538 pytest, verify_gate — pushed 3dcdabd
 [X] Chatbot generate + BPE decode + bin GQA meta; 263 Rust / 545 pytest, verify_gate — pushed 13ea807
-[X] Generation stop sequences + generate_tokens + long prompt tokenization; 266 Rust / 548 pytest, verify_gate
+[X] Generation stop sequences + generate_tokens + long prompt tokenization; 266 Rust / 548 pytest, verify_gate — pushed 59b9e9a
+[X] Unigram tokenizer + top-p/repetition penalty generation + TextEncoderRef; 271 Rust / 554 pytest, verify_gate

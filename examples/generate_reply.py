@@ -14,10 +14,15 @@ def main() -> None:
     ai.Train(bot, data, ai.TrainConfig(epochs=2, batch_size=1, learning_rate=0.05))
     after = bot.compute_mean_loss(data)
     prompt = "What is"
-    reply = bot.generate(prompt, max_new_tokens=16, temperature=0.0)
+    reply = bot.generate(
+        prompt,
+        max_new_tokens=16,
+        temperature=0.0,
+        repetition_penalty=1.15,
+    )
     print(f"mean loss: {before:.4f} -> {after:.4f}")
     print(f"prompt: {prompt!r}")
-    print(f"reply:  {reply!r}")
+    print(f"reply:  {ascii(reply)}")
 
 
 if __name__ == "__main__":

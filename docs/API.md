@@ -143,7 +143,8 @@ bot = ai.Chatbot(
 
 - `compute_loss(input_str, target_str) -> float`
 - `compute_mean_loss(dataset_qa | dataset_corpus, bpe_encoder=None) -> float`
-- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None) -> str`
+- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, repetition_penalty=1.0, bpe_encoder=None, unigram_encoder=None) -> str`
+- `generate_tokens(...)` — same sampling kwargs; returns token ids
 - `generate_tokens(...)` — same kwargs; returns new token ids only
 - `stop_token_ids` / `stop_strings` optional on both (generation halts early)
 - `compute_loss(input, target, bpe_encoder=None) -> float` — same tokenization as `Train`
@@ -189,6 +190,7 @@ All fields are readable/writable on `cfg`. `repr(cfg)` summarizes settings.
 ```python
 ai.Train(chatbot, dataset_qa, cfg)
 ai.Train(chatbot, dataset_qa, cfg, bpe_encoder=bpe)  # optional BytePairEncoder
+ai.Train(chatbot, dataset_qa, cfg, unigram_encoder=uni)  # optional UnigramEncoder (not both)
 ai.TrainClassifier(classifier, dataset_cls, cfg)
 ai.RL(chatbot, dataset_qa, cfg, reward_amount=1.0, punishment_amount=0.5, rl_type="policy", bpe_encoder=bpe)
 ai.SPIN(chatbot, selfplay_epochs=2, dataset=dataset_qa, bpe_encoder=bpe)
@@ -206,6 +208,20 @@ ids = bpe.encode("hello world")  # merge-aware token ids (clamped to vocab_size)
 Pass `bpe_encoder=bpe` to `Train()` for BPE tokenization during QA and corpus LM training (max 32 tokens per sequence).
 
 Persist merge rules with `bpe.save("tokenizer.mmn")` and `BytePairEncoder.load("tokenizer.mmn")` (`mmn-bpe-v1` JSON). See [checkpoints.md](checkpoints.md).
+
+### UnigramEncoder
+
+```python
+uni = ai.UnigramEncoder.train(["hello world", "hello there"], vocab_size=512)
+uni = ai.UnigramEncoder.train_from_qa(dataset_qa, vocab_size=512)
+uni = ai.UnigramEncoder.train_from_corpus(dataset_corpus, vocab_size=512)
+ids = uni.encode("hello world")  # Viterbi segmentation by piece log-probs
+text = uni.decode(ids)
+```
+
+Pass `unigram_encoder=uni` to `Train()` / `RL` / `SPIN` / `compute_mean_loss` (do not pass both `bpe_encoder` and `unigram_encoder`).
+
+Persist with `uni.save("tokenizer.mmn")` and `UnigramEncoder.load("tokenizer.mmn")` (`mmn-unigram-v1` JSON).
 
 | API | Required dataset |
 |-----|------------------|

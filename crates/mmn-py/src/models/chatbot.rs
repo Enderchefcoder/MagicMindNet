@@ -1,13 +1,14 @@
 use mmn_models::Chatbot;
 use mmn_train::{
-    align_qa_token_pairs, mean_corpus_loss_with_bpe, mean_qa_loss_with_bpe, tokenize_lm,
+    align_qa_token_pairs, mean_corpus_loss_with_encoder, mean_qa_loss_with_encoder, tokenize_lm,
 };
 use mmn_models::{targets_with_vision_prefix, vision_patch_from_text, vision_rgb_patch_from_text};
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
+use crate::encoder_util::resolve_text_encoder;
 use crate::errors::{mmn_err_to_py, DataMismatchError};
-use crate::tokenizer::PyBytePairEncoder;
+use crate::tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
 
 #[pyclass(name = "Chatbot")]
 pub struct PyChatbot {
@@ -176,19 +177,20 @@ impl PyChatbot {
     }
 
     /// Mean cross-entropy for tokenized `input` → `target` (same tokenization as `Train`).
-    #[pyo3(signature = (input, target, bpe_encoder=None, image_patch=None, image_patches=None))]
+    #[pyo3(signature = (input, target, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None))]
     fn compute_loss(
         &self,
         input: &str,
         target: &str,
         bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
         image_patch: Option<Vec<f32>>,
         image_patches: Option<Vec<Vec<f32>>>,
     ) -> PyResult<f32> {
         let vocab = self.inner.shape.vocab_size;
-        let bpe = bpe_encoder.map(|e| &e.inner);
-        let mut tokens = tokenize_lm(input, vocab, bpe);
-        let mut targets = tokenize_lm(target, vocab, bpe);
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let mut tokens = tokenize_lm(input, vocab, enc);
+        let mut targets = tokenize_lm(target, vocab, enc);
         align_qa_token_pairs(&mut tokens, &mut targets);
         if self.inner.has_vision_patch_encoder() {
             let gray = self.inner.vision_patch_dim();
@@ -237,18 +239,20 @@ impl PyChatbot {
     }
 
     /// Mean CE over all rows in a `DatasetQA` or `DatasetCorpus`.
-    #[pyo3(signature = (dataset, bpe_encoder=None))]
+    #[pyo3(signature = (dataset, bpe_encoder=None, unigram_encoder=None))]
     fn compute_mean_loss(
         &self,
         dataset: &Bound<'_, PyAny>,
         bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
     ) -> PyResult<f32> {
-        let bpe = bpe_encoder.map(|e| &e.inner);
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
         if let Ok(ds) = dataset.downcast::<PyDatasetQA>() {
-            return mean_qa_loss_with_bpe(&self.inner, &ds.borrow().inner, bpe).map_err(mmn_err_to_py);
+            return mean_qa_loss_with_encoder(&self.inner, &ds.borrow().inner, enc)
+                .map_err(mmn_err_to_py);
         }
         if let Ok(ds) = dataset.downcast::<PyDatasetCorpus>() {
-            return mean_corpus_loss_with_bpe(&self.inner, &ds.borrow().inner, bpe)
+            return mean_corpus_loss_with_encoder(&self.inner, &ds.borrow().inner, enc)
                 .map_err(mmn_err_to_py);
         }
         Err(PyErr::new::<DataMismatchError, _>(
@@ -257,48 +261,58 @@ impl PyChatbot {
     }
 
     /// Autoregressive continuation from `prompt` (greedy when `temperature=0`).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, repetition_penalty=1.0, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
     fn generate(
         &self,
         prompt: &str,
         max_new_tokens: usize,
         temperature: f32,
         top_k: usize,
+        top_p: f32,
+        repetition_penalty: f32,
         bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
     ) -> PyResult<String> {
-        let bpe = bpe_encoder.map(|e| &e.inner);
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
         let cfg = mmn_train::GenerateConfig {
             max_new_tokens,
             temperature,
             top_k,
+            top_p,
+            repetition_penalty,
             stop_token_ids: stop_token_ids.unwrap_or_default(),
             stop_strings: stop_strings.unwrap_or_default(),
         };
-        mmn_train::generate_text(&self.inner, prompt, bpe, &cfg).map_err(mmn_err_to_py)
+        mmn_train::generate_text(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
 
     /// Sample new token ids after `prompt` (excludes prompt tokens).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, repetition_penalty=1.0, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
     fn generate_tokens(
         &self,
         prompt: &str,
         max_new_tokens: usize,
         temperature: f32,
         top_k: usize,
+        top_p: f32,
+        repetition_penalty: f32,
         bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
     ) -> PyResult<Vec<usize>> {
-        let bpe = bpe_encoder.map(|e| &e.inner);
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
         let cfg = mmn_train::GenerateConfig {
             max_new_tokens,
             temperature,
             top_k,
+            top_p,
+            repetition_penalty,
             stop_token_ids: stop_token_ids.unwrap_or_default(),
             stop_strings: stop_strings.unwrap_or_default(),
         };
-        mmn_train::generate_token_ids(&self.inner, prompt, bpe, &cfg).map_err(mmn_err_to_py)
+        mmn_train::generate_token_ids(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
 }

@@ -1,12 +1,16 @@
 pub mod bpe;
 pub mod chatxml;
 pub mod dataset;
+pub mod encoder;
 pub mod error;
+pub mod unigram;
 pub mod vision;
 
 pub use bpe::BytePairEncoder;
 pub use chatxml::ChatXmlConfig;
 pub use dataset::*;
+pub use encoder::TextEncoderRef;
+pub use unigram::UnigramEncoder;
 pub use vision::{
     grayscale_patch_from_rgb, parse_image_path_list, rgb_patch_from_image_bytes,
     rgb_patch_from_image_path, rgb_patches_from_image_bytes, rgb_patches_from_image_path,

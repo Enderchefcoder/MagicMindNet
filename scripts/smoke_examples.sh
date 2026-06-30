@@ -52,6 +52,9 @@ echo "== examples/benchmark_train rope =="
 echo "== examples/generate_reply =="
 "$PY" examples/generate_reply.py
 
+echo "== examples/unigram_train_generate =="
+"$PY" examples/unigram_train_generate.py
+
 echo "== examples/rl_spin =="
 "$PY" examples/rl_spin.py
 

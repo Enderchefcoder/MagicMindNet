@@ -1,5 +1,5 @@
 use mmn_core::{enable_grad, Device, Result};
-use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA, QaSample};
+use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA, QaSample, TextEncoderRef};
 use mmn_models::{
     targets_with_vision_prefix, validate_dataset_for_classifier, vision_patch_from_text,
     vision_rgb_patch_from_image_path, vision_rgb_patches_from_image_path,
@@ -44,9 +44,9 @@ pub fn simple_tokenize(text: &str, vocab_size: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Tokenize for LM training: byte fallback or BPE when `bpe` is set (max 32 tokens).
-pub fn tokenize_lm(text: &str, vocab_size: usize, bpe: Option<&BytePairEncoder>) -> Vec<usize> {
-    match bpe {
+/// Tokenize for LM training: byte fallback or trained encoder when set (max 32 tokens).
+pub fn tokenize_lm(text: &str, vocab_size: usize, encoder: Option<TextEncoderRef<'_>>) -> Vec<usize> {
+    match encoder {
         Some(enc) => {
             let mut ids = enc.encode(text);
             ids.truncate(32);
@@ -147,17 +147,17 @@ fn vision_patches_from_sample(
     Ok(vision_patches_from_input(model, &sample.input))
 }
 
-pub fn mean_qa_loss_with_bpe(
+pub fn mean_qa_loss_with_encoder(
     model: &Chatbot,
     dataset: &DatasetQA,
-    bpe: Option<&BytePairEncoder>,
+    encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<f32> {
     let vocab = model.shape.vocab_size;
     let mut total = 0.0f32;
     let mut count = 0usize;
     for sample in &dataset.samples {
-        let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
-        let mut targets = tokenize_lm(&sample.output, vocab, bpe);
+        let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
+        let mut targets = tokenize_lm(&sample.output, vocab, encoder);
         align_qa_token_pairs(&mut tokens, &mut targets);
         let patches = vision_patches_from_sample(
             model,
@@ -181,12 +181,20 @@ pub fn mean_qa_loss_with_bpe(
     })
 }
 
+pub fn mean_qa_loss_with_bpe(
+    model: &Chatbot,
+    dataset: &DatasetQA,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<f32> {
+    mean_qa_loss_with_encoder(model, dataset, bpe.map(TextEncoderRef::Bpe))
+}
+
 fn corpus_row_lm_pairs(
     text: &str,
     vocab_size: usize,
-    bpe: Option<&BytePairEncoder>,
+    encoder: Option<TextEncoderRef<'_>>,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
-    let tokens = tokenize_lm(text, vocab_size, bpe);
+    let tokens = tokenize_lm(text, vocab_size, encoder);
     if tokens.len() < 2 {
         return None;
     }
@@ -200,16 +208,16 @@ pub fn mean_corpus_loss(model: &Chatbot, dataset: &DatasetCorpus) -> Result<f32>
     mean_corpus_loss_with_bpe(model, dataset, None)
 }
 
-pub fn mean_corpus_loss_with_bpe(
+pub fn mean_corpus_loss_with_encoder(
     model: &Chatbot,
     dataset: &DatasetCorpus,
-    bpe: Option<&BytePairEncoder>,
+    encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<f32> {
     let vocab = model.shape.vocab_size;
     let mut total = 0.0f32;
     let mut count = 0usize;
     for row in &dataset.rows {
-        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, bpe) {
+        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder) {
             total += model.loss_on_batch(&tokens, &targets)?;
             count += 1;
         }
@@ -221,15 +229,23 @@ pub fn mean_corpus_loss_with_bpe(
     })
 }
 
+pub fn mean_corpus_loss_with_bpe(
+    model: &Chatbot,
+    dataset: &DatasetCorpus,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<f32> {
+    mean_corpus_loss_with_encoder(model, dataset, bpe.map(TextEncoderRef::Bpe))
+}
+
 pub fn train_corpus(model: &mut Chatbot, dataset: &DatasetCorpus, config: &TrainConfig) -> Result<()> {
     train_corpus_with_bpe(model, dataset, config, None)
 }
 
-pub fn train_corpus_with_bpe(
+pub fn train_corpus_with_encoder(
     model: &mut Chatbot,
     dataset: &DatasetCorpus,
     config: &TrainConfig,
-    bpe: Option<&BytePairEncoder>,
+    encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<()> {
     let cuda_ok = mmn_cuda::is_available();
     Device::require_cuda_available_checked(config.cuda, cuda_ok)?;
@@ -266,7 +282,7 @@ pub fn train_corpus_with_bpe(
         let mut valid_steps = 0usize;
         for (i, &idx) in indices.iter().enumerate() {
             let row = &dataset.rows[idx];
-            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, bpe) else {
+            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder) else {
                 continue;
             };
             valid_steps += 1;
@@ -319,15 +335,24 @@ pub fn train_corpus_with_bpe(
     Ok(())
 }
 
+pub fn train_corpus_with_bpe(
+    model: &mut Chatbot,
+    dataset: &DatasetCorpus,
+    config: &TrainConfig,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
+    train_corpus_with_encoder(model, dataset, config, bpe.map(TextEncoderRef::Bpe))
+}
+
 pub fn train(model: &mut Chatbot, dataset: &DatasetQA, config: &TrainConfig) -> Result<()> {
     train_with_bpe(model, dataset, config, None)
 }
 
-pub fn train_with_bpe(
+pub fn train_with_encoder(
     model: &mut Chatbot,
     dataset: &DatasetQA,
     config: &TrainConfig,
-    bpe: Option<&BytePairEncoder>,
+    encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<()> {
     let cuda_ok = mmn_cuda::is_available();
     Device::require_cuda_available_checked(config.cuda, cuda_ok)?;
@@ -363,8 +388,8 @@ pub fn train_with_bpe(
         let mut micro = 0usize;
         for (i, &idx) in indices.iter().enumerate() {
             let sample = &dataset.samples[idx];
-            let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
-            let mut targets = tokenize_lm(&sample.output, vocab, bpe);
+            let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
+            let mut targets = tokenize_lm(&sample.output, vocab, encoder);
             align_qa_token_pairs(&mut tokens, &mut targets);
             let patch_list = vision_patches_from_sample(
                 model,
@@ -417,6 +442,15 @@ pub fn train_with_bpe(
     }
     enable_grad(false);
     Ok(())
+}
+
+pub fn train_with_bpe(
+    model: &mut Chatbot,
+    dataset: &DatasetQA,
+    config: &TrainConfig,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
+    train_with_encoder(model, dataset, config, bpe.map(TextEncoderRef::Bpe))
 }
 
 pub fn train_classifier(
@@ -503,22 +537,22 @@ pub fn rl(
     )
 }
 
-pub fn rl_with_bpe(
+pub fn rl_with_encoder(
     model: &mut Chatbot,
     dataset: &DatasetQA,
     config: &TrainConfig,
     reward_amount: f32,
     punishment_amount: f32,
     rl_type: &str,
-    bpe: Option<&BytePairEncoder>,
+    encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<()> {
     Device::require_cuda_available_checked(config.cuda, mmn_cuda::is_available())?;
     let policy = rl_type.to_lowercase();
     enable_grad(true);
     let vocab = model.shape.vocab_size;
     for sample in &dataset.samples {
-        let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
-        let mut targets = tokenize_lm(&sample.output, vocab, bpe);
+        let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
+        let mut targets = tokenize_lm(&sample.output, vocab, encoder);
         align_qa_token_pairs(&mut tokens, &mut targets);
         let logits = model.forward_logits(&tokens)?;
         let score = if sample.output.contains(' ') {
@@ -561,6 +595,26 @@ pub fn rl_with_bpe(
     Ok(())
 }
 
+pub fn rl_with_bpe(
+    model: &mut Chatbot,
+    dataset: &DatasetQA,
+    config: &TrainConfig,
+    reward_amount: f32,
+    punishment_amount: f32,
+    rl_type: &str,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
+    rl_with_encoder(
+        model,
+        dataset,
+        config,
+        reward_amount,
+        punishment_amount,
+        rl_type,
+        bpe.map(TextEncoderRef::Bpe),
+    )
+}
+
 pub fn spin(
     model: &mut Chatbot,
     selfplay_epochs: usize,
@@ -569,11 +623,11 @@ pub fn spin(
     spin_with_bpe(model, selfplay_epochs, dataset, None)
 }
 
-pub fn spin_with_bpe(
+pub fn spin_with_encoder(
     model: &mut Chatbot,
     selfplay_epochs: usize,
     dataset: &DatasetQA,
-    bpe: Option<&BytePairEncoder>,
+    encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<()> {
     for _ in 0..selfplay_epochs {
         let cfg = TrainConfig {
@@ -581,10 +635,19 @@ pub fn spin_with_bpe(
             batch_size: 4,
             ..Default::default()
         };
-        train_with_bpe(model, dataset, &cfg, bpe)?;
-        rl_with_bpe(model, dataset, &cfg, 1.0, 0.5, "selfplay", bpe)?;
+        train_with_encoder(model, dataset, &cfg, encoder)?;
+        rl_with_encoder(model, dataset, &cfg, 1.0, 0.5, "selfplay", encoder)?;
     }
     Ok(())
+}
+
+pub fn spin_with_bpe(
+    model: &mut Chatbot,
+    selfplay_epochs: usize,
+    dataset: &DatasetQA,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
+    spin_with_encoder(model, selfplay_epochs, dataset, bpe.map(TextEncoderRef::Bpe))
 }
 
 #[cfg(test)]
@@ -1259,6 +1322,37 @@ mod tests {
         let loss_before = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
         train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
         let loss_after = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
+        assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
+    }
+
+    #[test]
+    fn train_with_unigram_reduces_loss() {
+        use mmn_data::UnigramEncoder;
+        let ds = toy_dataset();
+        let mut texts: Vec<String> = ds
+            .samples
+            .iter()
+            .flat_map(|s| vec![s.input.clone(), s.output.clone()])
+            .collect();
+        texts.extend(std::iter::repeat("hello hello hello world".to_string()).take(24));
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let uni = UnigramEncoder::train(&refs, 512);
+        assert!(uni.piece_count() > 256);
+
+        let mut model = Chatbot::new_with_pe_options(
+            false, None, 512, Some(1), Some(32), Some(15), false, 64,
+        );
+        let cfg = TrainConfig {
+            epochs: 4,
+            batch_size: 1,
+            learning_rate: 0.05,
+            optimizer: "adamw".into(),
+            ..Default::default()
+        };
+        let enc = TextEncoderRef::Unigram(&uni);
+        let loss_before = mean_qa_loss_with_encoder(&model, &ds, Some(enc)).unwrap();
+        train_with_encoder(&mut model, &ds, &cfg, Some(enc)).unwrap();
+        let loss_after = mean_qa_loss_with_encoder(&model, &ds, Some(enc)).unwrap();
         assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
     }
 

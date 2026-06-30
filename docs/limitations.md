@@ -4,7 +4,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 
 ## Training
 
-- Tokenization defaults to byte-level (`bytes % vocab_size`). Opt-in **BPE**: train `ai.BytePairEncoder` on QA/corpus text and pass `bpe_encoder=` to `Train()` (`crates/mmn-data/src/bpe.rs`, `tests/test_bpe_tokenizer_py.py`).
+- Tokenization defaults to byte-level (`bytes % vocab_size`). Opt-in **BPE** or **unigram** (`UnigramEncoder`): train on QA/corpus text and pass `bpe_encoder=` or `unigram_encoder=` to `Train()` (`crates/mmn-data/src/bpe.rs`, `unigram.rs`, `tests/test_bpe_tokenizer_py.py`, `tests/test_unigram_tokenizer_py.py`).
 - Token embeddings use **sinusoidal position encoding** by default (runtime, not checkpointed). Opt-in **learned `pos_embed`** or **RoPE** (`use_rope=True`) — see [position_encoding_coverage.md](position_encoding_coverage.md).
 - Each `TransformerBlock` uses **two residuals**: `x2 = x + attn(ln1(x))` and `out = x2 + ffn(ln2(x2))` (pass 83). Backward routes skip grads through both adds.
 - `TrainClassifier` updates backbone + head with CE; byte features are not a production text encoder.
@@ -41,7 +41,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 |-----|--------------|--------------|
 | Scaled dot-product attention backward | [attention_coverage.md](attention_coverage.md) | ~~done pass 81~~ |
 | LayerNorm γ/β training | [layernorm_coverage.md](layernorm_coverage.md) | ~~done pass 82~~ |
-| Production tokenizer | this doc § Training | ~~BPE trainer + Python binding + Train(bpe_encoder=) + `mmn-bpe-v1` save/load~~; SentencePiece-scale vocab next |
+| Production tokenizer | this doc § Training | ~~BPE trainer~~; **UnigramEncoder** (`mmn-unigram-v1`) + Viterbi; SentencePiece-scale vocab next |
 | Vision encoder | [vision_coverage.md](vision_coverage.md) | ~~DatasetQA image file loading~~; multi-patch tiles done |
 | HF binary safetensors | this doc § IO | ~~Chatbot + Classifier export/import~~; ~~native GQA forward~~ done |
 
