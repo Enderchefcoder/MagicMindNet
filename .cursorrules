@@ -160,3 +160,4 @@
 [X] DatasetQA disk image paths — PNG/JPEG load to RGB patches, train/mean-loss, Python API; 236 Rust / 522 pytest, verify_gate
 [X] Multi-patch vision cross-attn — tiled images, multi-path QA, image_patches API; 240 Rust / 526 pytest, verify_gate
 [X] HF binary safetensors — export/import hf-safetensors, auto-detect in import_safetensors, Llama name aliases; 243 Rust / 529 pytest, verify_gate
+[X] External HF adapters — fused QKV split, SwiGLU gate×up, ffn_dim meta, RMSNorm defaults; 248 Rust / 530 pytest, verify_gate

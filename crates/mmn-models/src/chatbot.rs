@@ -321,6 +321,34 @@ impl Chatbot {
         use_rope: bool,
         rope_theta: f32,
     ) -> Self {
+        Self::new_with_position_and_ffn(
+            vision,
+            autoset_budget,
+            vocab_size,
+            n_layer,
+            d_model,
+            None,
+            seed,
+            use_learned_pos_embed,
+            max_seq_len,
+            use_rope,
+            rope_theta,
+        )
+    }
+
+    pub fn new_with_position_and_ffn(
+        vision: bool,
+        autoset_budget: Option<&str>,
+        vocab_size: usize,
+        n_layer: Option<usize>,
+        d_model: Option<usize>,
+        ffn_dim: Option<usize>,
+        seed: Option<u64>,
+        use_learned_pos_embed: bool,
+        max_seq_len: usize,
+        use_rope: bool,
+        rope_theta: f32,
+    ) -> Self {
         if use_learned_pos_embed && use_rope {
             panic!("Chatbot cannot use both use_learned_pos_embed and use_rope");
         }
@@ -328,11 +356,12 @@ impl Chatbot {
         let shape = if let Some(b) = autoset_budget {
             autoset(b, vocab_size)
         } else {
+            let dm = d_model.unwrap_or(128);
             ModelShape {
                 n_layer: n_layer.unwrap_or(4),
-                d_model: d_model.unwrap_or(128),
+                d_model: dm,
                 n_heads: 4,
-                ffn_dim: d_model.unwrap_or(128) * 4,
+                ffn_dim: ffn_dim.unwrap_or(dm * 4),
                 vocab_size,
                 estimated_params: 0,
             }

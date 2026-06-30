@@ -48,6 +48,11 @@
 - Header metadata `format: mmn-hf-safetensors-v1` + JSON `meta`; Llama/GPT-style tensor name aliases on import
 - Rust `hf_safetensors` module; pytest `test_hf_safetensors_py.py`; `examples/hf_safetensors_roundtrip.py`
 
+### Added (external HF weight layout adapters on import)
+- Split fused GPT-2 `c_attn` / `qkv_proj` into separate Q/K/V with Conv1d→Linear transpose
+- Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
+- Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
+
 ### Added (DatasetQA disk image paths for vision training)
 - Optional `image` JSON column (`image_row` config); resolves relative paths against the QA manifest directory
 - `vision_rgb_patch_from_image_path` resizes PNG/JPEG to 8×8×3 NCHW; grayscale fallback for legacy patch-only models

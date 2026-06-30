@@ -2,6 +2,7 @@ mod block_tensors;
 mod chatbot_io;
 mod checkpoint_util;
 mod classifier_io;
+mod hf_adapt;
 mod hf_safetensors;
 mod tensor_merge;
 

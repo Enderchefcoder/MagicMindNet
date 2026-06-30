@@ -43,6 +43,6 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 | LayerNorm γ/β training | [layernorm_coverage.md](layernorm_coverage.md) | ~~done pass 82~~ |
 | Production tokenizer | this doc § Training | ~~BPE trainer + Python binding + Train(bpe_encoder=) + `mmn-bpe-v1` save/load~~; SentencePiece-scale vocab next |
 | Vision encoder | [vision_coverage.md](vision_coverage.md) | ~~DatasetQA image file loading~~; multi-patch tiles done |
-| HF binary safetensors | this doc § IO | ~~Chatbot export/import + auto-detect~~; external HF model import (SwiGLU/fused QKV) next |
+| HF binary safetensors | this doc § IO | ~~Chatbot export/import + auto-detect~~; ~~SwiGLU/fused QKV adapters~~; GQA / dtype conversion next |
 
 See also [optimizers_coverage.md](optimizers_coverage.md) (Muon matrix routing) and [training_coverage.md](training_coverage.md).

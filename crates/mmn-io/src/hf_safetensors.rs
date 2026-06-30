@@ -1,5 +1,6 @@
 //! Hugging Face binary safetensors interchange (`safetensors` crate on disk).
 
+use crate::hf_adapt::{adapt_external_hf_tensors, fill_missing_block_layernorm_defaults};
 use crate::block_tensors::import_block_tensors;
 use crate::checkpoint_util::{
     expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry,
@@ -51,6 +52,7 @@ fn chatbot_meta_json(model: &Chatbot, bpe_checkpoint: Option<&str>) -> serde_jso
         "vocab_size": model.shape.vocab_size,
         "n_layer": model.shape.n_layer,
         "d_model": model.shape.d_model,
+        "ffn_dim": model.shape.ffn_dim,
         "vision": model.vision,
     });
     if model.vision {
@@ -187,8 +189,10 @@ fn parse_hf_layer_tensor(name: &str) -> Option<String> {
         "self_attn.k_proj.weight" => "attn.k",
         "self_attn.v_proj.weight" => "attn.v",
         "self_attn.o_proj.weight" | "self_attn.out_proj.weight" => "attn.out",
+        "attn.c_attn.weight" | "self_attn.qkv_proj.weight" => "attn.qkv",
         "attn.c_proj.weight" => "attn.out",
         "mlp.gate_proj.weight" | "mlp.fc1.weight" | "mlp.c_fc.weight" => "ffn",
+        "mlp.up_proj.weight" => "ffn.up",
         "mlp.down_proj.weight" | "mlp.fc2.weight" | "mlp.c_proj.weight" => "ffn2",
         "input_layernorm.weight" | "ln_1.weight" => "ln1.gamma",
         "input_layernorm.bias" | "ln_1.bias" => "ln1.beta",
@@ -208,7 +212,7 @@ fn tensors_to_json_map(tensors: &HashMap<String, Tensor>) -> serde_json::Value {
 }
 
 fn load_chatbot_from_mmn_tensors(
-    tensors: HashMap<String, Tensor>,
+    mut tensors: HashMap<String, Tensor>,
     meta: &serde_json::Value,
 ) -> Result<Chatbot, MmnError> {
     let vocab_size = meta["vocab_size"].as_u64().ok_or_else(|| MmnError::Other {
@@ -220,6 +224,10 @@ fn load_chatbot_from_mmn_tensors(
     let d_model = meta["d_model"].as_u64().ok_or_else(|| MmnError::Other {
         message: "checkpoint meta missing d_model".into(),
     })? as usize;
+    let ffn_dim = meta["ffn_dim"]
+        .as_u64()
+        .map(|v| v as usize)
+        .unwrap_or(d_model * 4);
     let vision = meta["vision"].as_bool().unwrap_or(false);
     let init_seed = meta["seed"].as_u64();
     let use_learned_pos_embed = meta["use_learned_pos_embed"].as_bool().unwrap_or(false);
@@ -231,13 +239,15 @@ fn load_chatbot_from_mmn_tensors(
         .as_u64()
         .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize;
 
+    fill_missing_block_layernorm_defaults(&mut tensors, n_layer, d_model);
     let json_tensors = tensors_to_json_map(&tensors);
-    let mut model = Chatbot::new_with_position_options(
+    let mut model = Chatbot::new_with_position_and_ffn(
         vision,
         None,
         vocab_size,
         Some(n_layer),
         Some(d_model),
+        Some(ffn_dim),
         init_seed,
         use_learned_pos_embed,
         max_seq_len,
@@ -310,7 +320,7 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
     let (_header_len, header_meta) = SafeTensors::read_metadata(bytes).map_err(hf_err)?;
     let st = SafeTensors::deserialize(bytes).map_err(hf_err)?;
     let file_meta = header_meta.metadata();
-    let meta = file_meta
+    let mut meta = file_meta
         .as_ref()
         .and_then(|m| m.get("meta"))
         .map(|meta_str| {
@@ -337,6 +347,7 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
             mmn_tensors.insert(mmn_key, t);
         }
     }
+    adapt_external_hf_tensors(&mut mmn_tensors, &mut meta)?;
     if meta.get("vocab_size").is_none() {
         let embed = mmn_tensors.get("embed").ok_or_else(|| MmnError::Other {
             message: "HF safetensors missing embed / model.embed_tokens.weight".into(),
@@ -352,6 +363,9 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
             "d_model": shape[1],
             "n_layer": count_block_layers(&mmn_tensors),
             "vision": mmn_tensors.contains_key("vision_patch_proj"),
+            "ffn_dim": mmn_tensors.get("blocks.0.ffn").and_then(|t| {
+                t.data.shape().first().copied()
+            }),
         });
         return load_chatbot_from_mmn_tensors(mmn_tensors, &inferred);
     }
@@ -399,6 +413,121 @@ mod tests {
             model.embed.weight.data[[0, 0]],
             loaded.embed.weight.data[[0, 0]]
         );
+    }
+
+    #[test]
+    fn import_external_llama_swiglu_checkpoint() {
+        let d_model = 8usize;
+        let ffn_dim = 16usize;
+        let vocab = 32usize;
+        let mut storages: Vec<(String, Vec<usize>, Vec<f32>)> = Vec::new();
+        let mut push = |name: &str, shape: &[usize], fill: f32| {
+            let n: usize = shape.iter().product();
+            storages.push((name.to_string(), shape.to_vec(), vec![fill; n]));
+        };
+        push("model.embed_tokens.weight", &[vocab, d_model], 0.1);
+        push("model.layers.0.self_attn.q_proj.weight", &[d_model, d_model], 0.2);
+        push("model.layers.0.self_attn.k_proj.weight", &[d_model, d_model], 0.3);
+        push("model.layers.0.self_attn.v_proj.weight", &[d_model, d_model], 0.4);
+        push("model.layers.0.self_attn.o_proj.weight", &[d_model, d_model], 0.5);
+        push("model.layers.0.mlp.gate_proj.weight", &[ffn_dim, d_model], 2.0);
+        push("model.layers.0.mlp.up_proj.weight", &[ffn_dim, d_model], 3.0);
+        push("model.layers.0.mlp.down_proj.weight", &[d_model, ffn_dim], 0.6);
+        push("model.layers.0.input_layernorm.weight", &[d_model], 1.0);
+        push("model.layers.0.post_attention_layernorm.weight", &[d_model], 1.0);
+        let mut byte_storages: Vec<(String, Vec<usize>, Vec<u8>)> = Vec::new();
+        for (name, shape, data) in storages {
+            let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
+            byte_storages.push((name, shape, bytes));
+        }
+        let mut views: HashMap<String, TensorView<'_>> = HashMap::new();
+        for (name, shape, bytes) in &byte_storages {
+            views.insert(
+                name.clone(),
+                TensorView::new(Dtype::F32, shape.clone(), bytes).unwrap(),
+            );
+        }
+        let meta = serde_json::json!({
+            "vocab_size": vocab,
+            "n_layer": 1,
+            "d_model": d_model,
+            "ffn_dim": ffn_dim,
+            "vision": false,
+        });
+        let mut metadata = HashMap::new();
+        metadata.insert("format".to_string(), HF_FORMAT.to_string());
+        metadata.insert("meta".to_string(), meta.to_string());
+        let bytes = serialize(views, Some(metadata)).unwrap();
+        let loaded = import_hf_safetensors_bytes(&bytes).unwrap();
+        assert_eq!(loaded.shape.ffn_dim, ffn_dim);
+        assert_eq!(loaded.blocks[0].ffn.weight.data[[0, 0]], 6.0);
+        assert_eq!(loaded.embed.weight.data[[0, 0]], 0.1);
+    }
+
+    #[test]
+    fn import_external_gpt2_fused_qkv() {
+        let d_model = 4usize;
+        let ffn_dim = d_model * 4;
+        let vocab = 16usize;
+        let fused: Vec<f32> = (0..48).map(|i| i as f32 * 0.01).collect();
+        let mut byte_storages: Vec<(String, Vec<usize>, Vec<u8>)> = Vec::new();
+        let push_f32 = |storages: &mut Vec<(String, Vec<usize>, Vec<u8>)>, name: &str, shape: &[usize], data: &[f32]| {
+            let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
+            storages.push((name.to_string(), shape.to_vec(), bytes));
+        };
+        let push_fill =
+            |storages: &mut Vec<(String, Vec<usize>, Vec<u8>)>, name: &str, shape: &[usize], val: f32| {
+                let n: usize = shape.iter().product();
+                push_f32(storages, name, shape, &vec![val; n]);
+            };
+        push_f32(
+            &mut byte_storages,
+            "transformer.h.0.attn.c_attn.weight",
+            &[d_model, d_model * 3],
+            &fused,
+        );
+        push_fill(&mut byte_storages, "transformer.wte.weight", &[vocab, d_model], 0.5);
+        push_fill(
+            &mut byte_storages,
+            "transformer.h.0.attn.c_proj.weight",
+            &[d_model, d_model],
+            0.11,
+        );
+        push_fill(
+            &mut byte_storages,
+            "transformer.h.0.mlp.c_fc.weight",
+            &[ffn_dim, d_model],
+            0.12,
+        );
+        push_fill(
+            &mut byte_storages,
+            "transformer.h.0.mlp.c_proj.weight",
+            &[d_model, ffn_dim],
+            0.14,
+        );
+        push_fill(&mut byte_storages, "transformer.h.0.ln_1.weight", &[d_model], 1.0);
+        push_fill(&mut byte_storages, "transformer.h.0.ln_2.weight", &[d_model], 1.0);
+        let mut views: HashMap<String, TensorView<'_>> = HashMap::new();
+        for (name, shape, bytes) in &byte_storages {
+            views.insert(
+                name.clone(),
+                TensorView::new(Dtype::F32, shape.clone(), bytes).unwrap(),
+            );
+        }
+        let meta = serde_json::json!({
+            "vocab_size": vocab,
+            "n_layer": 1,
+            "d_model": d_model,
+            "ffn_dim": ffn_dim,
+            "vision": false,
+        });
+        let mut metadata = HashMap::new();
+        metadata.insert("meta".to_string(), meta.to_string());
+        let bytes = serialize(views, Some(metadata)).unwrap();
+        let loaded = import_hf_safetensors_bytes(&bytes).unwrap();
+        assert_eq!(loaded.blocks[0].attn.q_proj.weight.data[[0, 0]], 0.0);
+        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[0, 0]], 0.04);
+        assert_eq!(loaded.blocks[0].ffn.weight.data[[0, 0]], 0.12);
     }
 
     #[test]

@@ -24,7 +24,12 @@ bot2 = ai.import_model("hf-safetensors", ["model.safetensors"])
 # or: ai.import_model("safetensors", ["model.safetensors"])  # auto-detect
 ```
 
-Header `__metadata__` includes `format: mmn-hf-safetensors-v1` and a JSON `meta` string (`vocab_size`, `n_layer`, `d_model`, vision flags, etc.). Import also accepts common HF tensor name aliases (`model.layers.N.self_attn.q_proj.weight`, `transformer.wte.weight`, …) when loading external checkpoints without MMN keys.
+Header `__metadata__` includes `format: mmn-hf-safetensors-v1` and a JSON `meta` string (`vocab_size`, `n_layer`, `d_model`, optional `ffn_dim`, vision flags, etc.). Import also accepts common HF tensor name aliases (`model.layers.N.self_attn.q_proj.weight`, `transformer.wte.weight`, …) and adapts external layouts:
+
+- **GPT-2 fused QKV** (`attn.c_attn`) → split/transpose into `blocks.N.attn.{q,k,v}`
+- **Llama SwiGLU** (`mlp.gate_proj` + `mlp.up_proj`) → element-wise product into `blocks.N.ffn`; `mlp.down_proj` → `ffn2`
+- **Tied embeddings** — missing `lm_head` copies `embed`
+- **RMSNorm-only** checkpoints — missing LayerNorm β defaults to 0, γ to 1
 
 ### Chatbot — `mmn-bin-v1` (architecture stub only)
 
