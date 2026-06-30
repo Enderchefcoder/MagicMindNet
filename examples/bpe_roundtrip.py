@@ -34,7 +34,7 @@ def main() -> None:
         )
         loss1 = bot.compute_mean_loss(ds, bpe_encoder=loaded)
         print(f"trained with BPE: loss {loss0:.4f} -> {loss1:.4f}")
-        ckpt = OUT.with_name("bot_with_bpe.mmn")
+        ckpt = OUT.with_name("_roundtrip_bot_with_bpe.mmn")
         ai.export(bot, "safetensors", str(ckpt), bpe_encoder=loaded)
         sidecar = ai.load_bpe_sidecar(ckpt)
         assert sidecar is not None
