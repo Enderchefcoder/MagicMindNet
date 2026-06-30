@@ -1,0 +1,15 @@
+[package]
+name = "mmn-resource"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mmn-core.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_System_SystemInformation"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

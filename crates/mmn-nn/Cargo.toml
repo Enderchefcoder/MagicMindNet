@@ -1,0 +1,11 @@
+[package]
+name = "mmn-nn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mmn-core.workspace = true
+mmn-ops.workspace = true
+ndarray.workspace = true
+rand.workspace = true
