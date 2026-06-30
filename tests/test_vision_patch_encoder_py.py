@@ -14,6 +14,7 @@ def test_vision_chatbot_has_patch_encoder():
     assert bot.has_vision is True
     assert bot.has_vision_patch_encoder is True
     assert bot.has_vision_rgb_conv is True
+    assert bot.has_vision_cross_attn is True
     assert bot.vision_patch_dim == ai.VISION_PATCH_DIM == 64
     assert bot.vision_rgb_dim == ai.VISION_RGB_DIM == 192
 
@@ -33,6 +34,25 @@ def test_vision_rgb_default_patch_from_input():
     rgb = ai.vision_rgb_patch_from_text("photo prompt")
     loss_explicit = bot.compute_loss("photo prompt", "caption", image_patch=rgb)
     assert loss_auto == pytest.approx(loss_explicit)
+
+
+def test_vision_cross_attn_trains(tmp_path: Path):
+    ds = ai.DatasetQA(
+        file=str(FIXTURES / "qa_valid.json"),
+        user_row="input",
+        ai_row="output",
+    )
+    bot = ai.Chatbot(vocab_size=256, n_layer=2, d_model=32, vision=True, seed=7)
+    assert bot.has_vision_cross_attn is True
+    loss_before = bot.compute_mean_loss(ds)
+    ai.Train(bot, ds, ai.TrainConfig(epochs=2, batch_size=1, learning_rate=0.05))
+    loss_after = bot.compute_mean_loss(ds)
+    assert loss_after < loss_before
+    path = tmp_path / "vision_cross.mmn"
+    ai.export(bot, "safetensors", str(path))
+    loaded = ai.import_model("safetensors", [str(path)])
+    assert loaded.has_vision_cross_attn is True
+    assert loaded.compute_mean_loss(ds) == pytest.approx(bot.compute_mean_loss(ds))
 
 
 def test_vision_patch_changes_compute_loss():

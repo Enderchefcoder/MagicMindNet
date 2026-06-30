@@ -85,6 +85,11 @@ impl PyChatbot {
     }
 
     #[getter]
+    fn has_vision_cross_attn(&self) -> bool {
+        self.inner.has_vision_cross_attn()
+    }
+
+    #[getter]
     fn vision_rgb_dim(&self) -> usize {
         self.inner.vision_rgb_dim()
     }

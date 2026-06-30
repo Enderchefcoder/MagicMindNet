@@ -19,6 +19,7 @@ with tempfile.TemporaryDirectory() as tmp:
     print("has_vision:", bot.has_vision)
     print("has_vision_patch_encoder:", bot.has_vision_patch_encoder)
     print("has_vision_rgb_conv:", bot.has_vision_rgb_conv)
+    print("has_vision_cross_attn:", bot.has_vision_cross_attn)
     print("vision_patch_dim:", bot.vision_patch_dim)
     print("vision_rgb_dim:", bot.vision_rgb_dim)
     patch = ai.vision_rgb_patch_from_text("demo image surrogate")

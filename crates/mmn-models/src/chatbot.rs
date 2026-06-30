@@ -1,7 +1,11 @@
 use crate::autoset::{autoset, ModelShape};
 use mmn_core::{cross_entropy_grad, embedding_backward, linear_backward, Device, Result, Tensor};
 use mmn_data::DatasetType;
-use mmn_nn::{gelu, gelu_backward, BlockForwardCache, Conv2d, Embedding, Linear, TransformerBlock};
+use mmn_nn::{
+    gelu, gelu_backward, vision_cross_attn_residual, vision_cross_attn_residual_backward,
+    BlockForwardCache, Conv2d, CrossAttention, CrossAttentionForwardCache, Embedding, Linear,
+    TransformerBlock,
+};
 use ndarray::ArrayD;
 use std::collections::HashMap;
 
@@ -66,6 +70,8 @@ pub struct Chatbot {
     pub vision_patch_proj: Option<Linear>,
     /// RGB conv patch encoder (`vision=true`): `3×8×8 → 1×8×8` before linear proj.
     pub vision_patch_conv: Option<Conv2d>,
+    /// Text→image cross-attention after block 0 when vision patches are present.
+    pub vision_cross_attn: Option<CrossAttention>,
     pub device: Device,
     /// RNG seed used at construction (`None` = non-deterministic init).
     pub init_seed: Option<u64>,
@@ -193,6 +199,48 @@ fn optim_step_weight(
     *weight = Tensor::from_array(w, true);
 }
 
+fn apply_cross_attn_lm_grads(
+    cross: &mut CrossAttention,
+    grads: &[ArrayD<f32>; 4],
+    hybrid: &mut Option<&mut mmn_optim::HybridOptimizer>,
+    adamw: &mut mmn_optim::AdamW,
+    use_hybrid: bool,
+    param_id: &mut usize,
+) {
+    optim_step_weight(
+        hybrid,
+        adamw,
+        use_hybrid,
+        param_id,
+        &mut cross.out_proj.weight,
+        &grads[0],
+    );
+    optim_step_weight(
+        hybrid,
+        adamw,
+        use_hybrid,
+        param_id,
+        &mut cross.q_proj.weight,
+        &grads[1],
+    );
+    optim_step_weight(
+        hybrid,
+        adamw,
+        use_hybrid,
+        param_id,
+        &mut cross.k_proj.weight,
+        &grads[2],
+    );
+    optim_step_weight(
+        hybrid,
+        adamw,
+        use_hybrid,
+        param_id,
+        &mut cross.v_proj.weight,
+        &grads[3],
+    );
+}
+
 impl Chatbot {
     pub fn new(
         vision: bool,
@@ -306,6 +354,15 @@ impl Chatbot {
         } else {
             None
         };
+        let vision_cross_attn = if vision {
+            Some(CrossAttention::new_rng(
+                shape.d_model,
+                shape.n_heads,
+                &mut rng,
+            ))
+        } else {
+            None
+        };
         Self {
             embed: Embedding::new_rng(shape.vocab_size, shape.d_model, &mut rng),
             blocks,
@@ -315,6 +372,7 @@ impl Chatbot {
             vision,
             vision_patch_proj,
             vision_patch_conv,
+            vision_cross_attn,
             device: Device::Cpu,
             init_seed: seed,
             use_learned_pos_embed,
@@ -373,6 +431,11 @@ impl Chatbot {
                 .vision_patch_conv
                 .as_ref()
                 .map(|c| c.out_ch * c.in_ch * c.kernel * c.kernel)
+                .unwrap_or(0)
+            + self
+                .vision_cross_attn
+                .as_ref()
+                .map(|c| 4 * c.d_model * c.d_model)
                 .unwrap_or(0);
         base + pe + vision
     }
@@ -391,6 +454,10 @@ impl Chatbot {
 
     pub fn has_vision_rgb_conv(&self) -> bool {
         self.vision_patch_conv.is_some()
+    }
+
+    pub fn has_vision_cross_attn(&self) -> bool {
+        self.vision_cross_attn.is_some()
     }
 
     pub fn layer_size(&self) -> usize {
@@ -550,10 +617,21 @@ impl Chatbot {
         token_ids: &[usize],
         patches: Option<&[Vec<f32>]>,
     ) -> Result<Tensor> {
-        let (mut h, _, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
+        let (mut h, n_patch, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
         h = self.apply_position_encoding(h)?;
-        for block in &self.blocks {
+        for (i, block) in self.blocks.iter().enumerate() {
             h = block.forward(&h)?;
+            if i == 0
+                && n_patch > 0
+                && self.vision_cross_attn.is_some()
+            {
+                h = vision_cross_attn_residual(
+                    self.vision_cross_attn.as_ref().unwrap(),
+                    &h,
+                    n_patch,
+                )?
+                .0;
+            }
         }
         Ok(h)
     }
@@ -638,7 +716,27 @@ impl Chatbot {
         );
         i += 1;
 
-        for block in self.blocks.iter_mut().rev() {
+        let n_blocks = self.blocks.len();
+        for (rev_pos, block) in self.blocks.iter_mut().rev().enumerate() {
+            if rev_pos == n_blocks - 1 {
+                if let Some(cross) = self.vision_cross_attn.as_mut() {
+                    let cg = [
+                        accum.averaged_grad(i),
+                        accum.averaged_grad(i + 1),
+                        accum.averaged_grad(i + 2),
+                        accum.averaged_grad(i + 3),
+                    ];
+                    apply_cross_attn_lm_grads(
+                        cross,
+                        &cg,
+                        &mut hybrid_opt,
+                        adamw,
+                        use_hybrid,
+                        param_id_base,
+                    );
+                    i += 4;
+                }
+            }
             let g = [
                 accum.averaged_grad(i),
                 accum.averaged_grad(i + 1),
@@ -746,7 +844,27 @@ impl Chatbot {
             &grads[i],
         );
         i += 1;
-        for block in self.blocks.iter_mut().rev() {
+        let n_blocks = self.blocks.len();
+        for (rev_pos, block) in self.blocks.iter_mut().rev().enumerate() {
+            if rev_pos == n_blocks - 1 {
+                if let Some(cross) = self.vision_cross_attn.as_mut() {
+                    let cg = [
+                        grads[i].clone(),
+                        grads[i + 1].clone(),
+                        grads[i + 2].clone(),
+                        grads[i + 3].clone(),
+                    ];
+                    apply_cross_attn_lm_grads(
+                        cross,
+                        &cg,
+                        &mut hybrid_opt,
+                        adamw,
+                        use_hybrid,
+                        param_id_base,
+                    );
+                    i += 4;
+                }
+            }
             let g = [
                 grads[i].clone(),
                 grads[i + 1].clone(),
@@ -824,10 +942,23 @@ impl Chatbot {
         h = self.apply_position_encoding(h)?;
         let seq = token_ids.len();
         let mut caches = Vec::with_capacity(self.blocks.len());
-        for block in &self.blocks {
+        let mut cross_cache: Option<CrossAttentionForwardCache> = None;
+        for (i, block) in self.blocks.iter().enumerate() {
             let (out, cache) = block.forward_with_cache(&h)?;
             caches.push(BlockFfnCache { block: cache });
             h = out;
+            if i == 0
+                && n_patch > 0
+                && self.vision_cross_attn.is_some()
+            {
+                let (h_new, xc) = vision_cross_attn_residual(
+                    self.vision_cross_attn.as_ref().unwrap(),
+                    &h,
+                    n_patch,
+                )?;
+                h = h_new;
+                cross_cache = Some(xc);
+            }
         }
 
         let logits = self.lm_head.forward(&h)?;
@@ -842,9 +973,40 @@ impl Chatbot {
         )?;
         let mut grads = vec![grad_lm_w];
 
-        for (block, cache) in self.blocks.iter().zip(caches.iter()).rev() {
+        let n_blocks = self.blocks.len();
+        for bi in (0..n_blocks).rev() {
+            let block = &self.blocks[bi];
+            let cache = &caches[bi];
+            let mut cross_grads: Option<[ArrayD<f32>; 4]> = None;
+            if bi == 0 {
+                if let (Some(cross), Some(xc)) =
+                    (self.vision_cross_attn.as_ref(), cross_cache.as_ref())
+                {
+                    if n_patch > 0 {
+                        let (grad_h_new, cg) = vision_cross_attn_residual_backward(
+                            cross,
+                            xc,
+                            &grad_h,
+                            n_patch,
+                        )?;
+                        grad_h = grad_h_new;
+                        cross_grads = Some(cg);
+                    }
+                }
+            }
             let (grad_h_block, block_grads) =
                 block.backward_attn_ffn(&cache.block, &grad_h)?;
+            if bi == 0 && self.vision_cross_attn.is_some() {
+                let cg = cross_grads.unwrap_or_else(|| {
+                    let z = ArrayD::zeros(
+                        self.vision_cross_attn.as_ref().unwrap().out_proj.weight.data.shape(),
+                    );
+                    [z.clone(), z.clone(), z.clone(), z]
+                });
+                for g in cg {
+                    grads.push(g);
+                }
+            }
             for g in block_grads {
                 grads.push(g);
             }
@@ -1411,6 +1573,62 @@ mod chatbot_tests {
             )
             .unwrap();
         let w_after = model.vision_patch_conv.as_ref().unwrap().weight.data[[0, 0, 0, 0]];
+        assert_ne!(w_before, w_after);
+    }
+
+    #[test]
+    fn vision_cross_attn_changes_loss_with_patch() {
+        let model = Chatbot::new(true, None, 256, Some(2), Some(32));
+        assert!(model.has_vision_cross_attn());
+        let tokens = vec![10, 20, 30];
+        let padded = targets_with_vision_prefix(&[20, 30, 40], 1, 256);
+        let patch = vision_rgb_patch_from_text("scene");
+        let loss_with = model
+            .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch.clone()]))
+            .unwrap();
+        let mut no_cross = model;
+        no_cross.vision_cross_attn = None;
+        let loss_without = no_cross
+            .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch]))
+            .unwrap();
+        assert_ne!(loss_with, loss_without);
+    }
+
+    #[test]
+    fn vision_cross_attn_updates_on_train_step() {
+        use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
+        let mut model = Chatbot::new(true, None, 256, Some(2), Some(16));
+        let tokens = vec![1, 2, 3];
+        let targets = targets_with_vision_prefix(&[2, 3, 4], 1, 256);
+        let patch = vec![vision_rgb_patch_from_text("cross prompt")];
+        let w_before = model
+            .vision_cross_attn
+            .as_ref()
+            .unwrap()
+            .q_proj
+            .weight
+            .data[[0, 0]];
+        let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
+        let mut adamw = AdamW::new(AdamWConfig { lr: 0.1, ..Default::default() });
+        model
+            .train_step_lm(
+                &tokens,
+                &targets,
+                &mut hybrid,
+                &mut adamw,
+                false,
+                &mut 0,
+                None,
+                Some(&patch),
+            )
+            .unwrap();
+        let w_after = model
+            .vision_cross_attn
+            .as_ref()
+            .unwrap()
+            .q_proj
+            .weight
+            .data[[0, 0]];
         assert_ne!(w_before, w_after);
     }
 }

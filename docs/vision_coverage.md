@@ -9,6 +9,7 @@ The `Chatbot(vision=True)` flag enables a **conv + linear patch prefix encoder**
 | `has_vision` getter | `Chatbot::has_vision` | `bot.has_vision` |
 | Patch encoder present | `has_vision_patch_encoder` | `bot.has_vision_patch_encoder` |
 | RGB conv encoder | `has_vision_rgb_conv` | `bot.has_vision_rgb_conv` |
+| Cross-attn text→image | `has_vision_cross_attn` | `bot.has_vision_cross_attn` |
 | Grayscale patch size (64 floats) | `VISION_PATCH_DIM` | `ai.VISION_PATCH_DIM`, `bot.vision_patch_dim` |
 | RGB patch size (192 floats, NCHW) | `VISION_RGB_DIM` | `ai.VISION_RGB_DIM`, `bot.vision_rgb_dim` |
 | Forward with patch prefix | `forward_hidden_with_patches` | `compute_loss(..., image_patch=...)` |
@@ -24,6 +25,7 @@ The `Chatbot(vision=True)` flag enables a **conv + linear patch prefix encoder**
 
 1. **RGB path (default for new vision models):** flat 192-float `NCHW` patch → `Conv2d(3→1, k=3)` → flatten 64 → `Linear(64→d_model)` → prepend row.
 2. **Grayscale path (legacy checkpoints without `vision_patch_conv`):** flat 64-float patch → `Linear(64→d_model)`.
+3. **Cross-attention (after block 0):** text token rows query image prefix rows (Q from text, K/V from image), residual added to text only.
 
 ## Example
 
@@ -43,9 +45,10 @@ loss = bot.compute_loss("describe this", "a cat", image_patch=rgb)
 
 When `vision=true`, safetensors checkpoints include:
 
-- **meta** `vision_patch_dim` (64), `vision_rgb_dim` (192), `vision_rgb_patch` (when conv present)
+- **meta** `vision_patch_dim` (64), `vision_rgb_dim` (192), `vision_rgb_patch`, `vision_cross_attn`
 - **tensor** `vision_patch_proj` with shape `[d_model, 64]`
 - **tensor** `vision_patch_conv` with shape `[1, 3, 3, 3]` (when RGB conv enabled)
+- **tensor** `vision_cross_attn.{out,q,k,v}` each `[d_model, d_model]`
 
 ## Merge
 
@@ -55,7 +58,6 @@ When `vision=true`, safetensors checkpoints include:
 
 - 8×8 surrogate patches from UTF-8 bytes (not disk image files yet).
 - Corpus LM training does not attach patches (text-only); QA training uses `vision_rgb_patch_from_text(input)` when conv is loaded.
-- No cross-attention between image and text streams yet.
 - `DatasetImageGen` / `DatasetImageEdit` remain diffusion stubs, not `Chatbot` training.
 
 ## Diffusion / Conv2d
@@ -65,7 +67,7 @@ When `vision=true`, safetensors checkpoints include:
 
 ## Roadmap
 
-1. **Cross-attn block** — Q from text, K/V from image patches after self-attn.
-2. **DatasetQA image paths** — load files from disk into normalized RGB patches.
+1. **DatasetQA image paths** — load files from disk into normalized RGB patches.
+2. **Multi-patch memory** — cross-attn over multiple image tokens.
 
 See also [training.md](training.md), [checkpoint_coverage.md](checkpoint_coverage.md), and [limitations.md](limitations.md).

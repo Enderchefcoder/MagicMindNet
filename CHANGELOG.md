@@ -37,6 +37,14 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Fixed (vision cross-attention multi-layer training)
+- `backward_lm_grads` iterated blocks in wrong order (`enumerate().rev()`); gradient apply now matches push order for `n_layer >= 2`
+
+### Added (vision text-to-image cross-attention)
+- `CrossAttention` after block 0: text rows query image prefix K/V with residual
+- `vision_cross_attn.{q,k,v,out}` checkpoint tensors; merge/quantize; train backward
+- Python `has_vision_cross_attn`; tests and updated `vision_coverage.md`
+
 ### Added (RGB conv vision patch encoder)
 - `vision_patch_conv` (`3×8×8 → 1×8×8` Conv2d) before linear `vision_patch_proj` on `Chatbot(vision=True)`
 - `vision_rgb_patch_from_text`, `VISION_RGB_DIM` (192); training defaults to RGB when conv is loaded

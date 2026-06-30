@@ -54,6 +54,6 @@ Attention tensors are full citizens in checkpoints (`blocks.{i}.attn.{q,k,v,out}
 - ~~Wire attn grads into `train_step_lm`~~ **done pass 81**
 - ~~LayerNorm γ/β backward~~ **done pass 82**
 - ~~Causal self-attention mask (LM default)~~ **done pass 84**
-- Optional: cross-attn for vision-flag models — see [vision_coverage.md](vision_coverage.md)
+- Optional: cross-attn for vision-flag models — **done** (`vision_cross_attn` after block 0); see [vision_coverage.md](vision_coverage.md)
 
 See [limitations.md](limitations.md) and [optimizers_coverage.md](optimizers_coverage.md).

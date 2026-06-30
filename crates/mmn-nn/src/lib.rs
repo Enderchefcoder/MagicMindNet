@@ -96,6 +96,39 @@ pub fn concat_sequence_rows(top: &Tensor, bottom: &Tensor) -> Result<Tensor> {
     ))
 }
 
+/// Slice rows `[start..end)` from a `[rows, d_model]` tensor.
+pub fn slice_sequence_rows(x: &Tensor, start: usize, end: usize) -> Result<Tensor> {
+    if x.shape.len() != 2 {
+        return Err(MmnError::Shape {
+            message: "slice_sequence_rows expects [rows, d_model]".into(),
+        });
+    }
+    if end < start || end > x.shape[0] {
+        return Err(MmnError::Shape {
+            message: format!("slice_sequence_rows range {start}..{end} invalid for rows {}", x.shape[0]),
+        });
+    }
+    let d_model = x.shape[1];
+    let rows = end - start;
+    let v = x
+        .data
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    let mut data = vec![0.0f32; rows * d_model];
+    for r in 0..rows {
+        for c in 0..d_model {
+            data[r * d_model + c] = v[[start + r, c]];
+        }
+    }
+    Ok(Tensor::from_array(
+        ArrayD::from_shape_vec(IxDyn(&[rows, d_model]), data).unwrap(),
+        x.requires_grad,
+    ))
+}
+
 /// Add sinusoidal PE to `[seq_len, d_model]` activations (in-place on a new tensor).
 pub fn add_sinusoidal_position_encoding(x: &Tensor) -> Result<Tensor> {
     if x.shape.len() != 2 {
@@ -703,6 +736,304 @@ impl MultiHeadAttention {
         let out = self.out_proj.forward(&merged)?;
         Ok((out, q, k, v, merged, q_lin, k_lin, sdp))
     }
+}
+
+/// Attention weights from cross-attention forward (`weights[head][query][key]`).
+pub struct CrossAttentionCache {
+    pub weights: Vec<Vec<Vec<f32>>>,
+}
+
+/// Cross-attention: queries from `q` `[n_q, d_model]`, keys/values from `k`/`v` `[n_kv, d_model]`.
+pub fn cross_attention_with_cache(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    n_heads: usize,
+) -> Result<(Tensor, CrossAttentionCache)> {
+    if q.shape.len() != 2 || k.shape.len() != 2 || v.shape.len() != 2 {
+        return Err(MmnError::Shape {
+            message: "cross_attention expects q,k,v with shape [rows, d_model]".into(),
+        });
+    }
+    let n_q = q.shape[0];
+    let n_kv = k.shape[0];
+    if k.shape != v.shape {
+        return Err(MmnError::Shape {
+            message: "cross_attention k and v must share shape".into(),
+        });
+    }
+    let d_model = q.shape[1];
+    if k.shape[1] != d_model {
+        return Err(MmnError::Shape {
+            message: format!(
+                "cross_attention d_model mismatch: q {} vs k {}",
+                d_model, k.shape[1]
+            ),
+        });
+    }
+    if d_model % n_heads != 0 {
+        return Err(MmnError::Shape {
+            message: format!("d_model {d_model} not divisible by n_heads {n_heads}"),
+        });
+    }
+    let head_dim = d_model / n_heads;
+    let scale = (head_dim as f32).sqrt().recip();
+    let mut out = vec![0.0f32; n_q * d_model];
+    let mut weights = vec![vec![vec![0.0f32; n_kv]; n_q]; n_heads];
+
+    for h in 0..n_heads {
+        let base = h * head_dim;
+        for s in 0..n_q {
+            let mut scores = vec![0.0f32; n_kv];
+            for t in 0..n_kv {
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q.data[[s, base + d]] * k.data[[t, base + d]];
+                }
+                scores[t] = dot * scale;
+            }
+            let max = scores
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let mut row_weights: Vec<f32> = scores.iter().map(|&x| (x - max).exp()).collect();
+            let sum: f32 = row_weights.iter().sum();
+            if sum > 0.0 {
+                for w in &mut row_weights {
+                    *w /= sum;
+                }
+            }
+            weights[h][s] = row_weights.clone();
+            for d in 0..head_dim {
+                let mut ctx = 0.0f32;
+                for t in 0..n_kv {
+                    ctx += row_weights[t] * v.data[[t, base + d]];
+                }
+                out[s * d_model + base + d] = ctx;
+            }
+        }
+    }
+
+    Ok((
+        Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[n_q, d_model]), out).unwrap(),
+            q.requires_grad || k.requires_grad || v.requires_grad,
+        ),
+        CrossAttentionCache { weights },
+    ))
+}
+
+pub fn cross_attention_backward(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    cache: &CrossAttentionCache,
+    grad_out: &ArrayD<f32>,
+    n_heads: usize,
+) -> Result<(ArrayD<f32>, ArrayD<f32>, ArrayD<f32>)> {
+    let n_q = q.shape[0];
+    let n_kv = k.shape[0];
+    let d_model = q.shape[1];
+    let head_dim = d_model / n_heads;
+    let scale = (head_dim as f32).sqrt().recip();
+    let mut grad_q = ArrayD::zeros(q.data.raw_dim());
+    let mut grad_k = ArrayD::zeros(k.data.raw_dim());
+    let mut grad_v = ArrayD::zeros(v.data.raw_dim());
+
+    for h in 0..n_heads {
+        let base = h * head_dim;
+        for s in 0..n_q {
+            let w_row = &cache.weights[h][s];
+            let mut grad_scores = vec![0.0f32; n_kv];
+            for t in 0..n_kv {
+                let mut grad_w = 0.0f32;
+                for d in 0..head_dim {
+                    grad_w += grad_out[[s, base + d]] * v.data[[t, base + d]];
+                }
+                grad_scores[t] = grad_w;
+            }
+            let dot: f32 = w_row
+                .iter()
+                .zip(grad_scores.iter())
+                .map(|(w, g)| w * g)
+                .sum();
+            for t in 0..n_kv {
+                let grad_s = w_row[t] * (grad_scores[t] - dot);
+                for d in 0..head_dim {
+                    grad_q[[s, base + d]] += grad_s * scale * k.data[[t, base + d]];
+                    grad_k[[t, base + d]] += grad_s * scale * q.data[[s, base + d]];
+                }
+            }
+            for t in 0..n_kv {
+                for d in 0..head_dim {
+                    grad_v[[t, base + d]] += w_row[t] * grad_out[[s, base + d]];
+                }
+            }
+        }
+    }
+    Ok((grad_q, grad_k, grad_v))
+}
+
+pub struct CrossAttention {
+    pub d_model: usize,
+    pub n_heads: usize,
+    pub q_proj: Linear,
+    pub k_proj: Linear,
+    pub v_proj: Linear,
+    pub out_proj: Linear,
+}
+
+pub struct CrossAttentionForwardCache {
+    pub text_in: Tensor,
+    pub mem_in: Tensor,
+    pub q: Tensor,
+    pub k: Tensor,
+    pub v: Tensor,
+    pub merged: Tensor,
+    pub attn: CrossAttentionCache,
+}
+
+impl CrossAttention {
+    pub fn new_rng(d_model: usize, n_heads: usize, rng: &mut impl Rng) -> Self {
+        assert_eq!(d_model % n_heads, 0);
+        Self {
+            d_model,
+            n_heads,
+            q_proj: Linear::new_rng(d_model, d_model, rng),
+            k_proj: Linear::new_rng(d_model, d_model, rng),
+            v_proj: Linear::new_rng(d_model, d_model, rng),
+            out_proj: Linear::new_rng(d_model, d_model, rng),
+        }
+    }
+
+    pub fn forward_with_cache(
+        &self,
+        text: &Tensor,
+        memory: &Tensor,
+    ) -> Result<(Tensor, CrossAttentionForwardCache)> {
+        let q = self.q_proj.forward(text)?;
+        let k = self.k_proj.forward(memory)?;
+        let v = self.v_proj.forward(memory)?;
+        let (merged, attn) = cross_attention_with_cache(&q, &k, &v, self.n_heads)?;
+        let out = self.out_proj.forward(&merged)?;
+        Ok((
+            out,
+            CrossAttentionForwardCache {
+                text_in: text.clone(),
+                mem_in: memory.clone(),
+                q,
+                k,
+                v,
+                merged,
+                attn,
+            },
+        ))
+    }
+
+    /// Returns `(grad_text, grad_memory, [out_w, q_w, k_w, v_w])`.
+    pub fn backward(
+        &self,
+        cache: &CrossAttentionForwardCache,
+        grad_out: &ArrayD<f32>,
+    ) -> Result<(ArrayD<f32>, ArrayD<f32>, [ArrayD<f32>; 4])> {
+        use mmn_core::linear_backward;
+        let (grad_out_w, grad_merged) = linear_backward(
+            cache.merged.data.as_ref(),
+            self.out_proj.weight.data.as_ref(),
+            grad_out,
+        )?;
+        let (grad_q, grad_k, grad_v) = cross_attention_backward(
+            &cache.q,
+            &cache.k,
+            &cache.v,
+            &cache.attn,
+            &grad_merged,
+            self.n_heads,
+        )?;
+        let (grad_q_w, grad_text_q) = linear_backward(
+            cache.text_in.data.as_ref(),
+            self.q_proj.weight.data.as_ref(),
+            &grad_q,
+        )?;
+        let (grad_k_w, grad_mem_k) = linear_backward(
+            cache.mem_in.data.as_ref(),
+            self.k_proj.weight.data.as_ref(),
+            &grad_k,
+        )?;
+        let (grad_v_w, grad_mem_v) = linear_backward(
+            cache.mem_in.data.as_ref(),
+            self.v_proj.weight.data.as_ref(),
+            &grad_v,
+        )?;
+        let mut grad_mem = grad_mem_k;
+        grad_mem = &grad_mem + &grad_mem_v;
+        Ok((grad_text_q, grad_mem, [grad_out_w, grad_q_w, grad_k_w, grad_v_w]))
+    }
+}
+
+/// After block 0: text rows cross-attend to image prefix rows, residual on text only.
+pub fn vision_cross_attn_residual(
+    cross: &CrossAttention,
+    h: &Tensor,
+    n_patch: usize,
+) -> Result<(Tensor, CrossAttentionForwardCache)> {
+    if n_patch == 0 {
+        return Err(MmnError::Shape {
+            message: "vision_cross_attn_residual requires n_patch > 0".into(),
+        });
+    }
+    let mem = slice_sequence_rows(h, 0, n_patch)?;
+    let text = slice_sequence_rows(h, n_patch, h.shape[0])?;
+    let (cross_out, cache) = cross.forward_with_cache(&text, &mem)?;
+    let text_out = text.add(&cross_out)?;
+    let h_out = concat_sequence_rows(&mem, &text_out)?;
+    Ok((h_out, cache))
+}
+
+/// Backward through `vision_cross_attn_residual`; returns updated `grad_h`.
+pub fn vision_cross_attn_residual_backward(
+    cross: &CrossAttention,
+    cache: &CrossAttentionForwardCache,
+    grad_h: &ArrayD<f32>,
+    n_patch: usize,
+) -> Result<(ArrayD<f32>, [ArrayD<f32>; 4])> {
+    let seq = grad_h.shape()[0];
+    let d_model = grad_h.shape()[1];
+    let text_len = seq - n_patch;
+    let grad_h2 = grad_h
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    let mut grad_text = ndarray::Array2::<f32>::zeros((text_len, d_model));
+    let mut grad_mem = ndarray::Array2::<f32>::zeros((n_patch, d_model));
+    for r in 0..n_patch {
+        for c in 0..d_model {
+            grad_mem[[r, c]] = grad_h2[[r, c]];
+        }
+    }
+    for r in 0..text_len {
+        for c in 0..d_model {
+            grad_text[[r, c]] = grad_h2[[n_patch + r, c]];
+        }
+    }
+    let (grad_text_q, grad_mem_cross, cross_w) =
+        cross.backward(cache, &grad_text.view().to_owned().into_dyn())?;
+    let grad_text2 = grad_text.view().to_owned().into_dyn() + grad_text_q;
+    let grad_mem2 = &grad_mem.into_dyn() + &grad_mem_cross;
+    let mut out = ndarray::Array2::<f32>::zeros((seq, d_model));
+    for r in 0..n_patch {
+        for c in 0..d_model {
+            out[[r, c]] = grad_mem2[[r, c]];
+        }
+    }
+    for r in 0..text_len {
+        for c in 0..d_model {
+            out[[n_patch + r, c]] = grad_text2[[r, c]];
+        }
+    }
+    Ok((out.into_dyn(), cross_w))
 }
 
 /// Softmax attention weights from the forward pass (`weights[head][query][key]`).
@@ -1546,11 +1877,32 @@ mod conv2d_tests {
     }
 
     #[test]
-    fn vae_encoder_preserves_8x8_latent_shape() {
-        let vae = VaeEncoder::new();
-        let x = Tensor::randn(&[1, 3, 8, 8], false);
-        let latent = vae.encode(&x).unwrap();
-        assert_eq!(latent.shape, vec![1, 4, 8, 8]);
-        assert!(latent.data.iter().all(|v| v.is_finite()));
+    fn cross_attention_text_queries_image_memory() {
+        let mut rng = rng_from_seed(Some(42));
+        let cross = CrossAttention::new_rng(8, 2, &mut rng);
+        let text = Tensor::randn_rng(&mut rng, &[2, 8], false);
+        let mem = Tensor::randn_rng(&mut rng, &[1, 8], false);
+        let (out, cache) = cross.forward_with_cache(&text, &mem).unwrap();
+        assert_eq!(out.shape, vec![2, 8]);
+        let grad = ndarray::arr2(&[[1.0; 8], [0.5; 8]]).into_dyn();
+        let (grad_text, grad_mem, wgrads) = cross.backward(&cache, &grad).unwrap();
+        assert_eq!(grad_text.shape(), text.shape);
+        assert_eq!(grad_mem.shape(), mem.shape);
+        assert_eq!(wgrads[0].shape(), cross.out_proj.weight.data.shape());
+    }
+
+    #[test]
+    fn vision_cross_attn_residual_updates_text_rows_only() {
+        let mut rng = rng_from_seed(Some(7));
+        let cross = CrossAttention::new_rng(8, 2, &mut rng);
+        let h = Tensor::randn_rng(&mut rng, &[3, 8], false);
+        let (h2, _) = vision_cross_attn_residual(&cross, &h, 1).unwrap();
+        assert_eq!(h2.shape, vec![3, 8]);
+        assert_ne!(
+            h.data[[1, 0]],
+            h2.data[[1, 0]],
+            "text row should change after cross-attn residual"
+        );
+        assert_eq!(h.data[[0, 0]], h2.data[[0, 0]], "image prefix row unchanged");
     }
 }

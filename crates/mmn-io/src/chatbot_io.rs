@@ -40,6 +40,25 @@ pub fn export_safetensors(
                 tensor_to_entry(&conv.weight),
             );
         }
+        if let Some(cross) = &model.vision_cross_attn {
+            meta["vision_cross_attn"] = serde_json::json!(true);
+            map.insert(
+                "vision_cross_attn.out".to_string(),
+                tensor_to_entry(&cross.out_proj.weight),
+            );
+            map.insert(
+                "vision_cross_attn.q".to_string(),
+                tensor_to_entry(&cross.q_proj.weight),
+            );
+            map.insert(
+                "vision_cross_attn.k".to_string(),
+                tensor_to_entry(&cross.k_proj.weight),
+            );
+            map.insert(
+                "vision_cross_attn.v".to_string(),
+                tensor_to_entry(&cross.v_proj.weight),
+            );
+        }
     }
     if let Some(seed) = model.init_seed {
         meta["seed"] = serde_json::json!(seed);
@@ -153,6 +172,40 @@ pub fn import_safetensors(path: &str, _vocab_size: usize) -> Result<Chatbot, Mmn
         } else {
             model.vision_patch_conv = None;
         }
+        if let Ok(entry) = require_tensor_entry(&v["tensors"], "vision_cross_attn.out") {
+            let cross = model.vision_cross_attn.as_mut().ok_or_else(|| MmnError::Other {
+                message: "vision_cross_attn tensor present but model has no cross-attn".into(),
+            })?;
+            cross.out_proj.weight = tensor_from_entry(entry)?;
+            expect_tensor_shape(
+                &cross.out_proj.weight,
+                &[d_model, d_model],
+                "vision_cross_attn.out",
+            )?;
+            cross.q_proj.weight =
+                tensor_from_entry(require_tensor_entry(&v["tensors"], "vision_cross_attn.q")?)?;
+            expect_tensor_shape(
+                &cross.q_proj.weight,
+                &[d_model, d_model],
+                "vision_cross_attn.q",
+            )?;
+            cross.k_proj.weight =
+                tensor_from_entry(require_tensor_entry(&v["tensors"], "vision_cross_attn.k")?)?;
+            expect_tensor_shape(
+                &cross.k_proj.weight,
+                &[d_model, d_model],
+                "vision_cross_attn.k",
+            )?;
+            cross.v_proj.weight =
+                tensor_from_entry(require_tensor_entry(&v["tensors"], "vision_cross_attn.v")?)?;
+            expect_tensor_shape(
+                &cross.v_proj.weight,
+                &[d_model, d_model],
+                "vision_cross_attn.v",
+            )?;
+        } else {
+            model.vision_cross_attn = None;
+        }
     }
     import_block_tensors(&mut model, &v["tensors"])?;
     Ok(model)
@@ -222,6 +275,33 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
             (None, None) => {}
         }
     }
+    if let Some(out_cross) = out.vision_cross_attn.as_mut() {
+        match (&a.vision_cross_attn, &b.vision_cross_attn) {
+            (Some(aa), Some(bb)) => {
+                out_cross.out_proj.weight =
+                    average_tensors(&aa.out_proj.weight, &bb.out_proj.weight);
+                out_cross.q_proj.weight =
+                    average_tensors(&aa.q_proj.weight, &bb.q_proj.weight);
+                out_cross.k_proj.weight =
+                    average_tensors(&aa.k_proj.weight, &bb.k_proj.weight);
+                out_cross.v_proj.weight =
+                    average_tensors(&aa.v_proj.weight, &bb.v_proj.weight);
+            }
+            (Some(aa), None) => {
+                out_cross.out_proj.weight = aa.out_proj.weight.clone();
+                out_cross.q_proj.weight = aa.q_proj.weight.clone();
+                out_cross.k_proj.weight = aa.k_proj.weight.clone();
+                out_cross.v_proj.weight = aa.v_proj.weight.clone();
+            }
+            (None, Some(bb)) => {
+                out_cross.out_proj.weight = bb.out_proj.weight.clone();
+                out_cross.q_proj.weight = bb.q_proj.weight.clone();
+                out_cross.k_proj.weight = bb.k_proj.weight.clone();
+                out_cross.v_proj.weight = bb.v_proj.weight.clone();
+            }
+            (None, None) => {}
+        }
+    }
     for (i, block) in out.blocks.iter_mut().enumerate() {
         let ab = &a.blocks[i];
         let bb = &b.blocks[i];
@@ -256,6 +336,12 @@ pub fn quantize_model(model: &mut Chatbot, mode: &str) -> Result<(), MmnError> {
             if let Some(conv) = &mut model.vision_patch_conv {
                 quantize_tensor(&mut conv.weight, scale);
             }
+            if let Some(cross) = &mut model.vision_cross_attn {
+                quantize_tensor(&mut cross.out_proj.weight, scale);
+                quantize_tensor(&mut cross.q_proj.weight, scale);
+                quantize_tensor(&mut cross.k_proj.weight, scale);
+                quantize_tensor(&mut cross.v_proj.weight, scale);
+            }
             for block in &mut model.blocks {
                 quantize_tensor(&mut block.attn.q_proj.weight, scale);
                 quantize_tensor(&mut block.attn.k_proj.weight, scale);
@@ -289,6 +375,9 @@ pub fn export_bin(model: &Chatbot, path: &str) -> Result<(), MmnError> {
         json["vision_rgb_dim"] = serde_json::json!(mmn_models::VISION_RGB_DIM);
         if model.vision_patch_conv.is_some() {
             json["vision_rgb_patch"] = serde_json::json!(true);
+        }
+        if model.vision_cross_attn.is_some() {
+            json["vision_cross_attn"] = serde_json::json!(true);
         }
     }
     if model.use_learned_pos_embed {
