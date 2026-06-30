@@ -1,0 +1,255 @@
+# MagicMindNet API Reference
+
+Import as:
+
+```python
+import magicmindnet as ai
+```
+
+**Related docs:** [training.md](training.md) · [training_coverage.md](training_coverage.md) · [checkpoints.md](checkpoints.md) · [checkpoint_coverage.md](checkpoint_coverage.md) · [dataset_coverage.md](dataset_coverage.md) · [examples/README.md](../examples/README.md)
+
+---
+
+## Table of contents
+
+1. [Public exports (`__all__`)](#public-exports-__all__)
+2. [Datasets](#datasets)
+3. [Models](#models)
+4. [Training](#training)
+5. [Checkpoints & merge](#checkpoints--merge)
+6. [Utilities](#utilities)
+7. [Errors](#errors)
+8. [Examples](#examples)
+
+---
+
+## Public exports (`__all__`)
+
+Every name below is defined on `import magicmindnet as ai` and listed in `ai.__all__`.
+
+| Category | Names |
+|----------|--------|
+| Version | `__version__` |
+| Datasets | `DatasetQA`, `DatasetCorpus`, `DatasetClassification`, `DatasetImageGen`, `DatasetImageEdit` |
+| Models | `Chatbot`, `Classifier`, `Diffusion` |
+| Training | `TrainConfig`, `Train`, `TrainClassifier`, `RL`, `SPIN` |
+| IO | `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier` |
+| Aliases | `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
+| Resource | `limit`, `limit_percent` |
+| Errors | `CPUError`, `CUDAError`, `DataMismatchError`, `DataMissingRowError`, `ModelMismatchError` |
+
+---
+
+## Datasets
+
+| Class | Purpose |
+|-------|---------|
+| `DatasetQA` | JSON / JSONL / Parquet QA rows |
+| `DatasetCorpus` | Two-file corpus (`rowfile` + `txtfile`, complexity sort) |
+| `DatasetClassification` | Text + tags (auto `class_N` if tag column missing) |
+| `DatasetImageGen` | Prompt + image + optional `negative_prompt` |
+| `DatasetImageEdit` | Prompt + mask + image + optional `negative_prompt` |
+
+### Common attributes
+
+All dataset types expose:
+
+- `rows` — sample count
+- `format` — detected format string (`json`, `jsonl`, `corpus`, …)
+- `type_` — logical type (`qa`, `corpus`, `classification`, `image_gen`, `image_edit`)
+
+### DatasetQA
+
+```python
+ds = ai.DatasetQA(
+    file="qa.json",           # or .jsonl / .parquet
+    user_row="input",
+    ai_row="output",
+    system_row="systemprompt",  # optional
+    thinktag="think|/think",    # open|close for CoT wrapping
+    cot=True,
+)
+text = ds.format_sample(0)   # ChatXML conversation string
+```
+
+- Missing `user_row` / `ai_row` → `DataMissingRowError`
+- `repr()` shows row count and format
+
+### DatasetCorpus
+
+```python
+ds = ai.DatasetCorpus(
+    use_two_files=True,
+    rowfile="rows.json",
+    txtfile="corpus.txt",
+    sort_rows_by_complexity=True,
+    rows_with_corpus_chunk="text",
+    batch_size="row",         # or fixed size string e.g. "24"
+)
+ds.corpus_batch_size          # "row" or fixed integer string
+```
+
+### DatasetClassification
+
+```python
+ds = ai.DatasetClassification("labels.json", "text", "tag")
+ds.unique_labels()            # sorted, deduplicated
+```
+
+### Image datasets
+
+```python
+gen = ai.DatasetImageGen("manifest.json")
+edit = ai.DatasetImageEdit("edit_manifest.json")
+```
+
+---
+
+## Models
+
+### Chatbot
+
+```python
+bot = ai.Chatbot(
+    vocab_size=32000,
+    n_layer=4,
+    d_model=128,
+    vision=False,
+    autoset=None,              # or "sub-100M" | "sub-1B" | "sub-10B"
+    seed=42,                   # optional deterministic init
+    use_learned_pos_embed=False,  # default: fixed sinusoidal PE at runtime
+    max_seq_len=512,           # learned PE table rows when use_learned_pos_embed=True
+)
+```
+
+**Position encoding**
+
+| Mode | Flag | Checkpoint | Trained by `Train()` |
+|------|------|------------|----------------------|
+| Sinusoidal (default) | `use_learned_pos_embed=False` | none | no |
+| Learned table | `use_learned_pos_embed=True` | safetensors key `pos_embed` | yes |
+
+- Sinusoidal PE is applied at forward time (no extra checkpoint keys).
+- Learned `pos_embed` is `[max_seq_len, d_model]`; sequences longer than `max_seq_len` raise a shape error.
+- `export(..., "bin")` stores `use_learned_pos_embed` / `max_seq_len` in the architecture stub (weights are not saved in `bin`).
+- RL updates `lm_head` only; SPIN runs `Train()` and can update learned PE. See [position_encoding_coverage.md](position_encoding_coverage.md).
+- Runnable roundtrip: `python examples/learned_pos_embed_roundtrip.py`
+
+**Getters:** `vocab_size`, `n_layer`, `d_model`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`
+
+**Methods:**
+
+- `compute_loss(input_str, target_str) -> float`
+- `compute_mean_loss(dataset_qa | dataset_corpus) -> float`
+
+### Classifier
+
+```python
+clf = ai.Classifier(num_labels=3, input_dim=64)
+clf = ai.Classifier.with_labels(["A", "B"], input_dim=64, seed=1)
+clf = ai.Classifier.from_classification(ds, input_dim=64, seed=1)
+probs = clf.predict("some text")   # dict label -> probability
+```
+
+**Getters:** `labels`, `num_labels`, `input_dim`, `init_seed`
+
+**Methods:** `compute_loss(text, label)`, `compute_mean_loss(dataset_classification)`
+
+### Diffusion
+
+```python
+diff = ai.Diffusion()
+diff.latent_channels   # getter
+```
+
+Foundation VAE/UNet — see [limitations.md](limitations.md).
+
+---
+
+## Training
+
+```python
+cfg = ai.TrainConfig(
+    epochs=3,
+    batch_size=8,              # accumulates micro-batches before optimizer step
+    cuda=False,                # True requires CUDA build + GPU
+    optimizer="hybrid",        # "hybrid" (Muon+AdamW) or "adamw"
+    learning_rate=3e-4,
+)
+```
+
+All fields are readable/writable on `cfg`. `repr(cfg)` summarizes settings.
+
+```python
+ai.Train(chatbot, dataset_qa, cfg)
+ai.TrainClassifier(classifier, dataset_cls, cfg)
+ai.RL(chatbot, dataset_qa, cfg, reward_amount=1.0, punishment_amount=0.5, rl_type="policy")
+ai.SPIN(chatbot, selfplay_epochs=2, dataset=dataset_qa)
+```
+
+| API | Required dataset |
+|-----|------------------|
+| `Train`, `Chatbot.compute_mean_loss` | `DatasetQA` or `DatasetCorpus` |
+| `RL`, `SPIN` | `DatasetQA` |
+| `TrainClassifier`, `Classifier.compute_mean_loss` | `DatasetClassification` |
+
+Wrong dataset type → `DataMismatchError`. See [training_coverage.md](training_coverage.md).
+
+---
+
+## Checkpoints & merge
+
+| Function | Format | Notes |
+|----------|--------|-------|
+| `export(bot, "safetensors", path)` | `mmn-safetensors-v1` | Full weights + meta |
+| `export(bot, "bin", path)` | `mmn-bin-v1` | Architecture meta only |
+| `import_model("safetensors", [path])` | — | **First path only**; strict tensor validation |
+| `export_classifier(clf, "safetensors", path)` | `mmn-classifier-v1` | backbone + head |
+| `import_classifier("safetensors", [path])` | — | First path only |
+| `merge(a, b)` | — | Average Chatbot weights; shape must match |
+| `merge_classifier(a, b)` | — | Labels + `input_dim` must match |
+| `quantize(model, "int8" \| "int4")` | — | In-place Chatbot weights |
+| `quantize_classifier(clf, "int8" \| "int4")` | — | In-place Classifier weights |
+
+Cross-import (chatbot ↔ classifier) is rejected. Full IO matrix: [checkpoint_coverage.md](checkpoint_coverage.md).
+
+`init_seed` in meta when set at construction.
+
+---
+
+## Utilities
+
+```python
+ai.limit("50%")       # 1–100; also accepts "50" without %
+pct = ai.limit_percent()
+```
+
+---
+
+## Errors
+
+All subclass `Exception` with `message`, `fix`, and `explanation` fields where applicable:
+
+| Type | When |
+|------|------|
+| `CPUError` | CPU backend unavailable |
+| `CUDAError` | CUDA requested but not available |
+| `DataMismatchError` | Dataset type wrong for model/API |
+| `DataMissingRowError` | Required column missing in data file |
+| `ModelMismatchError` | Merge on incompatible architectures |
+
+---
+
+## Examples
+
+| Script | Command |
+|--------|---------|
+| Quickstart | `python examples/quickstart.py` |
+| Train benchmark | `python examples/benchmark_train.py` (optional `--learned-pe`) |
+| RL + SPIN | `python examples/rl_spin.py` |
+| Mean loss | `python examples/eval_mean_loss.py qa`, `cls`, or `corpus` (optional `--train`, `--learned-pe`) |
+| Classification | `python examples/classification.py` |
+| Roundtrips | `python examples/checkpoint_roundtrip.py` |
+| Learned PE roundtrip | `python examples/learned_pos_embed_roundtrip.py` |
+
+Full list: [examples/README.md](../examples/README.md). CI smoke: `.\scripts\smoke_examples.ps1`.
