@@ -1,0 +1,31 @@
+[package]
+name = "mmn-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "magicmindnet_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+mmn-core.workspace = true
+mmn-ops.workspace = true
+mmn-optim.workspace = true
+mmn-data.workspace = true
+mmn-nn.workspace = true
+mmn-models.workspace = true
+mmn-train.workspace = true
+mmn-io.workspace = true
+mmn-resource.workspace = true
+pyo3.workspace = true
+ndarray.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+cuda = ["mmn-ops/cuda", "mmn-cuda/cuda"]
+
+[dependencies.mmn-cuda]
+workspace = true
+optional = true
