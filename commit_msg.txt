@@ -1,6 +1,0 @@
-[Cursor] eval_mean_loss diffusion modes and fixed-t denoise loss regression
-
-Add diffusion and diffusion-edit modes to eval_mean_loss with optional --train,
-smoke coverage, pytest, checkpoint/docs updates, and a Rust test that fixed-t
-training lowers mean denoise loss. Fix quantize diffusion roundtrip test to
-compare post-quantize samples across export/import.
