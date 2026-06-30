@@ -2,6 +2,14 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (diffusion inpaint sampling + quantize + PNG export)
+- `sample_latent_inpaint` / `sample_image_inpaint` preserve unmasked latent from source image
+- `denoise_loss_masked` + Python `denoise_loss_on_image_masked`
+- `quantize_diffusion` (`int8`/`int4` on VAE + UNet conv weights); Python `quantize_diffusion`
+- Python `sample_inpaint_rgb_patch`, `sample_rgb_patch_to_png`, `sample_inpaint_rgb_patch_to_png`
+- Example `diffusion_inpaint_sample.py`; tests `test_diffusion_inpaint_py.py`
+- **306** Rust tests / **595** pytest (`verify_gate`)
+
 ### Added (inpainting diffusion + RGB decode clamp + merge)
 - `Diffusion::decode_latent` clamps RGB to `[0, 1]`; `sample_rgb_patch` stays in unit interval
 - `train_step_denoise_masked` mask-weighted UNet step; `train_diffusion_edit` on `DatasetImageEdit`

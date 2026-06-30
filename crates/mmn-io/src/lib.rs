@@ -23,7 +23,7 @@ pub use hf_safetensors::{
 };
 pub use hf_tensor_codec::HF_CHATBOT_FORMAT;
 pub use classifier_io::{export_classifier, import_classifier, merge_classifiers, quantize_classifier};
-pub use diffusion_io::{export_diffusion, import_diffusion, merge_diffusion};
+pub use diffusion_io::{export_diffusion, import_diffusion, merge_diffusion, quantize_diffusion};
 
 #[cfg(test)]
 mod io_tests;

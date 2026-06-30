@@ -45,6 +45,7 @@ from magicmindnet._native import (
     merge_diffusion_model,
     quantize,
     quantize_classifier_model,
+    quantize_diffusion_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
 from magicmindnet.unigram_io import load_unigram_sidecar
@@ -66,6 +67,7 @@ quantize_classifier = quantize_classifier_model
 export_diffusion = export_diffusion_model
 import_diffusion = import_diffusion_model
 merge_diffusion = merge_diffusion_model
+quantize_diffusion = quantize_diffusion_model
 
 __all__ = [
     "__version__",
@@ -111,6 +113,8 @@ __all__ = [
     "quantize",
     "quantize_classifier",
     "quantize_classifier_model",
+    "quantize_diffusion",
+    "quantize_diffusion_model",
     "VISION_PATCH_DIM",
     "VISION_RGB_CHANNELS",
     "VISION_RGB_DIM",

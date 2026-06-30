@@ -3,7 +3,7 @@ use mmn_io::{
     export_hf_safetensors, export_safetensors, import_bin, import_classifier, import_diffusion,
     merge_diffusion,
     import_hf_classifier_safetensors, import_hf_safetensors, import_safetensors, merge_classifiers,
-    merge_models, quantize_classifier, quantize_model, TokenizerSidecarRefs,
+    merge_models, quantize_classifier, quantize_diffusion, quantize_model, TokenizerSidecarRefs,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -184,4 +184,9 @@ pub fn import_diffusion_model(format: &str, files: Vec<String>) -> PyResult<PyDi
 pub fn merge_diffusion_model(model1: &PyDiffusion, model2: &PyDiffusion) -> PyResult<PyDiffusion> {
     let m = merge_diffusion(&model1.inner, &model2.inner).map_err(mmn_err_to_py)?;
     Ok(PyDiffusion { inner: m })
+}
+
+#[pyfunction]
+pub fn quantize_diffusion_model(model: &mut PyDiffusion, quant: &str) -> PyResult<()> {
+    quantize_diffusion(&mut model.inner, quant).map_err(mmn_err_to_py)
 }

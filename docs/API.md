@@ -239,12 +239,16 @@ Wrong dataset type → `DataMismatchError`. See [training_coverage.md](training_
 d = ai.Diffusion()
 ai.TrainDiffusion(d, dataset_image_gen, cfg)
 patch = d.sample_rgb_patch(steps=8, seed=42)  # 192 floats, 8×8×3 RGB
+inpaint = d.sample_inpaint_rgb_patch("photo.png", "mask.png", steps=8, seed=42)
 loss = d.denoise_loss_on_image("photo.png", t=5)
+loss_masked = d.denoise_loss_on_image_masked("photo.png", "mask.png", t=5)
+d.sample_rgb_patch_to_png("out.png", steps=8, seed=42)
 ai.export_diffusion(d, "safetensors", "diffusion.mmn")
 d2 = ai.import_diffusion("safetensors", ["diffusion.mmn"])
+ai.quantize_diffusion(d2, "int8")
 ```
 
-See `examples/diffusion_train.py`, `examples/diffusion_edit_train.py`, `examples/diffusion_sample.py`, `examples/diffusion_roundtrip.py`.
+See `examples/diffusion_train.py`, `examples/diffusion_edit_train.py`, `examples/diffusion_inpaint_sample.py`, `examples/diffusion_sample.py`, `examples/diffusion_roundtrip.py`.
 
 ---
 
@@ -270,6 +274,7 @@ See `examples/diffusion_train.py`, `examples/diffusion_edit_train.py`, `examples
 | `export_diffusion(d, "safetensors", path)` | `mmn-diffusion-v1` | VAE enc/dec + UNet conv weights |
 | `import_diffusion("safetensors", [path])` | `mmn-diffusion-v1` | **First path only** |
 | `merge_diffusion(a, b)` | — | Average VAE + UNet; `latent_channels` must match |
+| `quantize_diffusion(d, "int8" \| "int4")` | — | In-place VAE + UNet conv weights |
 | `quantize(model, "int8" \| "int4")` | — | In-place Chatbot weights |
 | `quantize_classifier(clf, "int8" \| "int4")` | — | In-place Classifier weights |
 

@@ -175,4 +175,5 @@
 [X] Vision KV-cache generation + unigram prune; 282 Rust / 566 pytest, verify_gate
 [X] Vision-prefix RoPE KV slide + TrainDiffusion UNet training; 287 Rust / 571 pytest, verify_gate — pushed 8441746
 [X] Diffusion VAE decode + sample_rgb_patch + export/import checkpoints; 292 Rust / 581 pytest, verify_gate — pushed 769c30e
-[X] Inpainting diffusion (masked train, ImageEdit paths, merge_diffusion, RGB clamp); 301 Rust / 587 pytest, verify_gate
+[X] Inpainting diffusion (masked train, ImageEdit paths, merge_diffusion, RGB clamp); 301 Rust / 587 pytest, verify_gate — pushed 06bf5a3
+[X] Diffusion inpaint sampling, quantize_diffusion, PNG export, masked denoise loss; 306 Rust / 595 pytest, verify_gate

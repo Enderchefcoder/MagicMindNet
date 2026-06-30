@@ -1,5 +1,5 @@
 use crate::checkpoint_util::{
-    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry,
+    expect_tensor_shape, quantize_tensor, require_tensor_entry, tensor_from_entry, tensor_to_entry,
     write_file_create_parents,
 };
 use crate::tensor_merge::average_tensors;
@@ -111,6 +111,25 @@ pub fn merge_diffusion(a: &Diffusion, b: &Diffusion) -> Result<Diffusion, MmnErr
     out.unet.up.weight = average_tensors(&a.unet.up.weight, &b.unet.up.weight);
     validate_diffusion_shapes(&out)?;
     Ok(out)
+}
+
+pub fn quantize_diffusion(model: &mut Diffusion, mode: &str) -> Result<(), MmnError> {
+    match mode {
+        "int8" | "int4" => {
+            let scale = if mode == "int8" { 127.0 } else { 15.0 };
+            quantize_tensor(&mut model.vae.conv1.weight, scale);
+            quantize_tensor(&mut model.vae.conv2.weight, scale);
+            quantize_tensor(&mut model.vae_decoder.conv1.weight, scale);
+            quantize_tensor(&mut model.vae_decoder.conv2.weight, scale);
+            quantize_tensor(&mut model.unet.down.weight, scale);
+            quantize_tensor(&mut model.unet.mid.weight, scale);
+            quantize_tensor(&mut model.unet.up.weight, scale);
+            Ok(())
+        }
+        _ => Err(MmnError::Other {
+            message: format!("Unknown quant mode: {mode}"),
+        }),
+    }
 }
 
 fn validate_diffusion_shapes(model: &Diffusion) -> Result<(), MmnError> {

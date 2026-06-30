@@ -1,4 +1,4 @@
-use crate::{export_diffusion, import_diffusion, merge_diffusion};
+use crate::{export_diffusion, import_diffusion, merge_diffusion, quantize_diffusion};
 use mmn_models::Diffusion;
 
 #[test]
@@ -67,4 +67,21 @@ fn merge_diffusion_rejects_latent_channel_mismatch() {
     let mut b = Diffusion::new();
     b.latent_channels = 8;
     assert!(merge_diffusion(&a, &b).is_err());
+}
+
+#[test]
+fn quantize_diffusion_int8_changes_unet_weight() {
+    let mut model = Diffusion::new();
+    let mut data = (*model.unet.down.weight.data).clone();
+    data[[0, 0, 0, 0]] = 0.123456;
+    model.unet.down.weight = mmn_core::Tensor::from_array(data, false);
+    let before = model.unet.down.weight.data[[0, 0, 0, 0]];
+    quantize_diffusion(&mut model, "int8").unwrap();
+    assert_ne!(model.unet.down.weight.data[[0, 0, 0, 0]], before);
+}
+
+#[test]
+fn quantize_diffusion_rejects_unknown_mode() {
+    let mut model = Diffusion::new();
+    assert!(quantize_diffusion(&mut model, "bf16").is_err());
 }

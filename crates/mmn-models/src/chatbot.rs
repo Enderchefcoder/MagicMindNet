@@ -2027,6 +2027,12 @@ fn clamp_rgb_nchw(t: &Tensor) -> Result<Tensor> {
     Ok(Tensor::from_array(data, t.requires_grad))
 }
 
+fn latent_mask_weight(mask: &Tensor, flat_index: usize, spatial: usize) -> f32 {
+    let sy = (flat_index % spatial) / mask.shape[3];
+    let sx = (flat_index % spatial) % mask.shape[3];
+    mask.data[[0, 0, sy, sx]]
+}
+
 impl Diffusion {
     pub fn new() -> Self {
         Self {
@@ -2087,9 +2093,65 @@ impl Diffusion {
         Ok(z)
     }
 
+    /// Inpaint latent sampling: `mask` `[1,1,8,8]` — 1 = repaint, 0 = keep encoded `x` latent.
+    pub fn sample_latent_inpaint(
+        &self,
+        x: &Tensor,
+        mask: &Tensor,
+        steps: usize,
+        seed: Option<u64>,
+    ) -> Result<Tensor> {
+        let z0 = self.vae.encode(x)?;
+        let steps = steps.max(1);
+        let spatial = mask.shape[2] * mask.shape[3];
+        let mut rng = match seed {
+            Some(s) => rand::rngs::StdRng::seed_from_u64(s),
+            None => rand::rngs::StdRng::from_entropy(),
+        };
+        let mut z = Tensor::randn_rng(&mut rng, &z0.shape, false);
+        let z0_slice = z0.data.as_slice().unwrap();
+        let scale = 1.0f32 / steps as f32;
+        for t in (0..steps).rev() {
+            let pred = self.sample_step(&z, t)?;
+            let z_slice = z.data.as_slice().unwrap();
+            let p_slice = pred.data.as_slice().unwrap();
+            let next: Vec<f32> = z_slice
+                .iter()
+                .zip(p_slice.iter())
+                .enumerate()
+                .map(|(i, (&zi, &pi))| {
+                    let w = latent_mask_weight(mask, i, spatial);
+                    let denoised = zi - scale * pi;
+                    w * denoised + (1.0 - w) * z0_slice[i]
+                })
+                .collect();
+            z = Tensor::from_array(
+                ndarray::ArrayD::from_shape_vec(z.shape.clone(), next).map_err(|e| {
+                    mmn_core::MmnError::Shape {
+                        message: format!("sample_latent_inpaint reshape: {e}"),
+                    }
+                })?,
+                false,
+            );
+        }
+        Ok(z)
+    }
+
     /// Sample an RGB image tensor `[1, 3, 8, 8]` via latent diffusion + VAE decode.
     pub fn sample_image(&self, steps: usize, seed: Option<u64>) -> Result<Tensor> {
         let latent = self.sample_latent(steps, seed)?;
+        self.decode_latent(&latent)
+    }
+
+    /// Inpaint an RGB patch while preserving unmasked regions from `x`.
+    pub fn sample_image_inpaint(
+        &self,
+        x: &Tensor,
+        mask: &Tensor,
+        steps: usize,
+        seed: Option<u64>,
+    ) -> Result<Tensor> {
+        let latent = self.sample_latent_inpaint(x, mask, steps, seed)?;
         self.decode_latent(&latent)
     }
 
@@ -2176,6 +2238,30 @@ impl Diffusion {
             loss += diff * diff;
         }
         Ok(loss / n)
+    }
+
+    /// Mask-weighted MSE noise-prediction loss (eval only; comparable at fixed `(x, mask, t)`).
+    pub fn denoise_loss_masked(&self, x: &Tensor, mask: &Tensor, t: usize) -> Result<f32> {
+        let t_emb = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1]), t as f32),
+            false,
+        );
+        let latent = self.vae.encode(x)?;
+        let seed = denoise_loss_seed(x, t);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let noise = Tensor::randn_rng(&mut rng, &latent.shape, false);
+        let noisy = latent.add(&noise)?;
+        let pred = self.unet.forward(&noisy, &t_emb)?;
+        let spatial = mask.shape[2] * mask.shape[3];
+        let mut weight_sum = 0.0f32;
+        let mut loss = 0.0f32;
+        for (i, (&p, &n_)) in pred.data.iter().zip(noise.data.iter()).enumerate() {
+            let w = latent_mask_weight(mask, i, spatial);
+            let diff = p - n_;
+            loss += w * diff * diff;
+            weight_sum += w;
+        }
+        Ok(loss / weight_sum.max(1.0))
     }
 
     /// One DDPM-style denoise step; updates UNet conv weights via AdamW.
@@ -2313,6 +2399,54 @@ mod diffusion_tests {
                 .unwrap();
         }
         assert_ne!(d.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+    }
+
+    #[test]
+    fn denoise_loss_masked_is_finite() {
+        let d = Diffusion::new();
+        let x = Tensor::randn(&[1, 3, 8, 8], false);
+        let mask = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1, 1, 8, 8]), 0.5f32),
+            false,
+        );
+        let loss = d.denoise_loss_masked(&x, &mask, 3).unwrap();
+        assert!(loss.is_finite());
+    }
+
+    #[test]
+    fn sample_latent_inpaint_preserves_unmasked_region() {
+        let d = Diffusion::new();
+        let x = Tensor::randn(&[1, 3, 8, 8], false);
+        let mut mask_data = ndarray::ArrayD::<f32>::zeros(ndarray::IxDyn(&[1, 1, 8, 8]));
+        mask_data[[0, 0, 0, 0]] = 1.0;
+        let mask = Tensor::from_array(mask_data, false);
+        let z0 = d.vae.encode(&x).unwrap();
+        let z = d.sample_latent_inpaint(&x, &mask, 4, Some(99)).unwrap();
+        let z_slice = z.data.as_slice().unwrap();
+        let z0_slice = z0.data.as_slice().unwrap();
+        let spatial = mask.shape[2] * mask.shape[3];
+        for i in 0..z_slice.len() {
+            let w = latent_mask_weight(&mask, i, spatial);
+            if w < 1e-6 {
+                assert!(
+                    (z_slice[i] - z0_slice[i]).abs() < 1e-5,
+                    "unmasked latent idx {i} should match encode"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sample_image_inpaint_is_deterministic_with_seed() {
+        let d = Diffusion::new();
+        let x = Tensor::randn(&[1, 3, 8, 8], false);
+        let mask = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1, 1, 8, 8]), 1.0f32),
+            false,
+        );
+        let a = d.sample_image_inpaint(&x, &mask, 3, Some(5)).unwrap();
+        let b = d.sample_image_inpaint(&x, &mask, 3, Some(5)).unwrap();
+        assert_eq!(a.data.as_slice().unwrap(), b.data.as_slice().unwrap());
     }
 }
 
