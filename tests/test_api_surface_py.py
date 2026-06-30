@@ -57,6 +57,8 @@ def test_training_entrypoints_callable(fn_name: str):
         "quantize",
         "export_classifier",
         "import_classifier",
+        "export_diffusion",
+        "import_diffusion",
         "merge_classifier",
         "quantize_classifier",
         "limit",

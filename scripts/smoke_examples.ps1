@@ -106,6 +106,15 @@ Write-Host "== examples/corpus_benchmark rope =="
 Write-Host "== examples/diffusion_smoke =="
 & $PY examples/diffusion_smoke.py
 
+Write-Host "== examples/diffusion_train =="
+& $PY examples/diffusion_train.py
+
+Write-Host "== examples/diffusion_sample =="
+& $PY examples/diffusion_sample.py
+
+Write-Host "== examples/diffusion_roundtrip =="
+& $PY examples/diffusion_roundtrip.py
+
 Write-Host "== examples/vision_chatbot =="
 & $PY examples/vision_chatbot.py
 

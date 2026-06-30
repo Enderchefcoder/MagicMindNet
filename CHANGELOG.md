@@ -2,6 +2,13 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (diffusion sampling + checkpoint IO)
+- `VaeDecoder` + `Diffusion::sample_latent` / `sample_image` / `decode_latent` (seeded reverse-diffusion loop)
+- `export_diffusion` / `import_diffusion` (`mmn-diffusion-v1` JSON: VAE enc/dec + UNet conv weights)
+- Python `sample_rgb_patch`, `export_diffusion` / `import_diffusion` aliases; examples `diffusion_sample.py`, `diffusion_roundtrip.py`
+- Tests: `sample_latent_and_image_*`, `diffusion_export_import_*`, `test_diffusion_sample_io_py.py`, `test_train_diffusion_rejects_qa_dataset`
+- **292** Rust tests / **581** pytest (`verify_gate`)
+
 ### Added (vision-prefix KV slide + diffusion training)
 - RoPE KV-cache slide evicts oldest **text** row at `n_vision_prefix` (`slide_rope_kv_window_at`, `truncate_at`, `rerope_k_cache_shift_down_from`)
 - Vision + RoPE sliding-window generation parity past `max_seq_len` (`vision_sliding_window_past_max_ctx_*`); RoPE models honor `max_seq_len` as generation context

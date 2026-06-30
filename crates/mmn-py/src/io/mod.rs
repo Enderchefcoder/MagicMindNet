@@ -1,15 +1,15 @@
 use mmn_io::{
-    export_bin, export_classifier, export_hf_classifier_safetensors, export_hf_safetensors,
-    export_safetensors, import_bin, import_classifier, import_hf_classifier_safetensors,
-    import_hf_safetensors, import_safetensors, merge_classifiers, merge_models, quantize_classifier,
-    quantize_model, TokenizerSidecarRefs,
+    export_bin, export_classifier, export_diffusion, export_hf_classifier_safetensors,
+    export_hf_safetensors, export_safetensors, import_bin, import_classifier, import_diffusion,
+    import_hf_classifier_safetensors, import_hf_safetensors, import_safetensors, merge_classifiers,
+    merge_models, quantize_classifier, quantize_model, TokenizerSidecarRefs,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::path::Path;
 
 use crate::errors::mmn_err_to_py;
-use crate::models::{PyChatbot, PyClassifier};
+use crate::models::{PyChatbot, PyClassifier, PyDiffusion};
 use crate::tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
 
 fn bpe_sidecar_name(checkpoint_path: &str) -> String {
@@ -157,4 +157,24 @@ pub fn import_classifier_model(format: &str, files: Vec<String>) -> PyResult<PyC
 #[pyfunction]
 pub fn quantize_classifier_model(model: &mut PyClassifier, quant: &str) -> PyResult<()> {
     quantize_classifier(&mut model.inner, quant).map_err(mmn_err_to_py)
+}
+
+#[pyfunction]
+pub fn export_diffusion_model(model: &PyDiffusion, format: &str, path: &str) -> PyResult<()> {
+    match format {
+        "safetensors" => export_diffusion(&model.inner, path).map_err(mmn_err_to_py),
+        _ => Err(PyValueError::new_err(format!("Unknown format: {format}"))),
+    }
+}
+
+#[pyfunction]
+pub fn import_diffusion_model(format: &str, files: Vec<String>) -> PyResult<PyDiffusion> {
+    let path = files
+        .first()
+        .ok_or_else(|| PyValueError::new_err("files required"))?;
+    let m = match format {
+        "safetensors" => import_diffusion(path).map_err(mmn_err_to_py)?,
+        _ => return Err(PyValueError::new_err(format!("Unknown format: {format}"))),
+    };
+    Ok(PyDiffusion { inner: m })
 }

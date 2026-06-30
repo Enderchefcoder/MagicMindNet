@@ -32,8 +32,8 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Version | `__version__` |
 | Datasets | `DatasetQA`, `DatasetCorpus`, `DatasetClassification`, `DatasetImageGen`, `DatasetImageEdit` |
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
-| Training | `TrainConfig`, `Train`, `TrainClassifier`, `RL`, `SPIN` |
-| IO | `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier` |
+| Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
+| IO | `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion` |
 | Aliases | `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
 | Resource | `limit`, `limit_percent` |
 | Errors | `CPUError`, `CUDAError`, `DataMismatchError`, `DataMissingRowError`, `ModelMismatchError` |
@@ -192,6 +192,7 @@ ai.Train(chatbot, dataset_qa, cfg)
 ai.Train(chatbot, dataset_qa, cfg, bpe_encoder=bpe)  # optional BytePairEncoder
 ai.Train(chatbot, dataset_qa, cfg, unigram_encoder=uni)  # optional UnigramEncoder (not both)
 ai.TrainClassifier(classifier, dataset_cls, cfg)
+ai.TrainDiffusion(diffusion, dataset_image_gen, cfg)
 ai.RL(chatbot, dataset_qa, cfg, reward_amount=1.0, punishment_amount=0.5, rl_type="policy", bpe_encoder=bpe)
 ai.SPIN(chatbot, selfplay_epochs=2, dataset=dataset_qa, bpe_encoder=bpe)
 ```
@@ -228,8 +229,22 @@ Persist with `uni.save("tokenizer.mmn")` and `UnigramEncoder.load("tokenizer.mmn
 | `Train`, `Chatbot.compute_mean_loss` | `DatasetQA` or `DatasetCorpus` |
 | `RL`, `SPIN` | `DatasetQA` |
 | `TrainClassifier`, `Classifier.compute_mean_loss` | `DatasetClassification` |
+| `TrainDiffusion` | `DatasetImageGen` |
 
 Wrong dataset type → `DataMismatchError`. See [training_coverage.md](training_coverage.md).
+
+### Diffusion
+
+```python
+d = ai.Diffusion()
+ai.TrainDiffusion(d, dataset_image_gen, cfg)
+patch = d.sample_rgb_patch(steps=8, seed=42)  # 192 floats, 8×8×3 RGB
+loss = d.denoise_loss_on_image("photo.png", t=5)
+ai.export_diffusion(d, "safetensors", "diffusion.mmn")
+d2 = ai.import_diffusion("safetensors", ["diffusion.mmn"])
+```
+
+See `examples/diffusion_train.py`, `examples/diffusion_sample.py`, `examples/diffusion_roundtrip.py`.
 
 ---
 

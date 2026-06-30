@@ -67,3 +67,16 @@ def test_train_classifier_rejects_qa_dataset():
     cfg = ai.TrainConfig(epochs=1, learning_rate=0.05)
     with pytest.raises(ai.DataMismatchError):
         ai.TrainClassifier(clf, ds, cfg)
+
+
+def test_train_diffusion_rejects_qa_dataset():
+    fixtures = Path(__file__).parent / "fixtures"
+    ds = ai.DatasetQA(
+        file=str(fixtures / "qa_valid.json"),
+        user_row="input",
+        ai_row="output",
+    )
+    d = ai.Diffusion()
+    cfg = ai.TrainConfig(epochs=1)
+    with pytest.raises(ai.DataMismatchError):
+        ai.TrainDiffusion(d, ds, cfg)

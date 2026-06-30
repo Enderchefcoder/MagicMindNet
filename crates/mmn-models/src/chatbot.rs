@@ -2006,6 +2006,7 @@ mod classifier_tests {
 
 pub struct Diffusion {
     pub vae: mmn_nn::VaeEncoder,
+    pub vae_decoder: mmn_nn::VaeDecoder,
     pub unet: mmn_nn::UNet2D,
     pub latent_channels: usize,
 }
@@ -2022,6 +2023,7 @@ impl Diffusion {
     pub fn new() -> Self {
         Self {
             vae: mmn_nn::VaeEncoder::new(),
+            vae_decoder: mmn_nn::VaeDecoder::new(),
             unet: mmn_nn::UNet2D::new(),
             latent_channels: 4,
         }
@@ -2044,6 +2046,48 @@ impl Diffusion {
             false,
         );
         self.unet.forward(x, &t_emb)
+    }
+
+    /// Reverse DDPM-style latent sampling (foundation sampler, not full scheduler).
+    pub fn sample_latent(&self, steps: usize, seed: Option<u64>) -> Result<Tensor> {
+        let steps = steps.max(1);
+        let shape = vec![1, self.latent_channels, 8, 8];
+        let mut rng = match seed {
+            Some(s) => rand::rngs::StdRng::seed_from_u64(s),
+            None => rand::rngs::StdRng::from_entropy(),
+        };
+        let mut z = Tensor::randn_rng(&mut rng, &shape, false);
+        let scale = 1.0f32 / steps as f32;
+        for t in (0..steps).rev() {
+            let pred = self.sample_step(&z, t)?;
+            let z_slice = z.data.as_slice().unwrap();
+            let p_slice = pred.data.as_slice().unwrap();
+            let next: Vec<f32> = z_slice
+                .iter()
+                .zip(p_slice.iter())
+                .map(|(&zi, &pi)| zi - scale * pi)
+                .collect();
+            z = Tensor::from_array(
+                ndarray::ArrayD::from_shape_vec(z.shape.clone(), next).map_err(|e| {
+                    mmn_core::MmnError::Shape {
+                        message: format!("sample_latent reshape: {e}"),
+                    }
+                })?,
+                false,
+            );
+        }
+        Ok(z)
+    }
+
+    /// Sample an RGB image tensor `[1, 3, 8, 8]` via latent diffusion + VAE decode.
+    pub fn sample_image(&self, steps: usize, seed: Option<u64>) -> Result<Tensor> {
+        let latent = self.sample_latent(steps, seed)?;
+        self.vae_decoder.decode(&latent)
+    }
+
+    /// Decode a latent tensor to RGB NCHW `[1, 3, 8, 8]`.
+    pub fn decode_latent(&self, latent: &Tensor) -> Result<Tensor> {
+        self.vae_decoder.decode(latent)
     }
 
     /// MSE between UNet noise prediction and sampled Gaussian noise (eval only).
@@ -2151,6 +2195,25 @@ mod diffusion_tests {
             after <= before || last <= before,
             "denoise loss should not increase sharply: before={before} after={after} last={last}"
         );
+    }
+
+    #[test]
+    fn sample_latent_and_image_are_finite() {
+        let d = Diffusion::new();
+        let z = d.sample_latent(4, Some(99)).unwrap();
+        assert_eq!(z.shape, vec![1, 4, 8, 8]);
+        assert!(z.data.iter().all(|v| v.is_finite()));
+        let img = d.sample_image(4, Some(99)).unwrap();
+        assert_eq!(img.shape, vec![1, 3, 8, 8]);
+        assert!(img.data.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn sample_image_is_deterministic_with_seed() {
+        let d = Diffusion::new();
+        let a = d.sample_image(3, Some(7)).unwrap();
+        let b = d.sample_image(3, Some(7)).unwrap();
+        assert_eq!(a.data.as_slice().unwrap(), b.data.as_slice().unwrap());
     }
 }
 

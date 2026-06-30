@@ -34,7 +34,9 @@ from magicmindnet._native import (
     UnigramEncoder,
     export,
     export_classifier_model,
+    export_diffusion_model,
     import_classifier_model,
+    import_diffusion_model,
     import_model,
     limit,
     limit_percent,
@@ -60,6 +62,8 @@ from magicmindnet.vision import (
 export_classifier = export_classifier_model
 import_classifier = import_classifier_model
 quantize_classifier = quantize_classifier_model
+export_diffusion = export_diffusion_model
+import_diffusion = import_diffusion_model
 
 __all__ = [
     "__version__",
@@ -87,8 +91,12 @@ __all__ = [
     "export",
     "export_classifier",
     "export_classifier_model",
+    "export_diffusion",
+    "export_diffusion_model",
     "import_classifier",
     "import_classifier_model",
+    "import_diffusion",
+    "import_diffusion_model",
     "import_model",
     "limit",
     "limit_percent",

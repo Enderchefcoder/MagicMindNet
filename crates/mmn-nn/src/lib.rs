@@ -2132,6 +2132,24 @@ impl VaeEncoder {
     }
 }
 
+pub struct VaeDecoder {
+    pub conv1: Conv2d,
+    pub conv2: Conv2d,
+}
+
+impl VaeDecoder {
+    pub fn new() -> Self {
+        Self {
+            conv1: Conv2d::new(4, 64, 3),
+            conv2: Conv2d::new(64, 3, 3),
+        }
+    }
+
+    pub fn decode(&self, z: &Tensor) -> Result<Tensor> {
+        self.conv2.forward(&self.conv1.forward(z)?)
+    }
+}
+
 pub struct UNet2D {
     pub down: Conv2d,
     pub mid: Conv2d,

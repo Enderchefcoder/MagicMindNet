@@ -53,4 +53,20 @@ impl PyDiffusion {
         let x = mmn_data::rgb_nchw_tensor_from_image_path(Path::new(&path)).map_err(mmn_err_to_py)?;
         self.inner.denoise_loss(&x, t).map_err(mmn_err_to_py)
     }
+
+    /// Reverse-diffusion sample as a flat 8×8×3 RGB patch (192 floats, `[0,1]`).
+    #[pyo3(signature = (steps=8, seed=None))]
+    fn sample_rgb_patch(&self, steps: usize, seed: Option<u64>) -> PyResult<Vec<f32>> {
+        let img = self.inner.sample_image(steps, seed).map_err(mmn_err_to_py)?;
+        let plane = mmn_data::VISION_PATCH_DIM;
+        let mut flat = vec![0.0f32; mmn_data::VISION_RGB_DIM];
+        for c in 0..mmn_data::VISION_RGB_CHANNELS {
+            for i in 0..plane {
+                let y = i / mmn_data::VISION_RGB_SPATIAL;
+                let x = i % mmn_data::VISION_RGB_SPATIAL;
+                flat[c * plane + i] = img.data[[0, c, y, x]];
+            }
+        }
+        Ok(flat)
+    }
 }
