@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mmn-core",
+    "crates/mmn-ops",
+    "crates/mmn-cuda",
+    "crates/mmn-optim",
+    "crates/mmn-data",
+    "crates/mmn-nn",
+    "crates/mmn-models",
+    "crates/mmn-train",
+    "crates/mmn-io",
+    "crates/mmn-resource",
+    "crates/mmn-py",
+]
+default-members = [
+    "crates/mmn-core",
+    "crates/mmn-ops",
+    "crates/mmn-optim",
+    "crates/mmn-data",
+    "crates/mmn-nn",
+    "crates/mmn-models",
+    "crates/mmn-train",
+    "crates/mmn-io",
+    "crates/mmn-resource",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["MagicMindNet Contributors"]
+repository = "https://github.com/magicmindnet/magicmindnet"
+
+[workspace.dependencies]
+mmn-core = { path = "crates/mmn-core" }
+mmn-ops = { path = "crates/mmn-ops" }
+mmn-cuda = { path = "crates/mmn-cuda" }
+mmn-optim = { path = "crates/mmn-optim" }
+mmn-data = { path = "crates/mmn-data" }
+mmn-nn = { path = "crates/mmn-nn" }
+mmn-models = { path = "crates/mmn-models" }
+mmn-train = { path = "crates/mmn-train" }
+mmn-io = { path = "crates/mmn-io" }
+mmn-resource = { path = "crates/mmn-resource" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ndarray = { version = "0.16", features = ["rayon"] }
+rayon = "1"
+rand = "0.8"
+half = "2"
+pyo3 = { version = "0.23", features = ["extension-module"] }

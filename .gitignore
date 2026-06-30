@@ -1,0 +1,15 @@
+/target/
+/dist/
+*.egg-info/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.pyo
+.DS_Store
+examples/_roundtrip_*.mmn
+examples/_tmp_labels.json
+user_saved/

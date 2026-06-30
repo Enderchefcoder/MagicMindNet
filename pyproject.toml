@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "magicmindnet"
+version = "0.1.0"
+description = "High-level Python AI library with a from-scratch Rust core"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+]
+dependencies = []
+
+[project.optional-dependencies]
+cuda = []
+dev = ["pytest>=8.0", "maturin>=1.7", "ruff>=0.9"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["python", "tests", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.maturin]
+manifest-path = "crates/mmn-py/Cargo.toml"
+module-name = "magicmindnet._native"
+python-source = "python"
+features = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["python"]

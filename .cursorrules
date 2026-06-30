@@ -1,0 +1,145 @@
+# Lessons
+
+## User Specified Lessons
+
+- Use `maturin develop` for local Python extension builds on Windows (PowerShell: `;` not `&&`).
+- mmn-core must not depend on mmn-cuda (avoid cyclic deps); CUDA checks go through `mmn_cuda::is_available()` from train/py layers.
+- Do not add `[dependency-groups]` to pyproject until pip supports `pip install --group` (maturin develop failed with exit 2 on this machine); use `[project.optional-dependencies] dev` + `pip install -e ".[dev]"`.
+- mmn-io import must fail on missing required tensors / incomplete meta — never silently skip missing checkpoint keys (partial load mixes random init weights).
+- Safetensors import requires full meta: `vocab_size`, `n_layer`, `d_model` — no silent fallbacks from caller args or defaults.
+- `Linear` weight layout is `[out_features, in_features]`; validate checkpoint shapes accordingly (lm_head `[vocab, d_model]`, classifier backbone `[128, input_dim]`, head `[num_labels, 128]`, block attn `[d_model, d_model]`, ffn `[ffn_dim, d_model]`, ffn2 `[d_model, ffn_dim]`).
+- When tampering checkpoint tensor `shape` in tests, keep element count equal to data length so import reaches `expect_tensor_shape` (otherwise `tensor data length mismatch` fires first).
+- Muon `newton_schulz5` must use Keller Jordan iteration (`A = X@Xᵀ`, `X = a*X + (b*A + c*A²)@X`); the old `XᵀX` + ad-hoc coeffs produced all-zero updates so hybrid training never moved matrix weights.
+- PowerShell `Join-Path` accepts only two path segments on Windows PS 5.x — nest calls or use string paths for `.venv\Scripts\python.exe`.
+- CI scripts should resolve `.venv` Python via `scripts/venv_python.ps1` so `verify_gate` works without manual venv activation.
+- `mmn-train` can use `mmn-io` as a **dev-dependency** for train→export→import integration tests without creating a cyclic dep (`mmn-io` does not depend on `mmn-train`).
+
+# Scratchpad
+
+## Task: MagicMindNet full plan implementation
+
+[X] M0 Bootstrap — workspace, pyproject, CI, agents, docs
+[X] M1 mmn-core tensor/autograd
+[X] M2 AdamW + Muon + hybrid
+[X] M3 Datasets + ChatXML
+[X] M4 Chatbot + autoset + Train
+[X] M5 Classifier + vision flag
+[X] M6 export/import/merge/quantize/limit
+[X] M7 RL + SPIN
+[X] M8-M9 Diffusion VAE/UNet foundation
+[X] M10 pytest + deepreview report
+[X] Continue pass — softmax row fix, classifier probs, 18 pytest + 11 Rust tests
+
+## Task: /deepreview continue
+[X] Fix softmax [1,C] bug
+[X] Restore classifier + CE grad tests
+[X] Verify cargo + pytest green
+[X] Pass 2 — IO meta roundtrip, test_io.py, CHANGELOG, PyO3 get_type
+[X] Pass 3 — LayerNorm, lm_head IO, limitations.md, quickstart test, io subagent
+[X] Pass 4 — full block linear IO, loss roundtrip test, CONTRIBUTING, train subagent
+[X] Pass 5 — LayerNorm IO, Classifier.from_classification, limit tests, 25 Rust + 25 pytest
+[X] Pass 6 — real last-block FFN backward, gelu_backward, training.md, limit_percent, classify subagent
+[X] Pass 7 — TrainClassifier, classifier CE backward, 29 Rust + 26 pytest
+[X] Pass 8 — classifier IO mmn-classifier-v1, export/import tests, classification example
+[X] Pass 9 — all-block FFN backward, docs/checkpoints.md, wrong-format IO tests
+[X] Pass 10 — embedding_backward + embed optim in train_step_lm; Train() DataMismatchError; 33 Rust + 30 pytest
+[X] Pass 11 — compute_loss APIs, unique_labels, RL/SPIN mismatch, loss tests
+[X] Pass 12 — align_qa_token_pairs, compute_mean_loss, export loss roundtrip, ci_local.ps1
+[X] Pass 13 — seed, merge_classifier, RL target fix, 36+ Rust / 42+ pytest
+[X] Pass 14 — Classifier seed, TrainConfig getters, testing.md, classification_benchmark
+[X] Pass 15 — Classifier.compute_mean_loss, TrainConfig setters, ci_local
+[X] Pass 16 — Chatbot mean-loss mismatch, TrainConfig repr, classifier shuffle
+[X] Pass 17 — LM batch_size gradient accumulation, test_train_batch_size
+[X] Pass 18 — Chatbot/Classifier repr, ruff + lint.ps1, magicmindnet-ci, repr tests
+[X] Pass 19 — TrainClassifier batch_size accumulation, CI ruff, export seed test
+[X] Pass 20 — checkpoint meta.seed, init_seed getters, DatasetQA repr
+[X] Pass 21 — DatasetClassification repr, merge init_seed, pre-commit, docs agent
+[X] Pass 22 — merge Chatbot init_seed, Chatbot/Corpus repr, README tests section
+[X] Pass 23 — ImageGen/ImageEdit repr, TrainClassifier CUDA test, count_tests.ps1, checkpoint_roundtrip example
+[X] Pass 24 — Diffusion repr/latent_channels, image format getters, RL CUDA test, classifier_roundtrip, version test, examples agent
+[X] Pass 25 — import format guard, quantize_classifier tests, smoke_examples in ci_local
+[X] Pass 26 — export format errors, int4 quantize tests, QA format_sample, GHA roundtrips (no dependency-groups: breaks maturin on pip without --group)
+[X] Pass 27 — bin format guard, bin IO tests, unknown label, autoset tests, eval_mean_loss smoke
+[X] Pass 28 — Classifier.input_dim getter, seed/empty-import tests, eval_mean_loss cls in CI/smoke/GHA
+[X] Pass 29 — Chatbot shape getters, Classifier.num_labels, merge input_dim test, docs/testing
+[X] Pass 30 — bin/vision/autoset getter tests, classifier meta roundtrip, GHA quickstart, gate agent
+[X] Pass 31 — quantize unknown mode, dataset rows tests, shape roundtrip/merge, verify_gate.ps1
+[X] Pass 32 — predict probs, TrainConfig defaults, package getters, merge meta, limit no-suffix
+[X] Pass 33 — public IO surface tests, tokenizer/latent_channels/num_labels ctor, verify_gate.sh, docs
+[X] Pass 34 — layer_size/vision/repr/__all__ tests, ci_local.sh + count_tests.sh + smoke_examples.sh, GHA counts
+[X] Pass 35 — exceptions/corpus/SPIN/merge params/export file tests, lint.sh, GHA smoke_examples
+[X] Pass 36 — Train/RL/merge callables, init_seed/vision/mean-loss tests, classifier nested export
+[X] Pass 37 — autoset sub-1B/seed, classifier loss finite, bin nested export, IO aliases, merge vocab fix
+[X] Pass 38 — sub-10B, merge vocab test, quantize getters, nested clf import, mismatch messages, docs
+[X] Pass 39 — import strictness (no partial load), corrupt checkpoint tests, classifier IO gaps, API docs
+[X] Pass 40 — shape validation on import, classifier meta strict, corpus_batch_size getter, pytest mirror tests
+[X] Pass 41 — vocab_size meta required, invalid/empty import tests, missing head, bin defaults, corpus row batch
+[X] Pass 42 — block shape validation, classifier corrupt files, corpus fixed batch, int4 weight test, docs
+[X] Pass 43 — ffn/ln import tests, d_model meta, lm_head shape, first-path-only, quantize parity
+[X] Pass 44 — merge block/head averaging, ffn2 shape, int8 head quantize, checkpoint-strict agent
+[X] Pass 45 — embed/lm_head merge, attn.k/ln2/lm_head import strict, int8 block ffn
+[X] Pass 46 — attn.v/out import strict, merge lm_head/backbone pytest, int8 attn.v quantize
+[X] Pass 47 — ln beta import strict, merge attn k/v/out, int8 attn.out + int4 attn.v quantize
+[X] Pass 48 — missing attn.q/ffn2 import, merge ffn/ffn2/ln1.gamma, int8 attn.k + int4 attn.out/ffn2
+[X] Pass 49 — missing attn.k/ln1.gamma import, merge ln beta/gamma, int8 attn.q/ffn2 + int4 attn.k/q
+[X] Pass 50 — IO matrix 100% coverage doc + parametric tests, massive README
+[X] Pass 51 — classifier IO matrix, multi-block n_layer=2 tests, quickstart venv fix
+[X] Pass 52 — RL weight change tests, multi-block train + post-import train, training_coverage.md
+[X] Pass 53 — dataset coverage matrix, jsonl/auto-tag/corpus sort tests, ChatXML cot
+[X] Pass 54 — expanded API.md, examples/README + rl_spin, API surface tests, smoke examples
+[X] Pass 55 — Muon NS bugfix, optimizers_coverage.md, optim/autograd tests, optimizer integration pytest
+[X] Pass 56 — conftest harness, classifier edge cases, classification_benchmark smoke, classifier_coverage.md
+[X] Pass 57 — corpus Train LM path, diffusion smoke, mmn-io checkpoint_util split, corpus/diffusion examples
+[X] Pass 58 — block_tensors split, RL modes, image fixtures/coverage, diffusion dataset validation tests
+[X] Pass 59 — vision path, LN quantize gaps, training docs, punish_only pytest, verify_gate
+[X] Pass 60 — eval_mean_loss corpus, mmn-io split, conftest example smokes, verify_gate
+[X] Pass 61 — chatbot_io split, eval_mean_loss --train, GHA corpus smoke, verify_gate
+[X] Pass 62 — io_tests split, examples_coverage, attention docs, verify_gate
+[X] Pass 63 — layernorm scope, mmn-nn attention tests, CONTRIBUTING links, verify_gate
+[X] Pass 64 — testing.md index, AGENTS links, frozen attn/LN pytest, verify_gate
+[X] Pass 65 — venv_python scripts, classification smoke, RL attn frozen pytest, verify_gate
+[X] Pass 66 — RL LN frozen, SPIN attn frozen, CONTRIBUTING venv docs, verify_gate
+[X] Pass 67 — SPIN LN frozen, verify_gate.sh venv, limitations roadmap, verify_gate
+[X] Pass 68 — conftest checkpoint helpers, limitations index, attention roadmap, verify_gate
+[X] Pass 69 — conftest DRY IO tests, project_python parity, nn_coverage link, verify_gate
+[X] Pass 70 — checkpoint_coverage helpers, mmn-py split plan, load_checkpoint DRY, verify_gate
+[X] Pass 71 — mmn-py errors.rs split, verify_gate
+[X] Pass 72 — mmn-py train_config + resource split, verify_gate
+[X] Pass 73 — datasets/qa + models/diffusion split, verify_gate
+[X] Pass 74 — datasets/corpus.rs split, verify_gate
+[X] Pass 75 — datasets/classification + image split, verify_gate
+[X] Pass 76 — models/chatbot.rs split, verify_gate
+[X] Pass 77 — models/classifier.rs split, verify_gate
+[X] Pass 78 — train/ + io/ split; lib.rs ~58 lines, verify_gate
+[X] Pass 79 — mmn_py_coverage doc + bindings pytest (429), verify_gate
+[X] Pass 80 — scaled dot-product attn forward, 174 Rust tests, verify_gate
+[X] Pass 81 — attention backward + train_step attn updates, 175 Rust tests, verify_gate
+[X] Pass 82 — LayerNorm backward + train_step LN updates, 176 Rust tests, verify_gate
+[X] Pass 83 — FFN residual fix + backward audit tests, 179 Rust tests, verify_gate
+[X] Pass 84 — causal attn + test rename + vision roadmap, 181 Rust / 430 pytest, verify_gate
+[X] Pass 85 — sinusoidal PE + causal getter + classifier encoder docs, 186 Rust / 432 pytest, verify_gate
+[X] Pass 86 — learned pos_embed opt-in; IO/bindings smoke, 189 Rust / 434 pytest, verify_gate
+[X] Pass 87 — merge/quantize learned pos_embed tests; Train() updates pos_embed pytest, 193 Rust / 437 pytest, verify_gate
+[X] Pass 88 — RL frozen / SPIN updates learned pos_embed; parameters() + shape import tests, 195 Rust / 440 pytest, verify_gate
+[X] Pass 89 — bin PE meta roundtrip; API.md + max_seq_len guard tests, 197 Rust / 442 pytest, verify_gate
+[X] Pass 90 — learned PE mean-loss train test; limitations.md PE/bin notes, 197 Rust / 443 pytest, verify_gate
+[X] Pass 91 — corpus Train + learned PE; vision_coverage bin PE; training.md fix, 199 Rust / 445 pytest, verify_gate
+[X] Pass 92 — post-import corpus/QA train learned PE; training_coverage PE rows, 199 Rust / 447 pytest, verify_gate
+[X] Pass 93 — quantize learned PE loss tolerance; checkpoint_coverage PE section, 201 Rust / 450 pytest, verify_gate
+[X] Pass 94 — pos_embed IO checkpoint matrix + export loss roundtrip, 201 Rust / 456 pytest, verify_gate
+[X] Pass 95 — import loss learned PE Rust; learned_pos_embed_roundtrip example + smoke, 202 Rust / 456 pytest, verify_gate
+[X] Pass 96 — pytest smoke learned_pos_embed_roundtrip; API.md example link, 202 Rust / 457 pytest, verify_gate
+[X] Pass 97 — README learned PE example row; position_encoding_coverage pytest smoke row
+[X] Pass 98 — corpus_benchmark --learned-pe + pytest/smoke, 202 Rust / 458 pytest, verify_gate
+[X] Pass 99 — eval_mean_loss --learned-pe QA/corpus + pytest, 202 Rust / 460 pytest, verify_gate
+[X] Pass 100 — eval_mean_loss --train --learned-pe pytest; training_coverage.md, 202 Rust / 462 pytest, verify_gate
+[X] Pass 101 — benchmark_train --learned-pe + pytest/smoke, 202 Rust / 463 pytest, verify_gate
+[X] Pass 102 — export after train learned PE pytest; checkpoint_coverage, 202 Rust / 464 pytest, verify_gate
+[X] Pass 103 — API.md / examples_coverage flag docs; README 464
+[X] Pass 104 — learned_pos_embed_roundtrip --train + pytest/smoke, 202 Rust / 465 pytest, verify_gate
+[X] Pass 105 — Rust train→export learned PE; mmn-io dev-dep, 203 Rust / 465 pytest, verify_gate
+[X] Pass 106 — Rust corpus train→export learned PE, 204 Rust / 465 pytest, verify_gate
+[X] Pass 107 — quantize int8 after train learned PE pytest, 204 Rust / 466 pytest, verify_gate
+[X] Pass 108 — int4 quantize-after-train + merge trained learned PE, 204 Rust / 468 pytest, verify_gate
+[X] Pass 109 — quickstart --learned-pe + Rust quantize-after-train, 205 Rust / 469 pytest, verify_gate
+[ ] Pass 110 — examples/README quickstart flag; training_coverage quickstart row
