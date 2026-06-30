@@ -1,4 +1,0 @@
-[Cursor] Add vision patch prefix encoder with train, IO, and Python bindings
-
-Vision Chatbot models now project a 64-float patch row before text embeddings,
-with backward pass, QA training, safetensors roundtrip, and compute_loss support.
