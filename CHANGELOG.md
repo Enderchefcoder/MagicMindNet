@@ -37,6 +37,13 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Added (vision patch encoder)
+- `Chatbot(vision=True)` linear patch prefix projector (`VISION_PATCH_DIM=64`): prepends projected 8×8 patch row before text embeddings in forward/train
+- `forward_hidden_with_patches`, `loss_on_batch_with_patches`, QA `Train` auto-uses `vision_patch_from_text(input)`
+- Safetensors `vision_patch_proj` tensor + meta `vision_patch_dim`; merge/quantize support
+- Python: `has_vision_patch_encoder`, `vision_patch_dim`, `compute_loss(..., image_patch=)`, `ai.vision_patch_from_text`
+- `tests/test_vision_patch_encoder_py.py`; updated `docs/vision_coverage.md`
+
 ### Added (pass 116)
 - `RL(..., bpe_encoder=)` and `SPIN(..., bpe_encoder=)` via `rl_with_bpe` / `spin_with_bpe`
 - `examples/rl_spin.py --bpe`; pytest `test_rl_and_spin_with_bpe_encoder_smoke`

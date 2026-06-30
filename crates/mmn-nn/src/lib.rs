@@ -47,6 +47,55 @@ pub fn sinusoidal_position_encoding(seq_len: usize, d_model: usize) -> Tensor {
     )
 }
 
+/// Concatenate two `[rows, d_model]` tensors along the sequence (row) axis.
+pub fn concat_sequence_rows(top: &Tensor, bottom: &Tensor) -> Result<Tensor> {
+    if top.shape.len() != 2 || bottom.shape.len() != 2 {
+        return Err(MmnError::Shape {
+            message: "concat_sequence_rows expects [rows, d_model] tensors".into(),
+        });
+    }
+    let d_model = top.shape[1];
+    if bottom.shape[1] != d_model {
+        return Err(MmnError::Shape {
+            message: format!(
+                "concat_sequence_rows d_model mismatch: {} vs {}",
+                d_model, bottom.shape[1]
+            ),
+        });
+    }
+    let rows = top.shape[0] + bottom.shape[0];
+    let mut data = vec![0.0f32; rows * d_model];
+    let top_v = top
+        .data
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    let bottom_v = bottom
+        .data
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    for r in 0..top.shape[0] {
+        for c in 0..d_model {
+            data[r * d_model + c] = top_v[[r, c]];
+        }
+    }
+    let off = top.shape[0] * d_model;
+    for r in 0..bottom.shape[0] {
+        for c in 0..d_model {
+            data[off + r * d_model + c] = bottom_v[[r, c]];
+        }
+    }
+    Ok(Tensor::from_array(
+        ArrayD::from_shape_vec(IxDyn(&[rows, d_model]), data).unwrap(),
+        top.requires_grad || bottom.requires_grad,
+    ))
+}
+
 /// Add sinusoidal PE to `[seq_len, d_model]` activations (in-place on a new tensor).
 pub fn add_sinusoidal_position_encoding(x: &Tensor) -> Result<Tensor> {
     if x.shape.len() != 2 {

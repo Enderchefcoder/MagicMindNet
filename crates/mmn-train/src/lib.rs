@@ -1,6 +1,9 @@
 use mmn_core::{enable_grad, Device, Result};
 use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA};
-use mmn_models::{validate_dataset_for_classifier, Chatbot, Classifier};
+use mmn_models::{
+    targets_with_vision_prefix, validate_dataset_for_classifier, vision_patch_from_text, Chatbot,
+    Classifier,
+};
 use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
 use rand::Rng;
 
@@ -77,6 +80,14 @@ pub fn mean_qa_loss(model: &Chatbot, dataset: &DatasetQA) -> Result<f32> {
     mean_qa_loss_with_bpe(model, dataset, None)
 }
 
+fn vision_patches_from_input(model: &Chatbot, input: &str) -> Option<Vec<Vec<f32>>> {
+    if model.has_vision_patch_encoder() {
+        Some(vec![vision_patch_from_text(input)])
+    } else {
+        None
+    }
+}
+
 pub fn mean_qa_loss_with_bpe(
     model: &Chatbot,
     dataset: &DatasetQA,
@@ -89,7 +100,14 @@ pub fn mean_qa_loss_with_bpe(
         let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
         let mut targets = tokenize_lm(&sample.output, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
-        total += model.loss_on_batch(&tokens, &targets)?;
+        let patches = vision_patches_from_input(model, &sample.input);
+        let loss = if let Some(ref patch_list) = patches {
+            let padded = targets_with_vision_prefix(&targets, patch_list.len(), vocab);
+            model.loss_on_batch_with_patches(&tokens, &padded, Some(patch_list))?
+        } else {
+            model.loss_on_batch(&tokens, &targets)?
+        };
+        total += loss;
         count += 1;
     }
     Ok(if count > 0 {
@@ -197,6 +215,7 @@ pub fn train_corpus_with_bpe(
                     use_hybrid,
                     &mut param_id,
                     None,
+                    None,
                 )?;
             } else {
                 micro += 1;
@@ -208,6 +227,7 @@ pub fn train_corpus_with_bpe(
                     use_hybrid,
                     &mut param_id,
                     Some(&mut accum),
+                    None,
                 )?;
                 let flush = micro >= batch_size || i + 1 == indices.len();
                 if flush {
@@ -282,6 +302,12 @@ pub fn train_with_bpe(
             let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
             let mut targets = tokenize_lm(&sample.output, vocab, bpe);
             align_qa_token_pairs(&mut tokens, &mut targets);
+            let patch_list = vision_patches_from_input(model, &sample.input);
+            let targets = if let Some(ref pl) = patch_list {
+                targets_with_vision_prefix(&targets, pl.len(), vocab)
+            } else {
+                targets
+            };
             if batch_size == 1 {
                 model.train_step_lm(
                     &tokens,
@@ -291,6 +317,7 @@ pub fn train_with_bpe(
                     use_hybrid,
                     &mut param_id,
                     None,
+                    patch_list.as_deref(),
                 )?;
             } else {
                 micro += 1;
@@ -302,6 +329,7 @@ pub fn train_with_bpe(
                     use_hybrid,
                     &mut param_id,
                     Some(&mut accum),
+                    patch_list.as_deref(),
                 )?;
                 let flush = micro >= batch_size || i + 1 == indices.len();
                 if flush {

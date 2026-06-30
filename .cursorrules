@@ -151,3 +151,4 @@
 [X] Pass 115 — eval_mean_loss --bpe/--bpe-file + quickstart --bpe; 213 Rust / 484 pytest
 [X] Pass 116 — RL/SPIN optional bpe_encoder; 213 Rust / 485 pytest
 [X] Pass 117 — export BPE sidecar + load_bpe_sidecar; 214 Rust / 489 pytest
+[X] Pass 118 — vision patch prefix encoder forward/train/IO; 217 Rust / 496 pytest

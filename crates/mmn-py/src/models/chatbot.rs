@@ -2,6 +2,7 @@ use mmn_models::Chatbot;
 use mmn_train::{
     align_qa_token_pairs, mean_corpus_loss_with_bpe, mean_qa_loss_with_bpe, tokenize_lm,
 };
+use mmn_models::{targets_with_vision_prefix, vision_patch_from_text};
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
@@ -62,6 +63,16 @@ impl PyChatbot {
     }
 
     #[getter]
+    fn has_vision_patch_encoder(&self) -> bool {
+        self.inner.has_vision_patch_encoder()
+    }
+
+    #[getter]
+    fn vision_patch_dim(&self) -> usize {
+        self.inner.vision_patch_dim()
+    }
+
+    #[getter]
     fn uses_causal_attention(&self) -> bool {
         self.inner.uses_causal_attention()
     }
@@ -119,18 +130,44 @@ impl PyChatbot {
     }
 
     /// Mean cross-entropy for tokenized `input` → `target` (same tokenization as `Train`).
-    #[pyo3(signature = (input, target, bpe_encoder=None))]
+    #[pyo3(signature = (input, target, bpe_encoder=None, image_patch=None))]
     fn compute_loss(
         &self,
         input: &str,
         target: &str,
         bpe_encoder: Option<&PyBytePairEncoder>,
+        image_patch: Option<Vec<f32>>,
     ) -> PyResult<f32> {
         let vocab = self.inner.shape.vocab_size;
         let bpe = bpe_encoder.map(|e| &e.inner);
         let mut tokens = tokenize_lm(input, vocab, bpe);
         let mut targets = tokenize_lm(target, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
+        if self.inner.has_vision_patch_encoder() {
+            let patch = if let Some(p) = image_patch {
+                if p.len() != self.inner.vision_patch_dim() {
+                    return Err(PyErr::new::<DataMismatchError, _>(format!(
+                        "image_patch length {} != vision_patch_dim {}.\nFix: Pass a flat {}-float patch.\nExplanation: Vision Chatbot expects an 8×8 grayscale patch.",
+                        p.len(),
+                        self.inner.vision_patch_dim(),
+                        self.inner.vision_patch_dim(),
+                    )));
+                }
+                p
+            } else {
+                vision_patch_from_text(input)
+            };
+            let padded = targets_with_vision_prefix(&targets, 1, vocab);
+            return self
+                .inner
+                .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch]))
+                .map_err(mmn_err_to_py);
+        }
+        if image_patch.is_some() {
+            return Err(PyErr::new::<DataMismatchError, _>(
+                "image_patch requires Chatbot(vision=True).\nFix: Construct Chatbot with vision=True or omit image_patch.\nExplanation: Only vision chatbots accept image patches.".to_string(),
+            ));
+        }
         self.inner
             .loss_on_batch(&tokens, &targets)
             .map_err(mmn_err_to_py)

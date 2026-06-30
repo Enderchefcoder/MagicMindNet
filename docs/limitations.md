@@ -11,7 +11,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 - RL/SPIN use heuristic rewards, not environment rollouts.
 - `TrainConfig.batch_size` on `Train()` and `TrainClassifier()` accumulates gradients over that many micro-batches (QA rows, corpus rows, or labeled classification rows) before one optimizer step (`batch_size=1` applies each step immediately).
 - `Train()` accepts `DatasetQA` (aligned input→output) or `DatasetCorpus` (next-token LM on each row).
-- `Chatbot(vision=True)` is checkpoint metadata only — no image encoder forward path yet (see [vision_coverage.md](vision_coverage.md)).
+- `Chatbot(vision=True)` includes a linear 8×8 patch prefix encoder (see [vision_coverage.md](vision_coverage.md)); real RGB / cross-attn not implemented yet.
 
 ## IO
 
@@ -40,7 +40,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 | Scaled dot-product attention backward | [attention_coverage.md](attention_coverage.md) | ~~done pass 81~~ |
 | LayerNorm γ/β training | [layernorm_coverage.md](layernorm_coverage.md) | ~~done pass 82~~ |
 | Production tokenizer | this doc § Training | ~~BPE trainer + Python binding + Train(bpe_encoder=) + `mmn-bpe-v1` save/load~~; SentencePiece-scale vocab next |
-| Vision encoder | [vision_coverage.md](vision_coverage.md) | Image → patch embed forward path |
+| Vision encoder | [vision_coverage.md](vision_coverage.md) | RGB conv patch embed + cross-attn |
 | HF binary safetensors | this doc § IO | Optional interchange format |
 
 See also [optimizers_coverage.md](optimizers_coverage.md) (Muon matrix routing) and [training_coverage.md](training_coverage.md).

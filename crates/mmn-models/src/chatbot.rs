@@ -8,6 +8,29 @@ use std::collections::HashMap;
 /// Default maximum sequence length for learned position embeddings.
 pub const DEFAULT_MAX_SEQ_LEN: usize = 512;
 
+/// Flat 8×8 grayscale patch size for the vision prefix projector.
+pub const VISION_PATCH_DIM: usize = 64;
+
+/// Build a normalized demo patch from UTF-8 bytes (pads with zeros).
+pub fn vision_patch_from_text(text: &str) -> Vec<f32> {
+    let mut v = vec![0.0f32; VISION_PATCH_DIM];
+    for (i, b) in text.bytes().enumerate().take(VISION_PATCH_DIM) {
+        v[i] = b as f32 / 255.0;
+    }
+    v
+}
+
+/// Prepend ignored CE targets for `n_patches` vision prefix rows (`target == vocab_size` skips loss).
+pub fn targets_with_vision_prefix(
+    targets: &[usize],
+    n_patches: usize,
+    vocab_size: usize,
+) -> Vec<usize> {
+    let mut out = vec![vocab_size; n_patches];
+    out.extend_from_slice(targets);
+    out
+}
+
 pub struct Chatbot {
     pub shape: ModelShape,
     pub embed: Embedding,
@@ -15,6 +38,8 @@ pub struct Chatbot {
     pub lm_head: Linear,
     pub tokenizer: String,
     pub vision: bool,
+    /// Linear patch projector (`vision=true`): `[VISION_PATCH_DIM] → d_model`.
+    pub vision_patch_proj: Option<Linear>,
     pub device: Device,
     /// RNG seed used at construction (`None` = non-deterministic init).
     pub init_seed: Option<u64>,
@@ -207,6 +232,15 @@ impl Chatbot {
         } else {
             None
         };
+        let vision_patch_proj = if vision {
+            Some(Linear::new_rng(
+                VISION_PATCH_DIM,
+                shape.d_model,
+                &mut rng,
+            ))
+        } else {
+            None
+        };
         Self {
             embed: Embedding::new_rng(shape.vocab_size, shape.d_model, &mut rng),
             blocks,
@@ -214,6 +248,7 @@ impl Chatbot {
             shape,
             tokenizer: "ChatXML".into(),
             vision,
+            vision_patch_proj,
             device: Device::Cpu,
             init_seed: seed,
             use_learned_pos_embed,
@@ -253,11 +288,25 @@ impl Chatbot {
                 self.shape.n_heads,
             )
         };
-        if self.use_learned_pos_embed {
-            base + self.max_seq_len * self.shape.d_model
+        let pe = if self.use_learned_pos_embed {
+            self.max_seq_len * self.shape.d_model
         } else {
-            base
-        }
+            0
+        };
+        let vision = self
+            .vision_patch_proj
+            .as_ref()
+            .map(|p| p.in_features * p.out_features + p.out_features)
+            .unwrap_or(0);
+        base + pe + vision
+    }
+
+    pub fn vision_patch_dim(&self) -> usize {
+        VISION_PATCH_DIM
+    }
+
+    pub fn has_vision_patch_encoder(&self) -> bool {
+        self.vision_patch_proj.is_some()
     }
 
     pub fn layer_size(&self) -> usize {
@@ -268,6 +317,65 @@ impl Chatbot {
         self.vision
     }
 
+    fn project_patches(&self, patches: &[Vec<f32>]) -> Result<Tensor> {
+        let proj = self
+            .vision_patch_proj
+            .as_ref()
+            .ok_or_else(|| mmn_core::MmnError::Other {
+                message: "vision patches require Chatbot(vision=True)".into(),
+            })?;
+        if patches.is_empty() {
+            return Err(mmn_core::MmnError::Shape {
+                message: "vision patches list is empty".into(),
+            });
+        }
+        let n = patches.len();
+        let mut flat = vec![0.0f32; n * VISION_PATCH_DIM];
+        for (i, patch) in patches.iter().enumerate() {
+            if patch.len() != VISION_PATCH_DIM {
+                return Err(mmn_core::MmnError::Shape {
+                    message: format!(
+                        "vision patch {i} has length {}; expected {VISION_PATCH_DIM}",
+                        patch.len()
+                    ),
+                });
+            }
+            flat[i * VISION_PATCH_DIM..(i + 1) * VISION_PATCH_DIM].copy_from_slice(patch);
+        }
+        let patch_t = Tensor::from_array(
+            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[n, VISION_PATCH_DIM]), flat).unwrap(),
+            true,
+        );
+        proj.forward(&patch_t)
+    }
+
+    fn embed_with_optional_patches(
+        &self,
+        token_ids: &[usize],
+        patches: Option<&[Vec<f32>]>,
+    ) -> Result<(Tensor, usize, Option<Tensor>)> {
+        let mut h = self.embed.forward(token_ids)?;
+        let n_patch = patches.map(|p| p.len()).unwrap_or(0);
+        let patch_input = if n_patch > 0 {
+            let patches = patches.unwrap();
+            let h_patch = self.project_patches(patches)?;
+            let flat: Vec<f32> = patches.iter().flatten().copied().collect();
+            let patch_t = Tensor::from_array(
+                ndarray::ArrayD::from_shape_vec(
+                    ndarray::IxDyn(&[n_patch, VISION_PATCH_DIM]),
+                    flat,
+                )
+                .unwrap(),
+                true,
+            );
+            h = mmn_nn::concat_sequence_rows(&h_patch, &h)?;
+            Some(patch_t)
+        } else {
+            None
+        };
+        Ok((h, n_patch, patch_input))
+    }
+
     pub fn uses_causal_attention(&self) -> bool {
         self.blocks
             .first()
@@ -276,7 +384,16 @@ impl Chatbot {
     }
 
     pub fn forward_hidden(&self, token_ids: &[usize]) -> Result<Tensor> {
-        let mut h = self.apply_position_encoding(self.embed.forward(token_ids)?)?;
+        self.forward_hidden_with_patches(token_ids, None)
+    }
+
+    pub fn forward_hidden_with_patches(
+        &self,
+        token_ids: &[usize],
+        patches: Option<&[Vec<f32>]>,
+    ) -> Result<Tensor> {
+        let (mut h, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
+        h = self.apply_position_encoding(h)?;
         for block in &self.blocks {
             h = block.forward(&h)?;
         }
@@ -284,16 +401,35 @@ impl Chatbot {
     }
 
     pub fn forward_logits(&self, token_ids: &[usize]) -> Result<Tensor> {
-        self.lm_head.forward(&self.forward_hidden(token_ids)?)
+        self.forward_logits_with_patches(token_ids, None)
+    }
+
+    pub fn forward_logits_with_patches(
+        &self,
+        token_ids: &[usize],
+        patches: Option<&[Vec<f32>]>,
+    ) -> Result<Tensor> {
+        self.lm_head
+            .forward(&self.forward_hidden_with_patches(token_ids, patches)?)
     }
 
     pub fn loss_on_batch(&self, token_ids: &[usize], targets: &[usize]) -> Result<f32> {
-        let logits = self.forward_logits(token_ids)?;
+        self.loss_on_batch_with_patches(token_ids, targets, None)
+    }
+
+    pub fn loss_on_batch_with_patches(
+        &self,
+        token_ids: &[usize],
+        targets: &[usize],
+        patches: Option<&[Vec<f32>]>,
+    ) -> Result<f32> {
+        let logits = self.forward_logits_with_patches(token_ids, patches)?;
         let loss_t = logits.cross_entropy_loss(targets)?;
         Ok(loss_t.data.as_slice().unwrap()[0])
     }
 
     /// Backward pass; either apply optimizer immediately or accumulate grads for `batch_size` > 1.
+    #[allow(clippy::too_many_arguments)]
     pub fn train_step_lm(
         &mut self,
         token_ids: &[usize],
@@ -303,16 +439,18 @@ impl Chatbot {
         use_hybrid: bool,
         param_id_base: &mut usize,
         mut accum: Option<&mut mmn_optim::GradAccumulator>,
+        patches: Option<&[Vec<f32>]>,
     ) -> Result<f32> {
         if let Some(acc) = accum.as_mut() {
             acc.begin_micro_batch();
-            let loss_val = self.backward_lm_accumulate(token_ids, targets, acc)?;
+            let loss_val = self.backward_lm_accumulate(token_ids, targets, patches, acc)?;
             acc.finish_micro_batch();
             return Ok(loss_val);
         }
         self.backward_lm(
             token_ids,
             targets,
+            patches,
             hybrid,
             adamw,
             use_hybrid,
@@ -387,6 +525,18 @@ impl Chatbot {
                 &grad,
             );
         }
+        if self.vision_patch_proj.is_some() {
+            i += 1;
+            let grad = accum.averaged_grad(i);
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.vision_patch_proj.as_mut().unwrap().weight,
+                &grad,
+            );
+        }
         Ok(())
     }
 
@@ -394,9 +544,10 @@ impl Chatbot {
         &mut self,
         token_ids: &[usize],
         targets: &[usize],
+        patches: Option<&[Vec<f32>]>,
         acc: &mut mmn_optim::GradAccumulator,
     ) -> Result<f32> {
-        let (loss_val, grads) = self.backward_lm_grads(token_ids, targets)?;
+        let (loss_val, grads) = self.backward_lm_grads(token_ids, targets, patches)?;
         for g in grads {
             acc.add_param_grad(&g);
         }
@@ -407,12 +558,13 @@ impl Chatbot {
         &mut self,
         token_ids: &[usize],
         targets: &[usize],
+        patches: Option<&[Vec<f32>]>,
         hybrid: &mut mmn_optim::HybridOptimizer,
         adamw: &mut mmn_optim::AdamW,
         use_hybrid: bool,
         param_id_base: &mut usize,
     ) -> Result<f32> {
-        let (loss_val, grads) = self.backward_lm_grads(token_ids, targets)?;
+        let (loss_val, grads) = self.backward_lm_grads(token_ids, targets, patches)?;
         let mut i = 0usize;
         let mut hybrid_opt = Some(hybrid);
         optim_step_weight(
@@ -466,6 +618,17 @@ impl Chatbot {
                 &grads[i],
             );
         }
+        if self.vision_patch_proj.is_some() {
+            i += 1;
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.vision_patch_proj.as_mut().unwrap().weight,
+                &grads[i],
+            );
+        }
         Ok(loss_val)
     }
 
@@ -473,9 +636,12 @@ impl Chatbot {
         &mut self,
         token_ids: &[usize],
         targets: &[usize],
+        patches: Option<&[Vec<f32>]>,
     ) -> Result<(f32, Vec<ArrayD<f32>>)> {
-        let mut h = self.embed.forward(token_ids)?;
+        let (mut h, n_patch, patch_input) =
+            self.embed_with_optional_patches(token_ids, patches)?;
         h = self.apply_position_encoding(h)?;
+        let seq = token_ids.len();
         let mut caches = Vec::with_capacity(self.blocks.len());
         for block in &self.blocks {
             let (out, cache) = block.forward_with_cache(&h)?;
@@ -504,15 +670,34 @@ impl Chatbot {
             grad_h = grad_h_block;
         }
 
+        let grad_h2 = grad_h
+            .view()
+            .into_dimensionality::<ndarray::Ix2>()
+            .map_err(|e| mmn_core::MmnError::Shape {
+                message: e.to_string(),
+            })?;
+        let d_model = self.shape.d_model;
+        let grad_suffix = if n_patch > 0 {
+            let mut suffix = ndarray::Array2::<f32>::zeros((seq, d_model));
+            for r in 0..seq {
+                for c in 0..d_model {
+                    suffix[[r, c]] = grad_h2[[n_patch + r, c]];
+                }
+            }
+            suffix.into_dyn()
+        } else {
+            grad_h.clone()
+        };
+
         let grad_embed_w = embedding_backward(
             token_ids,
-            &grad_h,
+            &grad_suffix,
             self.shape.vocab_size,
             self.shape.d_model,
         );
         grads.push(grad_embed_w);
         if self.use_learned_pos_embed {
-            let pos_ids: Vec<usize> = (0..token_ids.len()).collect();
+            let pos_ids: Vec<usize> = (0..n_patch + seq).collect();
             let grad_pos = embedding_backward(
                 &pos_ids,
                 &grad_h,
@@ -520,6 +705,25 @@ impl Chatbot {
                 self.shape.d_model,
             );
             grads.push(grad_pos);
+        }
+        if let Some(proj) = &self.vision_patch_proj {
+            let grad_proj = if n_patch > 0 {
+                let mut prefix = ndarray::Array2::<f32>::zeros((n_patch, d_model));
+                for r in 0..n_patch {
+                    for c in 0..d_model {
+                        prefix[[r, c]] = grad_h2[[r, c]];
+                    }
+                }
+                let (grad_w, _) = linear_backward(
+                    patch_input.as_ref().unwrap().data.as_ref(),
+                    proj.weight.data.as_ref(),
+                    &prefix.into_dyn(),
+                )?;
+                grad_w
+            } else {
+                ArrayD::zeros(proj.weight.data.shape())
+            };
+            grads.push(grad_proj);
         }
         Ok((loss_val, grads))
     }
@@ -734,7 +938,7 @@ mod chatbot_tests {
         let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
         let mut adamw = AdamW::new(AdamWConfig { lr: 0.01, ..Default::default() });
         model
-            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, false, &mut 0, None)
+            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, false, &mut 0, None, None)
             .unwrap();
         let embed_after: Vec<f32> = model.embed.weight.data.iter().copied().collect();
         let ffn_after: Vec<f32> = model.blocks[1].ffn2.weight.data.iter().copied().collect();
@@ -753,7 +957,7 @@ mod chatbot_tests {
         let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
         let mut adamw = AdamW::new(AdamWConfig { lr: 0.01, ..Default::default() });
         model
-            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, false, &mut 0, None)
+            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, false, &mut 0, None, None)
             .unwrap();
         let w0_after: Vec<f32> = model.blocks[0].ffn2.weight.data.iter().copied().collect();
         let w1_after: Vec<f32> = model.blocks[1].ffn2.weight.data.iter().copied().collect();
@@ -772,7 +976,7 @@ mod chatbot_tests {
         let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
         let mut adamw = AdamW::new(AdamWConfig { lr: 0.05, ..Default::default() });
         model
-            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None)
+            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None, None)
             .unwrap();
         let q_after: Vec<f32> = model.blocks[0].attn.q_proj.weight.data.iter().copied().collect();
         let k_after: Vec<f32> = model.blocks[1].attn.k_proj.weight.data.iter().copied().collect();
@@ -791,7 +995,7 @@ mod chatbot_tests {
         let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
         let mut adamw = AdamW::new(AdamWConfig { lr: 0.05, ..Default::default() });
         model
-            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None)
+            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None, None)
             .unwrap();
         let g_after: Vec<f32> = model.blocks[0].ln1.gamma.data.iter().copied().collect();
         let b_after: Vec<f32> = model.blocks[1].ln2.beta.data.iter().copied().collect();
@@ -818,7 +1022,7 @@ mod chatbot_tests {
         );
         let mut adamw = AdamW::new(AdamWConfig { lr: 0.01, ..Default::default() });
         model
-            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None)
+            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None, None)
             .unwrap();
         let ffn_after: Vec<f32> = model.blocks[1].ffn2.weight.data.iter().copied().collect();
         assert_ne!(ffn_before, ffn_after, "hybrid Muon path should update ffn2");
@@ -858,7 +1062,7 @@ mod chatbot_tests {
         let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
         let mut adamw = AdamW::new(AdamWConfig { lr: 0.05, ..Default::default() });
         model
-            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None)
+            .train_step_lm(&tokens, &targets, &mut hybrid, &mut adamw, true, &mut 0, None, None)
             .unwrap();
         let after: Vec<f32> = model
             .pos_embed
@@ -884,6 +1088,47 @@ mod chatbot_tests {
             msg.contains("max_seq_len") || msg.contains("sequence"),
             "expected max_seq_len error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn vision_patch_prefix_changes_loss() {
+        let model = Chatbot::new(true, None, 256, Some(1), Some(32));
+        assert!(model.has_vision_patch_encoder());
+        let tokens = vec![10, 20, 30];
+        let targets = vec![20, 30, 40];
+        let loss_plain = model.loss_on_batch(&tokens, &targets).unwrap();
+        let patch = vision_patch_from_text("image bytes");
+        let padded = targets_with_vision_prefix(&targets, 1, 256);
+        let loss_patch = model
+            .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch]))
+            .unwrap();
+        assert_ne!(loss_plain, loss_patch);
+    }
+
+    #[test]
+    fn vision_patch_proj_updates_on_train_step() {
+        use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
+        let mut model = Chatbot::new(true, None, 256, Some(1), Some(16));
+        let tokens = vec![1, 2, 3];
+        let targets = targets_with_vision_prefix(&[2, 3, 4], 1, 256);
+        let patch = vec![vision_patch_from_text("prompt")];
+        let w_before = model.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
+        let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
+        let mut adamw = AdamW::new(AdamWConfig { lr: 0.1, ..Default::default() });
+        model
+            .train_step_lm(
+                &tokens,
+                &targets,
+                &mut hybrid,
+                &mut adamw,
+                false,
+                &mut 0,
+                None,
+                Some(&patch),
+            )
+            .unwrap();
+        let w_after = model.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
+        assert_ne!(w_before, w_after);
     }
 }
 

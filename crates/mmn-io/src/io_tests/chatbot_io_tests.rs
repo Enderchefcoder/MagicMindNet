@@ -521,6 +521,19 @@ use std::fs;
         let _ = fs::remove_file(&path);
     }
 
+    #[test]
+    fn safetensors_vision_patch_proj_roundtrip() {
+        let model = Chatbot::new_with_seed(true, None, 128, Some(1), Some(16), Some(9));
+        let w_before = model.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
+        let path = temp_file("vision_patch.mmn");
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
+        let loaded = import_safetensors(path.to_str().unwrap(), 128).unwrap();
+        assert!(loaded.has_vision_patch_encoder());
+        let w_after = loaded.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
+        assert_eq!(w_before, w_after);
+        let _ = fs::remove_file(&path);
+    }
+
 
     #[test]
     fn import_rejects_block_tensor_shape_mismatch() {
