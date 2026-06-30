@@ -32,6 +32,20 @@ def test_rope_checkpoint_roundtrip(tmp_path: Path):
     assert loaded.rope_theta == pytest.approx(8000.0)
 
 
+def test_merge_rejects_rope_theta_mismatch():
+    a = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, use_rope=True, rope_theta=10000.0, seed=1)
+    b = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, use_rope=True, rope_theta=5000.0, seed=2)
+    with pytest.raises(ai.ModelMismatchError):
+        ai.merge(a, b)
+
+
+def test_merge_rejects_rope_vs_sinusoidal():
+    rope_bot = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, use_rope=True, seed=1)
+    plain = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, seed=2)
+    with pytest.raises(ai.ModelMismatchError):
+        ai.merge(rope_bot, plain)
+
+
 def test_rope_trains_and_reduces_loss():
     ds = ai.DatasetQA(
         file=str(FIXTURES / "qa_valid.json"),

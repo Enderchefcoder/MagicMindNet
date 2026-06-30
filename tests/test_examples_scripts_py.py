@@ -49,6 +49,12 @@ def test_quickstart_learned_pe_example_runs(run_example):
     assert "use_learned_pos_embed: True" in proc.stdout
 
 
+def test_quickstart_rope_example_runs(run_example):
+    proc = run_example("quickstart.py", "--rope")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "use_rope: True" in proc.stdout
+
+
 def test_quickstart_bpe_example_runs(run_example):
     proc = run_example("quickstart.py", "--bpe")
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -114,6 +120,13 @@ def test_corpus_benchmark_learned_pe_example_runs(run_example):
     assert "mean corpus loss before" in proc.stdout
 
 
+def test_corpus_benchmark_rope_example_runs(run_example):
+    proc = run_example("corpus_benchmark.py", "--rope")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "use_rope: True" in proc.stdout
+    assert "mean corpus loss before" in proc.stdout
+
+
 def test_corpus_benchmark_bpe_example_runs(run_example):
     proc = run_example("corpus_benchmark.py", "--bpe")
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -157,6 +170,34 @@ def test_eval_mean_loss_corpus_learned_pe_runs(run_example):
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "use_learned_pos_embed: True" in proc.stdout
     assert "mean corpus loss:" in proc.stdout
+
+
+def test_eval_mean_loss_qa_rope_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "qa", "--rope")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "use_rope: True" in proc.stdout
+    assert "mean QA loss:" in proc.stdout
+
+
+def test_eval_mean_loss_corpus_rope_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "corpus", "--rope")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "use_rope: True" in proc.stdout
+    assert "mean corpus loss:" in proc.stdout
+
+
+def test_eval_mean_loss_qa_rope_train_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "qa", "--rope", "--train")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean QA loss before:" in proc.stdout
+    assert "mean QA loss after:" in proc.stdout
+
+
+def test_eval_mean_loss_corpus_rope_train_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "corpus", "--rope", "--train")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean corpus loss before:" in proc.stdout
+    assert "mean corpus loss after:" in proc.stdout
 
 
 def test_eval_mean_loss_qa_bpe_runs(run_example):

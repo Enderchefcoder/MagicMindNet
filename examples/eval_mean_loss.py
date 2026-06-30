@@ -17,7 +17,7 @@ BPE_VOCAB = 512
 def _usage() -> None:
     print(
         "Usage: python examples/eval_mean_loss.py qa|cls|corpus "
-        "[--train] [--learned-pe] [--bpe] [--bpe-file PATH]"
+        "[--train] [--learned-pe] [--rope] [--bpe] [--bpe-file PATH]"
     )
     raise SystemExit(2)
 
@@ -41,11 +41,18 @@ def _parse_flags(args: list[str]) -> tuple[set[str], str | None]:
     return flags, bpe_file
 
 
-def _make_chatbot(seed: int, learned_pe: bool, use_bpe: bool) -> ai.Chatbot:
+def _make_chatbot(
+    seed: int,
+    learned_pe: bool,
+    use_rope: bool,
+    use_bpe: bool,
+) -> ai.Chatbot:
     vocab_size = BPE_VOCAB if use_bpe else 256
     kwargs = dict(vocab_size=vocab_size, n_layer=2, d_model=32, seed=seed)
     if learned_pe:
         return ai.Chatbot(**kwargs, use_learned_pos_embed=True, max_seq_len=128)
+    if use_rope:
+        return ai.Chatbot(**kwargs, use_rope=True)
     return ai.Chatbot(**kwargs)
 
 
@@ -92,7 +99,15 @@ def main() -> None:
 
     do_train = "--train" in flags
     learned_pe = "--learned-pe" in flags
+    use_rope = "--rope" in flags
     use_bpe = "--bpe" in flags or bpe_file is not None
+
+    if learned_pe and use_rope:
+        print("Use either --learned-pe or --rope, not both.")
+        raise SystemExit(2)
+    if use_rope and mode == "cls":
+        print("--rope applies only to qa or corpus chatbot modes.")
+        raise SystemExit(2)
 
     if mode == "qa":
         ds = ai.DatasetQA(
@@ -101,9 +116,11 @@ def main() -> None:
             ai_row="output",
         )
         bpe = _resolve_bpe(mode, ds, use_bpe, bpe_file)
-        bot = _make_chatbot(seed=1, learned_pe=learned_pe, use_bpe=use_bpe)
+        bot = _make_chatbot(seed=1, learned_pe=learned_pe, use_rope=use_rope, use_bpe=use_bpe)
         if learned_pe:
             print(f"use_learned_pos_embed: {bot.use_learned_pos_embed}")
+        if use_rope:
+            print(f"use_rope: {bot.use_rope} rope_theta: {bot.rope_theta}")
         if bpe is not None:
             print(f"bpe merges: {bpe.merge_count} (vocab_size={bpe.vocab_size})")
         if do_train:
@@ -122,9 +139,11 @@ def main() -> None:
             txtfile=str(FIXTURES / "corpus.txt"),
         )
         bpe = _resolve_bpe(mode, ds, use_bpe, bpe_file)
-        bot = _make_chatbot(seed=3, learned_pe=learned_pe, use_bpe=use_bpe)
+        bot = _make_chatbot(seed=3, learned_pe=learned_pe, use_rope=use_rope, use_bpe=use_bpe)
         if learned_pe:
             print(f"use_learned_pos_embed: {bot.use_learned_pos_embed}")
+        if use_rope:
+            print(f"use_rope: {bot.use_rope} rope_theta: {bot.rope_theta}")
         if bpe is not None:
             print(f"bpe merges: {bpe.merge_count} (vocab_size={bpe.vocab_size})")
         if do_train:

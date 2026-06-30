@@ -153,3 +153,4 @@
 [X] Pass 117 — export BPE sidecar + load_bpe_sidecar; 214 Rust / 489 pytest
 [X] Pass 118 — vision patch prefix encoder forward/train/IO; 217 Rust / 496 pytest
 [X] Pass 119 — RoPE Q/K rotation in attention with train/IO/Python; 222 Rust / 501 pytest
+[X] Pass 120 — --rope flags on eval_mean_loss, corpus_benchmark, quickstart + merge tests; verify_gate

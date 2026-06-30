@@ -887,6 +887,49 @@ mod tests {
     }
 
     #[test]
+    fn train_corpus_rope_reduces_mean_loss() {
+        use mmn_data::{CorpusBatchSize, CorpusRow, DatasetCorpus, DatasetMeta, DatasetType};
+        let ds = DatasetCorpus {
+            meta: DatasetMeta {
+                rows: 2,
+                format: "test".into(),
+                dataset_type: DatasetType::Corpus,
+            },
+            rows: vec![
+                CorpusRow {
+                    text: "hello world train".into(),
+                    complexity: 1.0,
+                },
+                CorpusRow {
+                    text: "more text for lm".into(),
+                    complexity: 2.0,
+                },
+            ],
+            batch_size: CorpusBatchSize::PerRow,
+        };
+        let mut model = Chatbot::new_with_position_options(
+            false, None, 256, Some(2), Some(32), Some(4), false, 512, true, 10_000.0,
+        );
+        let before = mean_corpus_loss(&model, &ds).unwrap();
+        train_corpus(
+            &mut model,
+            &ds,
+            &TrainConfig {
+                epochs: 3,
+                batch_size: 2,
+                learning_rate: 0.05,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let after = mean_corpus_loss(&model, &ds).unwrap();
+        assert!(
+            after < before,
+            "rope corpus LM loss should drop: {before} -> {after}"
+        );
+    }
+
+    #[test]
     fn train_corpus_updates_learned_pos_embed() {
         use mmn_data::{CorpusBatchSize, CorpusRow, DatasetCorpus, DatasetMeta, DatasetType};
         let ds = DatasetCorpus {

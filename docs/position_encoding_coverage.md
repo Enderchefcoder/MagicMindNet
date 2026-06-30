@@ -44,7 +44,13 @@ MagicMindNet supports three position-encoding modes on `Chatbot`:
 | RoPE changes loss | `chatbot_tests::rope_attention_differs_from_no_rope` |
 | RoPE IO meta | `safetensors_rope_meta_roundtrip`, `test_rope_chatbot_py.py` |
 | RoPE trains | `test_rope_trains_and_reduces_loss` |
+| RoPE corpus train | `train_corpus_rope_reduces_mean_loss` |
+| RoPE merge mismatch | `test_merge_rejects_rope_theta_mismatch`, `test_merge_rejects_rope_vs_sinusoidal` |
 | `benchmark_train --rope` | `test_benchmark_train_rope_example_runs` |
+| `eval_mean_loss` `--rope` | `test_eval_mean_loss_qa_rope_runs`, `test_eval_mean_loss_corpus_rope_runs` |
+| `eval_mean_loss --rope --train` | `test_eval_mean_loss_qa_rope_train_runs`, `test_eval_mean_loss_corpus_rope_train_runs` |
+| `corpus_benchmark --rope` | `test_corpus_benchmark_rope_example_runs` |
+| `quickstart --rope` | `test_quickstart_rope_example_runs` |
 | Chatbot forward uses PE | `chatbot_tests::position_encoding_affects_forward_hidden` |
 | Learned PE trains | `chatbot_tests::train_step_updates_learned_pos_embed` |
 | IO roundtrip | `learned_pos_embed_roundtrip_preserves_weights`, `test_learned_pos_embed_io_py.py` |

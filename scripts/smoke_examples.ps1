@@ -37,6 +37,9 @@ Write-Host "== examples/eval_mean_loss corpus =="
 Write-Host "== examples/eval_mean_loss qa bpe =="
 & $PY examples/eval_mean_loss.py qa --bpe
 
+Write-Host "== examples/eval_mean_loss qa rope =="
+& $PY examples/eval_mean_loss.py qa --rope
+
 Write-Host "== examples/benchmark_train =="
 & $PY examples/benchmark_train.py
 
@@ -69,6 +72,9 @@ Write-Host "== examples/corpus_benchmark learned-pe =="
 
 Write-Host "== examples/corpus_benchmark bpe =="
 & $PY examples/corpus_benchmark.py --bpe
+
+Write-Host "== examples/corpus_benchmark rope =="
+& $PY examples/corpus_benchmark.py --rope
 
 Write-Host "== examples/diffusion_smoke =="
 & $PY examples/diffusion_smoke.py

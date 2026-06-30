@@ -37,6 +37,10 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Added (RoPE example flags and corpus train test)
+- `--rope` on `eval_mean_loss.py`, `corpus_benchmark.py`, and `quickstart.py` (mutually exclusive with `--learned-pe`)
+- Rust `train_corpus_rope_reduces_mean_loss`; pytest merge mismatch + example smokes
+
 ### Added (RoPE position encoding)
 - Opt-in rotary position embedding on Q/K after projection (`use_rope=True`, `rope_theta=10000`)
 - `apply_rope` / `apply_rope_backward` in `mmn-nn`; mutually exclusive with learned `pos_embed`

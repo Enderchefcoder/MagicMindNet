@@ -11,7 +11,10 @@ FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
 def main() -> None:
     args = sys.argv[1:]
     learned_pe = "--learned-pe" in args
+    use_rope = "--rope" in args
     use_bpe = "--bpe" in args
+    if learned_pe and use_rope:
+        raise SystemExit("Use either --learned-pe or --rope, not both")
     ds = ai.DatasetCorpus(
         use_two_files=True,
         rowfile=str(FIXTURES / "corpus_rows.json"),
@@ -28,6 +31,9 @@ def main() -> None:
             max_seq_len=128,
         )
         print(f"use_learned_pos_embed: {bot.use_learned_pos_embed}")
+    elif use_rope:
+        bot = ai.Chatbot(vocab_size=vocab_size, n_layer=2, d_model=32, seed=7, use_rope=True)
+        print(f"use_rope: {bot.use_rope} rope_theta: {bot.rope_theta}")
     else:
         bot = ai.Chatbot(vocab_size=vocab_size, n_layer=2, d_model=32, seed=7)
     bpe = None

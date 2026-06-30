@@ -25,6 +25,9 @@ echo "== examples/eval_mean_loss cls =="
 echo "== examples/eval_mean_loss corpus =="
 "$PY" examples/eval_mean_loss.py corpus
 
+echo "== examples/eval_mean_loss qa rope =="
+"$PY" examples/eval_mean_loss.py qa --rope
+
 echo "== examples/benchmark_train =="
 "$PY" examples/benchmark_train.py
 
@@ -45,6 +48,9 @@ echo "== examples/corpus_benchmark =="
 
 echo "== examples/corpus_benchmark bpe =="
 "$PY" examples/corpus_benchmark.py --bpe
+
+echo "== examples/corpus_benchmark rope =="
+"$PY" examples/corpus_benchmark.py --rope
 
 echo "== examples/diffusion_smoke =="
 "$PY" examples/diffusion_smoke.py
