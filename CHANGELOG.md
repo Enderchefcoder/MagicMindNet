@@ -37,6 +37,11 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Added (multi-patch vision cross-attention memory)
+- `vision_rgb_patches_from_image_path(path, grid)` splits one image into `grid×grid` 8×8 tiles
+- QA `image` column accepts comma-separated paths or JSON array; `vision_patch_grid` on `DatasetQA`
+- Cross-attn uses all prefix rows as memory; Python `image_patches=` and `sample_image_paths`
+
 ### Added (DatasetQA disk image paths for vision training)
 - Optional `image` JSON column (`image_row` config); resolves relative paths against the QA manifest directory
 - `vision_rgb_patch_from_image_path` resizes PNG/JPEG to 8×8×3 NCHW; grayscale fallback for legacy patch-only models

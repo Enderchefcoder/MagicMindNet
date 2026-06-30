@@ -50,6 +50,7 @@ from magicmindnet.vision import (
     vision_patch_from_text,
     vision_rgb_patch_from_image_path,
     vision_rgb_patch_from_text,
+    vision_rgb_patches_from_image_path,
 )
 
 # Public aliases matching chatbot IO naming
@@ -98,6 +99,7 @@ __all__ = [
     "VISION_RGB_SPATIAL",
     "vision_patch_from_text",
     "vision_rgb_patch_from_image_path",
+    "vision_rgb_patches_from_image_path",
     "vision_rgb_patch_from_text",
 ]
 

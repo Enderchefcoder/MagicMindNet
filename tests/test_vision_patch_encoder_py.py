@@ -123,3 +123,30 @@ def test_qa_dataset_loads_image_path(tmp_path: Path):
     ds_text = ai.DatasetQA(str(qa_path), image_row="")
     loss_text = bot.compute_mean_loss(ds_text)
     assert loss_file != loss_text
+
+
+def test_multi_patch_cross_attn_changes_loss():
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, vision=True, seed=9)
+    p1 = ai.vision_rgb_patch_from_text("tile-a")
+    p2 = ai.vision_rgb_patch_from_text("tile-b")
+    loss_one = bot.compute_loss("describe", "caption", image_patch=p1)
+    loss_two = bot.compute_loss("describe", "caption", image_patches=[p1, p2])
+    assert loss_one != loss_two
+
+
+def test_vision_rgb_patches_grid_from_image(tmp_path: Path):
+    img_path = tmp_path / "split.png"
+    img_path.write_bytes(_MINI_PNG)
+    patches = ai.vision_rgb_patches_from_image_path(str(img_path), grid=2)
+    assert len(patches) == 4
+    assert all(len(p) == ai.VISION_RGB_DIM for p in patches)
+
+
+def test_qa_dataset_multi_image_paths(tmp_path: Path):
+    qa_path = tmp_path / "qa.json"
+    qa_path.write_text(
+        '[{"input":"describe","output":"red","image":"a.png,b.png"}]',
+        encoding="utf-8",
+    )
+    ds = ai.DatasetQA(str(qa_path), image_row="image")
+    assert ds.sample_image_paths(0) == ["a.png", "b.png"]

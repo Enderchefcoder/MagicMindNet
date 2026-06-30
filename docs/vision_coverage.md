@@ -16,7 +16,9 @@ The `Chatbot(vision=True)` flag enables a **conv + linear patch prefix encoder**
 | Demo grayscale patch | `vision_patch_from_text` | `ai.vision_patch_from_text` |
 | Demo RGB patch | `vision_rgb_patch_from_text` | `ai.vision_rgb_patch_from_text` |
 | Disk image → RGB patch | `vision_rgb_patch_from_image_path` | `ai.vision_rgb_patch_from_image_path` |
-| QA `image` column | `DatasetQA` + `source_dir` resolve | `DatasetQA(..., image_row="image")`, `sample_image_path` |
+| Multi-tile image patches | `vision_rgb_patches_from_image_path` | `ai.vision_rgb_patches_from_image_path(path, grid=2)` |
+| QA `image` column | `DatasetQA` + `source_dir` resolve | `DatasetQA(..., image_row="image", vision_patch_grid=2)` |
+| QA multi-image paths | comma / JSON array in `image` | `sample_image_paths(i)` |
 | QA train uses input patch | `train` (file image or RGB text surrogate) | `ai.Train` on vision bot |
 | Safetensors `vision_patch_proj` + `vision_patch_conv` | export/import | `test_vision_patch_encoder_py.py` |
 | `bin` meta `vision_patch_dim` / `vision_rgb_dim` | `export_bin` | `safetensors_vision_patch_proj_roundtrip` (Rust) |
@@ -27,7 +29,7 @@ The `Chatbot(vision=True)` flag enables a **conv + linear patch prefix encoder**
 
 1. **RGB path (default for new vision models):** flat 192-float `NCHW` patch → `Conv2d(3→1, k=3)` → flatten 64 → `Linear(64→d_model)` → prepend row.
 2. **Grayscale path (legacy checkpoints without `vision_patch_conv`):** flat 64-float patch → `Linear(64→d_model)`.
-3. **Cross-attention (after block 0):** text token rows query image prefix rows (Q from text, K/V from image), residual added to text only.
+3. **Cross-attention (after block 0):** text token rows query all image prefix rows (Q from text, K/V from image memory), residual added to text only. Supports multiple prefix tokens from tiled images or multiple file paths.
 
 ## Example
 
@@ -68,6 +70,6 @@ When `vision=true`, safetensors checkpoints include:
 
 ## Roadmap
 
-1. **Multi-patch memory** — cross-attn over multiple image tokens.
+- HF binary safetensors interchange (optional import/export adapter)
 
 See also [training.md](training.md), [checkpoint_coverage.md](checkpoint_coverage.md), and [limitations.md](limitations.md).

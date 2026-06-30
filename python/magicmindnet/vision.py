@@ -61,3 +61,10 @@ def vision_rgb_patch_from_image_path(path: str) -> list[float]:
 
     return _load(path)
 
+
+def vision_rgb_patches_from_image_path(path: str, grid: int = 1) -> list[list[float]]:
+    """Load an image as `grid×grid` tiled 8×8×3 RGB patches (NCHW per tile)."""
+    from magicmindnet._native import vision_rgb_patches_from_image_path as _load
+
+    return _load(path, grid)
+

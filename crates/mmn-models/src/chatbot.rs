@@ -53,6 +53,14 @@ pub fn vision_rgb_patch_from_image_path(path: &std::path::Path) -> Result<Vec<f3
     mmn_data::rgb_patch_from_image_path(path)
 }
 
+/// Load an image as `grid×grid` tiled RGB patches (each 8×8×3 NCHW).
+pub fn vision_rgb_patches_from_image_path(
+    path: &std::path::Path,
+    grid: usize,
+) -> Result<Vec<Vec<f32>>> {
+    mmn_data::rgb_patches_from_image_path(path, grid)
+}
+
 /// Prepend ignored CE targets for `n_patches` vision prefix rows (`target == vocab_size` skips loss).
 pub fn targets_with_vision_prefix(
     targets: &[usize],
@@ -1597,6 +1605,29 @@ mod chatbot_tests {
             .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch]))
             .unwrap();
         assert_ne!(loss_with, loss_without);
+    }
+
+    #[test]
+    fn multi_patch_prefix_changes_loss() {
+        let model = Chatbot::new(true, None, 256, Some(1), Some(16));
+        let tokens = vec![5, 6, 7];
+        let p1 = vision_rgb_patch_from_text("tile-a");
+        let p2 = vision_rgb_patch_from_text("tile-b");
+        let loss_one = model
+            .loss_on_batch_with_patches(
+                &tokens,
+                &targets_with_vision_prefix(&[6, 7, 8], 1, 256),
+                Some(&[p1.clone()]),
+            )
+            .unwrap();
+        let loss_two = model
+            .loss_on_batch_with_patches(
+                &tokens,
+                &targets_with_vision_prefix(&[6, 7, 8], 2, 256),
+                Some(&[p1, p2]),
+            )
+            .unwrap();
+        assert_ne!(loss_one, loss_two);
     }
 
     #[test]

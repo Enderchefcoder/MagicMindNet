@@ -12,13 +12,14 @@ pub struct PyDatasetQA {
 #[pymethods]
 impl PyDatasetQA {
     #[new]
-    #[pyo3(signature = (file, user_row="input", ai_row="output", system_row=None, image_row="image", multipleturn=true, tokenizer="ChatXML", cot=true, thinktag=""))]
+    #[pyo3(signature = (file, user_row="input", ai_row="output", system_row=None, image_row="image", vision_patch_grid=1, multipleturn=true, tokenizer="ChatXML", cot=true, thinktag=""))]
     pub fn new(
         file: String,
         user_row: &str,
         ai_row: &str,
         system_row: Option<String>,
         image_row: &str,
+        vision_patch_grid: usize,
         multipleturn: bool,
         tokenizer: &str,
         cot: bool,
@@ -36,6 +37,7 @@ impl PyDatasetQA {
             ai_row: ai_row.to_string(),
             system_row,
             image_row,
+            vision_patch_grid,
             multiple_turn: multipleturn,
             thinktag: thinktag.to_string(),
             cot,
@@ -77,7 +79,21 @@ impl PyDatasetQA {
             .inner
             .samples
             .get(index)
-            .and_then(|s| s.image_path.clone()))
+            .and_then(|s| s.image_paths.first().cloned()))
+    }
+
+    fn sample_image_paths(&self, index: usize) -> PyResult<Vec<String>> {
+        Ok(self
+            .inner
+            .samples
+            .get(index)
+            .map(|s| s.image_paths.clone())
+            .unwrap_or_default())
+    }
+
+    #[getter]
+    fn vision_patch_grid(&self) -> usize {
+        self.inner.vision_patch_grid
     }
 
     fn __repr__(&self) -> String {

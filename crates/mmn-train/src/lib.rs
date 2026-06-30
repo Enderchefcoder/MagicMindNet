@@ -2,7 +2,8 @@ use mmn_core::{enable_grad, Device, Result};
 use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA, QaSample};
 use mmn_models::{
     targets_with_vision_prefix, validate_dataset_for_classifier, vision_patch_from_text,
-    vision_rgb_patch_from_image_path, vision_rgb_patch_from_text, Chatbot, Classifier,
+    vision_rgb_patch_from_image_path, vision_rgb_patches_from_image_path,
+    vision_rgb_patch_from_text, Chatbot, Classifier,
 };
 use std::path::{Path, PathBuf};
 use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
@@ -106,17 +107,35 @@ fn vision_patches_from_sample(
     model: &Chatbot,
     sample: &QaSample,
     source_dir: &Path,
+    vision_patch_grid: usize,
 ) -> Result<Option<Vec<Vec<f32>>>> {
     if !model.has_vision_patch_encoder() {
         return Ok(None);
     }
-    if let Some(ref image_path) = sample.image_path {
-        let resolved = resolve_qa_image_path(source_dir, image_path);
-        let rgb = vision_rgb_patch_from_image_path(&resolved)?;
-        if model.has_vision_rgb_conv() {
-            return Ok(Some(vec![rgb]));
+    if !sample.image_paths.is_empty() {
+        let mut patches = Vec::new();
+        let grid = vision_patch_grid.max(1);
+        for (i, image_path) in sample.image_paths.iter().enumerate() {
+            let resolved = resolve_qa_image_path(source_dir, image_path);
+            if model.has_vision_rgb_conv() {
+                if sample.image_paths.len() == 1 && grid > 1 {
+                    patches.extend(vision_rgb_patches_from_image_path(&resolved, grid)?);
+                } else {
+                    patches.push(vision_rgb_patch_from_image_path(&resolved)?);
+                }
+            } else {
+                let rgb = if sample.image_paths.len() == 1 && grid > 1 {
+                    vision_rgb_patches_from_image_path(&resolved, grid)?
+                } else {
+                    vec![vision_rgb_patch_from_image_path(&resolved)?]
+                };
+                for patch in rgb {
+                    patches.push(mmn_data::grayscale_patch_from_rgb(&patch));
+                }
+            }
+            let _ = i;
         }
-        return Ok(Some(vec![mmn_data::grayscale_patch_from_rgb(&rgb)]));
+        return Ok(Some(patches));
     }
     Ok(vision_patches_from_input(model, &sample.input))
 }
@@ -133,7 +152,12 @@ pub fn mean_qa_loss_with_bpe(
         let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
         let mut targets = tokenize_lm(&sample.output, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
-        let patches = vision_patches_from_sample(model, sample, &dataset.source_dir)?;
+        let patches = vision_patches_from_sample(
+            model,
+            sample,
+            &dataset.source_dir,
+            dataset.vision_patch_grid,
+        )?;
         let loss = if let Some(ref patch_list) = patches {
             let padded = targets_with_vision_prefix(&targets, patch_list.len(), vocab);
             model.loss_on_batch_with_patches(&tokens, &padded, Some(patch_list))?
@@ -335,7 +359,12 @@ pub fn train_with_bpe(
             let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
             let mut targets = tokenize_lm(&sample.output, vocab, bpe);
             align_qa_token_pairs(&mut tokens, &mut targets);
-            let patch_list = vision_patches_from_sample(model, sample, &dataset.source_dir)?;
+            let patch_list = vision_patches_from_sample(
+                model,
+                sample,
+                &dataset.source_dir,
+                dataset.vision_patch_grid,
+            )?;
             let targets = if let Some(ref pl) = patch_list {
                 targets_with_vision_prefix(&targets, pl.len(), vocab)
             } else {
@@ -566,6 +595,7 @@ mod tests {
             ai_row: "output".into(),
             system_row: Some("systemprompt".into()),
             image_row: None,
+            vision_patch_grid: 1,
             multiple_turn: true,
             thinktag: "|".into(),
             cot: true,
@@ -634,10 +664,11 @@ mod tests {
                 input: "abcdefghijklmnopqrstuvwxyz".into(),
                 output: "short".into(),
                 system: None,
-                image_path: None,
+                image_paths: vec![],
             }],
             chatxml: mmn_data::ChatXmlConfig::default(),
             source_dir: std::path::PathBuf::from("."),
+            vision_patch_grid: 1,
         };
         let mut model = Chatbot::new(false, None, 64, Some(1), Some(16));
         let cfg = TrainConfig {
@@ -1245,6 +1276,7 @@ mod tests {
             ai_row: "output".into(),
             system_row: None,
             image_row: Some("image".into()),
+            vision_patch_grid: 1,
             multiple_turn: false,
             thinktag: "|".into(),
             cot: true,
@@ -1258,6 +1290,7 @@ mod tests {
             ai_row: "output".into(),
             system_row: None,
             image_row: None,
+            vision_patch_grid: 1,
             multiple_turn: false,
             thinktag: "|".into(),
             cot: true,

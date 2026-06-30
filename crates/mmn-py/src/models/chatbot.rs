@@ -162,13 +162,14 @@ impl PyChatbot {
     }
 
     /// Mean cross-entropy for tokenized `input` → `target` (same tokenization as `Train`).
-    #[pyo3(signature = (input, target, bpe_encoder=None, image_patch=None))]
+    #[pyo3(signature = (input, target, bpe_encoder=None, image_patch=None, image_patches=None))]
     fn compute_loss(
         &self,
         input: &str,
         target: &str,
         bpe_encoder: Option<&PyBytePairEncoder>,
         image_patch: Option<Vec<f32>>,
+        image_patches: Option<Vec<Vec<f32>>>,
     ) -> PyResult<f32> {
         let vocab = self.inner.shape.vocab_size;
         let bpe = bpe_encoder.map(|e| &e.inner);
@@ -176,35 +177,44 @@ impl PyChatbot {
         let mut targets = tokenize_lm(target, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
         if self.inner.has_vision_patch_encoder() {
-            let patch = if let Some(p) = image_patch {
-                let gray = self.inner.vision_patch_dim();
-                let rgb = self.inner.vision_rgb_dim();
+            let gray = self.inner.vision_patch_dim();
+            let rgb = self.inner.vision_rgb_dim();
+            let validate_patch = |p: &Vec<f32>| -> PyResult<()> {
                 if p.len() != gray && p.len() != rgb {
                     return Err(PyErr::new::<DataMismatchError, _>(format!(
-                        "image_patch length {} != vision_patch_dim ({gray}) or vision_rgb_dim ({rgb}).\nFix: Pass a flat {gray}-float grayscale patch or {rgb}-float RGB patch.\nExplanation: Vision Chatbot accepts 8×8 grayscale or 8×8×3 RGB patches.",
+                        "image patch length {} != vision_patch_dim ({gray}) or vision_rgb_dim ({rgb}).\nFix: Pass flat {gray}-float grayscale or {rgb}-float RGB patches.\nExplanation: Vision Chatbot accepts 8×8 grayscale or 8×8×3 RGB patches.",
                         p.len(),
                     )));
                 }
                 if p.len() == rgb && !self.inner.has_vision_rgb_conv() {
                     return Err(PyErr::new::<DataMismatchError, _>(format!(
-                        "image_patch length {rgb} requires vision_rgb_conv in the checkpoint.\nFix: Pass a {gray}-float grayscale patch or export/import a vision checkpoint with vision_patch_conv.\nExplanation: RGB patches need the conv encoder loaded from checkpoint."
+                        "RGB patch length {rgb} requires vision_rgb_conv.\nFix: Pass {gray}-float grayscale patches or load a vision checkpoint with vision_patch_conv."
                     )));
                 }
-                p
-            } else if self.inner.has_vision_rgb_conv() {
-                vision_rgb_patch_from_text(input)
-            } else {
-                vision_patch_from_text(input)
+                Ok(())
             };
-            let padded = targets_with_vision_prefix(&targets, 1, vocab);
+            let patch_list: Vec<Vec<f32>> = if let Some(pl) = image_patches {
+                for p in &pl {
+                    validate_patch(p)?;
+                }
+                pl
+            } else if let Some(p) = image_patch {
+                validate_patch(&p)?;
+                vec![p]
+            } else if self.inner.has_vision_rgb_conv() {
+                vec![vision_rgb_patch_from_text(input)]
+            } else {
+                vec![vision_patch_from_text(input)]
+            };
+            let padded = targets_with_vision_prefix(&targets, patch_list.len(), vocab);
             return self
                 .inner
-                .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch]))
+                .loss_on_batch_with_patches(&tokens, &padded, Some(&patch_list))
                 .map_err(mmn_err_to_py);
         }
-        if image_patch.is_some() {
+        if image_patch.is_some() || image_patches.is_some() {
             return Err(PyErr::new::<DataMismatchError, _>(
-                "image_patch requires Chatbot(vision=True).\nFix: Construct Chatbot with vision=True or omit image_patch.\nExplanation: Only vision chatbots accept image patches.".to_string(),
+                "image_patch/image_patches require Chatbot(vision=True).\nFix: Construct Chatbot with vision=True or omit image patches.".to_string(),
             ));
         }
         self.inner

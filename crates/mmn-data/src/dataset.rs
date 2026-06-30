@@ -26,6 +26,8 @@ pub struct DatasetQA {
     pub chatxml: ChatXmlConfig,
     /// Parent directory of `cfg.file` for resolving relative image paths.
     pub source_dir: std::path::PathBuf,
+    /// Tile grid for single-image multi-patch prefix (from config).
+    pub vision_patch_grid: usize,
 }
 
 #[derive(Clone)]
@@ -33,8 +35,8 @@ pub struct QaSample {
     pub input: String,
     pub output: String,
     pub system: Option<String>,
-    /// Optional relative or absolute path to an input image file.
-    pub image_path: Option<String>,
+    /// Optional relative or absolute paths to input image files.
+    pub image_paths: Vec<String>,
 }
 
 pub struct DatasetQAConfig {
@@ -42,8 +44,10 @@ pub struct DatasetQAConfig {
     pub user_row: String,
     pub ai_row: String,
     pub system_row: Option<String>,
-    /// Optional JSON column for an input image path (default `"image"` when set).
+    /// Optional JSON column for input image path(s) (default `"image"` when set).
     pub image_row: Option<String>,
+    /// When a single image is loaded, split it into `grid×grid` 8×8 tiles (default 1).
+    pub vision_patch_grid: usize,
     pub multiple_turn: bool,
     pub thinktag: String,
     pub cot: bool,
@@ -75,6 +79,7 @@ impl DatasetQA {
             samples,
             chatxml: ChatXmlConfig::from_thinktag(&cfg.thinktag, cfg.cot),
             source_dir,
+            vision_patch_grid: cfg.vision_patch_grid.clamp(1, crate::vision::MAX_VISION_PATCH_GRID),
         })
     }
 
@@ -124,17 +129,22 @@ fn load_qa_from_values(rows: &[Value], cfg: &DatasetQAConfig) -> Result<Vec<QaSa
             .system_row
             .as_ref()
             .and_then(|k| obj.get(k).and_then(|v| v.as_str()).map(String::from));
-        let image_path = cfg.image_row.as_ref().and_then(|k| {
-            obj.get(k)
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .filter(|s| !s.is_empty())
-        });
+        let image_paths = cfg.image_row.as_ref().and_then(|k| obj.get(k)).map(|v| {
+            if let Some(s) = v.as_str() {
+                crate::vision::parse_image_path_list(s)
+            } else if let Some(arr) = v.as_array() {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }).unwrap_or_default();
         samples.push(QaSample {
             input,
             output,
             system,
-            image_path,
+            image_paths,
         });
     }
     Ok(samples)
@@ -354,6 +364,7 @@ mod qa_tests {
             ai_row: "output".into(),
             system_row: None,
             image_row: None,
+            vision_patch_grid: 1,
             multiple_turn: false,
             thinktag: "|".into(),
             cot: true,
@@ -379,6 +390,7 @@ mod qa_tests {
             ai_row: "output".into(),
             system_row: None,
             image_row: None,
+            vision_patch_grid: 1,
             multiple_turn: false,
             thinktag: "|".into(),
             cot: true,
@@ -403,12 +415,13 @@ mod qa_tests {
             ai_row: "output".into(),
             system_row: None,
             image_row: Some("image".into()),
+            vision_patch_grid: 1,
             multiple_turn: false,
             thinktag: "|".into(),
             cot: true,
         };
         let ds = DatasetQA::load(cfg).unwrap();
-        assert_eq!(ds.samples[0].image_path.as_deref(), Some("pics/a.png"));
+        assert_eq!(ds.samples[0].image_paths, vec!["pics/a.png".to_string()]);
         assert_eq!(ds.source_dir, dir);
     }
 }

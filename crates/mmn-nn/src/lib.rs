@@ -1905,4 +1905,16 @@ mod conv2d_tests {
         );
         assert_eq!(h.data[[0, 0]], h2.data[[0, 0]], "image prefix row unchanged");
     }
+
+    #[test]
+    fn vision_cross_attn_residual_supports_multi_patch_memory() {
+        let mut rng = rng_from_seed(Some(11));
+        let cross = CrossAttention::new_rng(8, 2, &mut rng);
+        let h = Tensor::randn_rng(&mut rng, &[5, 8], false);
+        let (h2, _) = vision_cross_attn_residual(&cross, &h, 2).unwrap();
+        assert_eq!(h2.shape, vec![5, 8]);
+        assert_ne!(h.data[[2, 0]], h2.data[[2, 0]]);
+        assert_eq!(h.data[[0, 0]], h2.data[[0, 0]]);
+        assert_eq!(h.data[[1, 0]], h2.data[[1, 0]]);
+    }
 }
