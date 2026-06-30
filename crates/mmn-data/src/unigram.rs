@@ -166,6 +166,28 @@ impl UnigramEncoder {
         self.pieces.len()
     }
 
+    /// Drop merged pieces (not single-byte tokens) with log-prob below `min_log_prob`.
+    pub fn prune_pieces_below_logprob(&mut self, min_log_prob: f32) {
+        let mut keep: Vec<usize> = (0..self.pieces.len())
+            .filter(|&i| i < BYTE_VOCAB || self.log_probs[i] >= min_log_prob)
+            .collect();
+        if keep.len() < BYTE_VOCAB {
+            keep = (0..BYTE_VOCAB).collect();
+        }
+        let old_pieces = std::mem::take(&mut self.pieces);
+        let old_log_probs = std::mem::take(&mut self.log_probs);
+        self.pieces = keep.iter().map(|&i| old_pieces[i].clone()).collect();
+        self.log_probs = keep.iter().map(|&i| old_log_probs[i]).collect();
+        let total = self.log_probs.iter().map(|p| p.exp()).sum::<f32>();
+        if total > 0.0 {
+            for lp in &mut self.log_probs {
+                *lp = (*lp).exp() / total;
+                *lp = lp.ln();
+            }
+        }
+        self.vocab_size = self.vocab_size.max(self.pieces.len());
+    }
+
     pub fn export_json(&self, path: &str) -> Result<()> {
         let p = Path::new(path);
         if let Some(parent) = p.parent() {
@@ -234,6 +256,17 @@ mod tests {
         let ids = enc.encode("hello");
         let back = enc.decode(&ids);
         assert_eq!(back, "hello");
+    }
+
+    #[test]
+    fn unigram_prune_drops_low_logprob_pieces() {
+        let mut enc = UnigramEncoder::train(&["aaaa bbbb cccc dddd"], 400);
+        let before = enc.piece_count();
+        enc.prune_pieces_below_logprob(-5.0);
+        assert!(enc.piece_count() <= before);
+        assert!(enc.piece_count() >= BYTE_VOCAB);
+        let ids = enc.encode("aaaa");
+        assert!(!ids.is_empty());
     }
 
     #[test]

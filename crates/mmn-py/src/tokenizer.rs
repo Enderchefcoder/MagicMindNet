@@ -70,6 +70,11 @@ impl PyUnigramEncoder {
         Ok(Self { inner })
     }
 
+    fn prune_pieces_below_logprob(&mut self, min_log_prob: f32) -> PyResult<()> {
+        self.inner.prune_pieces_below_logprob(min_log_prob);
+        Ok(())
+    }
+
     #[getter]
     fn piece_count(&self) -> usize {
         self.inner.piece_count()

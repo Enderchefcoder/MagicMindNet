@@ -10,6 +10,82 @@ use crate::encoder_util::resolve_text_encoder;
 use crate::errors::{mmn_err_to_py, DataMismatchError};
 use crate::tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
 
+fn resolve_generate_vision_patches(
+    bot: &Chatbot,
+    prompt: &str,
+    image_patch: Option<Vec<f32>>,
+    image_patches: Option<Vec<Vec<f32>>>,
+) -> PyResult<Option<Vec<Vec<f32>>>> {
+    if !bot.has_vision_patch_encoder() {
+        if image_patch.is_some() || image_patches.is_some() {
+            return Err(PyErr::new::<DataMismatchError, _>(
+                "image_patch/image_patches require Chatbot(vision=True).\nFix: Construct Chatbot with vision=True or omit image patches.".to_string(),
+            ));
+        }
+        return Ok(None);
+    }
+    let gray = bot.vision_patch_dim();
+    let rgb = bot.vision_rgb_dim();
+    let validate_patch = |p: &Vec<f32>| -> PyResult<()> {
+        if p.len() != gray && p.len() != rgb {
+            return Err(PyErr::new::<DataMismatchError, _>(format!(
+                "image patch length {} != vision_patch_dim ({gray}) or vision_rgb_dim ({rgb}).\nFix: Pass flat {gray}-float grayscale or {rgb}-float RGB patches.\nExplanation: Vision Chatbot accepts 8×8 grayscale or 8×8×3 RGB patches.",
+                p.len(),
+            )));
+        }
+        if p.len() == rgb && !bot.has_vision_rgb_conv() {
+            return Err(PyErr::new::<DataMismatchError, _>(format!(
+                "RGB patch length {rgb} requires vision_rgb_conv.\nFix: Pass {gray}-float grayscale patches or load a vision checkpoint with vision_patch_conv."
+            )));
+        }
+        Ok(())
+    };
+    let patch_list: Vec<Vec<f32>> = if let Some(pl) = image_patches {
+        for p in &pl {
+            validate_patch(p)?;
+        }
+        pl
+    } else if let Some(p) = image_patch {
+        validate_patch(&p)?;
+        vec![p]
+    } else if bot.has_vision_rgb_conv() {
+        vec![vision_rgb_patch_from_text(prompt)]
+    } else {
+        vec![vision_patch_from_text(prompt)]
+    };
+    Ok(Some(patch_list))
+}
+
+fn build_generate_config(
+    max_new_tokens: usize,
+    temperature: f32,
+    top_k: usize,
+    top_p: f32,
+    min_p: f32,
+    repetition_penalty: f32,
+    frequency_penalty: f32,
+    presence_penalty: f32,
+    use_kv_cache: bool,
+    vision_patches: Option<Vec<Vec<f32>>>,
+    stop_token_ids: Option<Vec<usize>>,
+    stop_strings: Option<Vec<String>>,
+) -> mmn_train::GenerateConfig {
+    mmn_train::GenerateConfig {
+        max_new_tokens,
+        temperature,
+        top_k,
+        top_p,
+        min_p,
+        repetition_penalty,
+        frequency_penalty,
+        presence_penalty,
+        use_kv_cache,
+        vision_patches,
+        stop_token_ids: stop_token_ids.unwrap_or_default(),
+        stop_strings: stop_strings.unwrap_or_default(),
+    }
+}
+
 #[pyclass(name = "Chatbot")]
 pub struct PyChatbot {
     pub(crate) inner: Chatbot,
@@ -261,7 +337,7 @@ impl PyChatbot {
     }
 
     /// Autoregressive continuation from `prompt` (greedy when `temperature=0`).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, stop_token_ids=None, stop_strings=None))]
     fn generate(
         &self,
         prompt: &str,
@@ -276,11 +352,15 @@ impl PyChatbot {
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        image_patch: Option<Vec<f32>>,
+        image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
     ) -> PyResult<String> {
         let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
-        let cfg = mmn_train::GenerateConfig {
+        let vision_patches =
+            resolve_generate_vision_patches(&self.inner, prompt, image_patch, image_patches)?;
+        let cfg = build_generate_config(
             max_new_tokens,
             temperature,
             top_k,
@@ -290,14 +370,15 @@ impl PyChatbot {
             frequency_penalty,
             presence_penalty,
             use_kv_cache,
-            stop_token_ids: stop_token_ids.unwrap_or_default(),
-            stop_strings: stop_strings.unwrap_or_default(),
-        };
+            vision_patches,
+            stop_token_ids,
+            stop_strings,
+        );
         mmn_train::generate_text(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
 
     /// Sample new token ids after `prompt` (excludes prompt tokens).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, stop_token_ids=None, stop_strings=None))]
     fn generate_tokens(
         &self,
         prompt: &str,
@@ -312,11 +393,15 @@ impl PyChatbot {
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        image_patch: Option<Vec<f32>>,
+        image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
     ) -> PyResult<Vec<usize>> {
         let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
-        let cfg = mmn_train::GenerateConfig {
+        let vision_patches =
+            resolve_generate_vision_patches(&self.inner, prompt, image_patch, image_patches)?;
+        let cfg = build_generate_config(
             max_new_tokens,
             temperature,
             top_k,
@@ -326,9 +411,10 @@ impl PyChatbot {
             frequency_penalty,
             presence_penalty,
             use_kv_cache,
-            stop_token_ids: stop_token_ids.unwrap_or_default(),
-            stop_strings: stop_strings.unwrap_or_default(),
-        };
+            vision_patches,
+            stop_token_ids,
+            stop_strings,
+        );
         mmn_train::generate_token_ids(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
 }

@@ -77,6 +77,12 @@ pub fn targets_with_vision_prefix(
 pub struct ChatbotKvCache {
     pub transformer: mmn_nn::TransformerKvCache,
     pub seq_len: usize,
+    /// Vision prefix rows prepended before text (fixed for the session).
+    pub n_vision_prefix: usize,
+    /// Block-0 image memory rows for incremental cross-attention (post block-0, pre-text).
+    pub vision_mem: Option<Tensor>,
+    /// Patches used at prefill (for sliding-window re-prefill).
+    pub vision_patches: Option<Vec<Vec<f32>>>,
 }
 
 pub struct Chatbot {
@@ -716,6 +722,9 @@ impl Chatbot {
         ChatbotKvCache {
             transformer: mmn_nn::TransformerKvCache::new(self.blocks.len()),
             seq_len: 0,
+            n_vision_prefix: 0,
+            vision_mem: None,
+            vision_patches: None,
         }
     }
 
@@ -753,7 +762,40 @@ impl Chatbot {
         h.add(&pe_slice)
     }
 
-    /// Forward `token_ids` while appending attention K/V into `cache` (text-only; no vision patches).
+    fn forward_hidden_with_kv_cache(
+        &self,
+        h: Tensor,
+        cache: &mut ChatbotKvCache,
+        start_pos: usize,
+    ) -> Result<Tensor> {
+        let mut h = h;
+        if self.blocks.is_empty() {
+            return Ok(h);
+        }
+        h = mmn_nn::block_forward_with_kv_cache(
+            &self.blocks[0],
+            &h,
+            &mut cache.transformer.layers[0],
+            start_pos,
+        )?;
+        if cache.n_vision_prefix > 0 {
+            if let (Some(cross), Some(mem)) = (&self.vision_cross_attn, &cache.vision_mem) {
+                let (cross_out, _) = cross.forward_with_cache(&h, mem)?;
+                h = h.add(&cross_out)?;
+            }
+        }
+        for (i, block) in self.blocks.iter().enumerate().skip(1) {
+            h = mmn_nn::block_forward_with_kv_cache(
+                block,
+                &h,
+                &mut cache.transformer.layers[i],
+                start_pos,
+            )?;
+        }
+        Ok(h)
+    }
+
+    /// Forward `token_ids` while appending attention K/V into `cache`.
     pub fn forward_logits_with_kv_cache(
         &self,
         token_ids: &[usize],
@@ -764,23 +806,68 @@ impl Chatbot {
                 message: "forward_logits_with_kv_cache requires at least one token".into(),
             });
         }
-        if self.vision && self.has_vision_patch_encoder() {
-            return Err(mmn_core::MmnError::Other {
-                message: "KV cache generation does not support vision prefix patches".into(),
-            });
-        }
         let start_pos = cache.seq_len;
         let mut h = self.embed.forward(token_ids)?;
         h = self.apply_position_encoding_at_offset(h, start_pos)?;
-        for (i, block) in self.blocks.iter().enumerate() {
+        h = self.forward_hidden_with_kv_cache(h, cache, start_pos)?;
+        cache.seq_len += token_ids.len();
+        self.lm_head.forward(&h)
+    }
+
+    /// Prefill KV cache with optional vision prefix patches + prompt tokens.
+    pub fn reset_kv_cache_prefill_with_patches(
+        &self,
+        token_ids: &[usize],
+        patches: Option<&[Vec<f32>]>,
+        cache: &mut ChatbotKvCache,
+    ) -> Result<Tensor> {
+        if token_ids.is_empty() {
+            return Err(mmn_core::MmnError::Shape {
+                message: "reset_kv_cache_prefill requires at least one token".into(),
+            });
+        }
+        cache.transformer.clear();
+        cache.seq_len = 0;
+        cache.n_vision_prefix = 0;
+        cache.vision_mem = None;
+        cache.vision_patches = patches.map(|p| p.to_vec());
+
+        let (mut h, n_patch, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
+        cache.n_vision_prefix = n_patch;
+        h = self.apply_position_encoding_at_offset(h, 0)?;
+        let seq = h.shape[0];
+
+        if self.blocks.is_empty() {
+            cache.seq_len = seq;
+            return self.lm_head.forward(&h);
+        }
+
+        h = mmn_nn::block_forward_with_kv_cache(
+            &self.blocks[0],
+            &h,
+            &mut cache.transformer.layers[0],
+            0,
+        )?;
+        if n_patch > 0 {
+            if let Some(cross) = &self.vision_cross_attn {
+                let (h_new, _) = mmn_nn::vision_cross_attn_residual(cross, &h, n_patch)?;
+                cache.vision_mem =
+                    Some(mmn_nn::slice_sequence_rows(&h_new, 0, n_patch)?);
+                h = h_new;
+            } else {
+                cache.vision_mem = Some(mmn_nn::slice_sequence_rows(&h, 0, n_patch)?);
+            }
+        }
+
+        for (i, block) in self.blocks.iter().enumerate().skip(1) {
             h = mmn_nn::block_forward_with_kv_cache(
                 block,
                 &h,
                 &mut cache.transformer.layers[i],
-                start_pos,
+                0,
             )?;
         }
-        cache.seq_len += token_ids.len();
+        cache.seq_len = seq;
         self.lm_head.forward(&h)
     }
 
@@ -790,9 +877,7 @@ impl Chatbot {
         token_ids: &[usize],
         cache: &mut ChatbotKvCache,
     ) -> Result<Tensor> {
-        cache.transformer.clear();
-        cache.seq_len = 0;
-        self.forward_logits_with_kv_cache(token_ids, cache)
+        self.reset_kv_cache_prefill_with_patches(token_ids, None, cache)
     }
 
     /// Evict the oldest cached token and re-index RoPE K positions (fast sliding-window step).

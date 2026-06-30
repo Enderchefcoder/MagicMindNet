@@ -143,7 +143,7 @@ bot = ai.Chatbot(
 
 - `compute_loss(input_str, target_str) -> float`
 - `compute_mean_loss(dataset_qa | dataset_corpus, bpe_encoder=None) -> float`
-- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=True, bpe_encoder=None, unigram_encoder=None) -> str`
+- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=True, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None) -> str`
 - `generate_tokens(...)` — same sampling kwargs; returns token ids
 - `generate_tokens(...)` — same kwargs; returns new token ids only
 - `stop_token_ids` / `stop_strings` optional on both (generation halts early)

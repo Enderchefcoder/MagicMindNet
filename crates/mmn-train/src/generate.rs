@@ -29,6 +29,8 @@ pub struct GenerateConfig {
     pub stop_strings: Vec<String>,
     /// Reuse per-layer K/V cache during generation (faster; text-only Chatbot).
     pub use_kv_cache: bool,
+    /// Optional vision prefix patches for `Chatbot(vision=True)` (prefill only).
+    pub vision_patches: Option<Vec<Vec<f32>>>,
 }
 
 impl Default for GenerateConfig {
@@ -45,6 +47,7 @@ impl Default for GenerateConfig {
             stop_token_ids: Vec::new(),
             stop_strings: Vec::new(),
             use_kv_cache: true,
+            vision_patches: None,
         }
     }
 }
@@ -275,7 +278,11 @@ fn forward_logits_after_append(
 ) -> Result<mmn_core::Tensor> {
     if tokens.len() > max_ctx {
         let overflow = tokens.len() - max_ctx;
-        if model.uses_rope() && overflow == 1 && cache.seq_len >= max_ctx {
+        if model.uses_rope()
+            && overflow == 1
+            && cache.n_vision_prefix == 0
+            && cache.seq_len.saturating_sub(cache.n_vision_prefix) >= max_ctx
+        {
             model.slide_kv_cache_one(cache)?;
             let last = *tokens
                 .last()
@@ -284,7 +291,12 @@ fn forward_logits_after_append(
                 })?;
             return model.forward_logits_with_kv_cache(&[last], cache);
         }
-        model.reset_kv_cache_prefill(context_window(tokens, max_ctx), cache)
+        let patch_clone = cache.vision_patches.clone();
+        model.reset_kv_cache_prefill_with_patches(
+            context_window(tokens, max_ctx),
+            patch_clone.as_deref(),
+            cache,
+        )
     } else {
         let last = *tokens
             .last()
@@ -326,8 +338,12 @@ fn generate_token_ids_with_kv_cache(
     let vocab = model.shape.vocab_size;
     let mut cache = model.init_kv_cache();
     let mut rng = rand::thread_rng();
-    let mut logits =
-        model.reset_kv_cache_prefill(context_window(tokens, max_ctx), &mut cache)?;
+    let patches = config.vision_patches.as_deref();
+    let mut logits = model.reset_kv_cache_prefill_with_patches(
+        context_window(tokens, max_ctx),
+        patches,
+        &mut cache,
+    )?;
     let mut scores = last_token_scores(&logits, vocab, tokens, config)?;
 
     for _ in 0..config.max_new_tokens {
@@ -383,7 +399,7 @@ pub fn generate_token_ids(
     let mut tokens = prompt_tokens;
     let prompt_len = tokens.len();
 
-    if config.use_kv_cache && !model.vision {
+    if config.use_kv_cache {
         return generate_token_ids_with_kv_cache(
             model,
             &mut tokens,
@@ -394,11 +410,16 @@ pub fn generate_token_ids(
         );
     }
 
+    let patches = config.vision_patches.as_deref();
     let mut rng = rand::thread_rng();
 
     for _ in 0..config.max_new_tokens {
         let ctx = context_window(&tokens, max_ctx);
-        let logits = model.forward_logits(ctx)?;
+        let logits = if patches.is_some() && model.has_vision_patch_encoder() {
+            model.forward_logits_with_patches(ctx, patches)?
+        } else {
+            model.forward_logits(ctx)?
+        };
         let mut scores = last_token_scores(&logits, vocab, &tokens, config)?;
         let next = pick_next_token(
             &mut scores,
@@ -602,6 +623,32 @@ mod tests {
         let cfg = GenerateConfig {
             max_new_tokens: 10,
             temperature: 0.0,
+            ..Default::default()
+        };
+        let kv_ids = generate_token_ids(&model, "hi", None, &cfg).unwrap();
+        let full_ids = generate_token_ids(
+            &model,
+            "hi",
+            None,
+            &GenerateConfig {
+                use_kv_cache: false,
+                ..cfg
+            },
+        )
+        .unwrap();
+        assert_eq!(kv_ids, full_ids);
+    }
+
+    #[test]
+    fn vision_kv_generation_matches_full_forward() {
+        use mmn_models::vision_patch_from_text;
+
+        let model = Chatbot::new(true, None, 128, Some(1), Some(16));
+        let patch = vision_patch_from_text("scene");
+        let cfg = GenerateConfig {
+            max_new_tokens: 4,
+            temperature: 0.0,
+            vision_patches: Some(vec![patch]),
             ..Default::default()
         };
         let kv_ids = generate_token_ids(&model, "hi", None, &cfg).unwrap();

@@ -75,6 +75,13 @@
 - `load_unigram_sidecar(checkpoint_path)` Python helper; Rust `export_includes_unigram_checkpoint_meta` test
 - `TokenizerSidecarRefs` for BPE + unigram meta on JSON and HF safetensors export
 
+### Added (vision KV-cache generation and unigram vocab pruning)
+- Vision prefix patches in KV-cache prefill with cached cross-attention memory for incremental decode
+- `GenerateConfig.vision_patches`; Python `image_patch=` / `image_patches=` on `generate` / `generate_tokens`
+- Full-forward vision generation re-applies patches each step (correctness fix)
+- `UnigramEncoder.prune_pieces_below_logprob(min_log_prob)` drops low-score merged pieces
+- Tests: `vision_kv_generation_matches_full_forward`, `test_vision_kv_cache_generate_py.py`
+
 ### Added (unigram tokenizer and nucleus sampling)
 - `UnigramEncoder`: Viterbi segmentation, EM training, `mmn-unigram-v1` JSON save/load; Python `train` / `train_from_qa` / `train_from_corpus`
 - `Train` / `RL` / `SPIN` / `compute_mean_loss` accept `unigram_encoder=` (mutually exclusive with `bpe_encoder`)
