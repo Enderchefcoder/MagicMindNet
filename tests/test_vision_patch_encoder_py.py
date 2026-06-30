@@ -1,5 +1,6 @@
 """Vision patch encoder forward path and checkpoint roundtrip."""
 
+import base64
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,11 @@ import pytest
 import magicmindnet as ai
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# Valid 1×1 PNG (decoded by the `image` crate in Rust).
+_MINI_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
 
 def test_vision_chatbot_has_patch_encoder():
@@ -92,3 +98,28 @@ def test_vision_chatbot_trains_patch_encoder(tmp_path: Path):
     ai.Train(bot, ds, cfg)
     loss_after = bot.compute_mean_loss(ds)
     assert loss_after < loss_before
+
+
+def test_vision_rgb_patch_from_image_file(tmp_path: Path):
+    img_path = tmp_path / "red.png"
+    img_path.write_bytes(_MINI_PNG)
+    patch = ai.vision_rgb_patch_from_image_path(str(img_path))
+    assert len(patch) == ai.VISION_RGB_DIM
+    assert any(v > 0.0 for v in patch)
+
+
+def test_qa_dataset_loads_image_path(tmp_path: Path):
+    img_path = tmp_path / "scene.png"
+    img_path.write_bytes(_MINI_PNG)
+    qa_path = tmp_path / "qa.json"
+    qa_path.write_text(
+        '[{"input":"describe","output":"red","image":"scene.png"}]',
+        encoding="utf-8",
+    )
+    ds = ai.DatasetQA(str(qa_path), image_row="image")
+    assert ds.sample_image_path(0) == "scene.png"
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, vision=True, seed=8)
+    loss_file = bot.compute_mean_loss(ds)
+    ds_text = ai.DatasetQA(str(qa_path), image_row="")
+    loss_text = bot.compute_mean_loss(ds_text)
+    assert loss_file != loss_text

@@ -1,9 +1,10 @@
 use mmn_core::{enable_grad, Device, Result};
-use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA};
+use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA, QaSample};
 use mmn_models::{
     targets_with_vision_prefix, validate_dataset_for_classifier, vision_patch_from_text,
-    vision_rgb_patch_from_text, Chatbot, Classifier,
+    vision_rgb_patch_from_image_path, vision_rgb_patch_from_text, Chatbot, Classifier,
 };
+use std::path::{Path, PathBuf};
 use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
 use rand::Rng;
 
@@ -80,6 +81,15 @@ pub fn mean_qa_loss(model: &Chatbot, dataset: &DatasetQA) -> Result<f32> {
     mean_qa_loss_with_bpe(model, dataset, None)
 }
 
+fn resolve_qa_image_path(source_dir: &Path, image_path: &str) -> PathBuf {
+    let p = Path::new(image_path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        source_dir.join(p)
+    }
+}
+
 fn vision_patches_from_input(model: &Chatbot, input: &str) -> Option<Vec<Vec<f32>>> {
     if model.has_vision_patch_encoder() {
         if model.has_vision_rgb_conv() {
@@ -90,6 +100,25 @@ fn vision_patches_from_input(model: &Chatbot, input: &str) -> Option<Vec<Vec<f32
     } else {
         None
     }
+}
+
+fn vision_patches_from_sample(
+    model: &Chatbot,
+    sample: &QaSample,
+    source_dir: &Path,
+) -> Result<Option<Vec<Vec<f32>>>> {
+    if !model.has_vision_patch_encoder() {
+        return Ok(None);
+    }
+    if let Some(ref image_path) = sample.image_path {
+        let resolved = resolve_qa_image_path(source_dir, image_path);
+        let rgb = vision_rgb_patch_from_image_path(&resolved)?;
+        if model.has_vision_rgb_conv() {
+            return Ok(Some(vec![rgb]));
+        }
+        return Ok(Some(vec![mmn_data::grayscale_patch_from_rgb(&rgb)]));
+    }
+    Ok(vision_patches_from_input(model, &sample.input))
 }
 
 pub fn mean_qa_loss_with_bpe(
@@ -104,7 +133,7 @@ pub fn mean_qa_loss_with_bpe(
         let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
         let mut targets = tokenize_lm(&sample.output, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
-        let patches = vision_patches_from_input(model, &sample.input);
+        let patches = vision_patches_from_sample(model, sample, &dataset.source_dir)?;
         let loss = if let Some(ref patch_list) = patches {
             let padded = targets_with_vision_prefix(&targets, patch_list.len(), vocab);
             model.loss_on_batch_with_patches(&tokens, &padded, Some(patch_list))?
@@ -306,7 +335,7 @@ pub fn train_with_bpe(
             let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
             let mut targets = tokenize_lm(&sample.output, vocab, bpe);
             align_qa_token_pairs(&mut tokens, &mut targets);
-            let patch_list = vision_patches_from_input(model, &sample.input);
+            let patch_list = vision_patches_from_sample(model, sample, &dataset.source_dir)?;
             let targets = if let Some(ref pl) = patch_list {
                 targets_with_vision_prefix(&targets, pl.len(), vocab)
             } else {
@@ -536,6 +565,7 @@ mod tests {
             user_row: "input".into(),
             ai_row: "output".into(),
             system_row: Some("systemprompt".into()),
+            image_row: None,
             multiple_turn: true,
             thinktag: "|".into(),
             cot: true,
@@ -604,8 +634,10 @@ mod tests {
                 input: "abcdefghijklmnopqrstuvwxyz".into(),
                 output: "short".into(),
                 system: None,
+                image_path: None,
             }],
             chatxml: mmn_data::ChatXmlConfig::default(),
+            source_dir: std::path::PathBuf::from("."),
         };
         let mut model = Chatbot::new(false, None, 64, Some(1), Some(16));
         let cfg = TrainConfig {
@@ -1188,5 +1220,50 @@ mod tests {
         train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
         let loss_after = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
         assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
+    }
+
+    #[test]
+    fn qa_image_path_changes_vision_loss() {
+        use image::{ImageBuffer, Rgb};
+        let dir = std::env::temp_dir().join("mmn_train_qa_img");
+        let _ = std::fs::create_dir_all(&dir);
+        let img_path = dir.join("red.png");
+        let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(4, 4);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgb([255, 0, 0]);
+        }
+        img.save(&img_path).unwrap();
+        let qa_path = dir.join("qa.json");
+        std::fs::write(
+            &qa_path,
+            r#"[{"input":"describe","output":"red","image":"red.png"}]"#,
+        )
+        .unwrap();
+        let ds = DatasetQA::load(DatasetQAConfig {
+            file: qa_path.to_string_lossy().into_owned(),
+            user_row: "input".into(),
+            ai_row: "output".into(),
+            system_row: None,
+            image_row: Some("image".into()),
+            multiple_turn: false,
+            thinktag: "|".into(),
+            cot: true,
+        })
+        .unwrap();
+        let model = Chatbot::new(true, None, 256, Some(1), Some(16));
+        let loss_with_image = mean_qa_loss(&model, &ds).unwrap();
+        let ds_text = DatasetQA::load(DatasetQAConfig {
+            file: qa_path.to_string_lossy().into_owned(),
+            user_row: "input".into(),
+            ai_row: "output".into(),
+            system_row: None,
+            image_row: None,
+            multiple_turn: false,
+            thinktag: "|".into(),
+            cot: true,
+        })
+        .unwrap();
+        let loss_text = mean_qa_loss(&model, &ds_text).unwrap();
+        assert_ne!(loss_with_image, loss_text);
     }
 }

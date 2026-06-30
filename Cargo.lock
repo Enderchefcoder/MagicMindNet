@@ -842,6 +842,7 @@ dependencies = [
 name = "mmn-train"
 version = "0.1.0"
 dependencies = [
+ "image",
  "mmn-core",
  "mmn-cuda",
  "mmn-data",

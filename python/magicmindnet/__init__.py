@@ -48,6 +48,7 @@ from magicmindnet.vision import (
     VISION_RGB_DIM,
     VISION_RGB_SPATIAL,
     vision_patch_from_text,
+    vision_rgb_patch_from_image_path,
     vision_rgb_patch_from_text,
 )
 
@@ -96,6 +97,7 @@ __all__ = [
     "VISION_RGB_DIM",
     "VISION_RGB_SPATIAL",
     "vision_patch_from_text",
+    "vision_rgb_patch_from_image_path",
     "vision_rgb_patch_from_text",
 ]
 

@@ -8,6 +8,7 @@ mod resource;
 mod tokenizer;
 mod train;
 mod train_config;
+mod vision;
 
 use datasets::{
     PyDatasetClassification, PyDatasetCorpus, PyDatasetImageEdit, PyDatasetImageGen, PyDatasetQA,
@@ -24,6 +25,7 @@ use resource::{limit_percent, limit_resources};
 use tokenizer::PyBytePairEncoder;
 use train::{RL, SPIN, Train, TrainClassifier};
 use train_config::PyTrainConfig;
+use vision::vision_rgb_patch_from_image_path_py;
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -52,6 +54,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(export_classifier_model, m)?)?;
     m.add_function(wrap_pyfunction!(import_classifier_model, m)?)?;
     m.add_function(wrap_pyfunction!(quantize_classifier_model, m)?)?;
+    m.add_function(wrap_pyfunction!(vision_rgb_patch_from_image_path_py, m)?)?;
+    m.add("vision_rgb_patch_from_image_path", m.getattr("vision_rgb_patch_from_image_path_py")?)?;
     let py = m.py();
     m.add("CPUError", py.get_type::<CPUError>())?;
     m.add("CUDAError", py.get_type::<CUDAError>())?;

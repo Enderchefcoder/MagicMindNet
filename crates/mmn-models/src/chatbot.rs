@@ -48,6 +48,11 @@ pub fn vision_rgb_patch_from_text(text: &str) -> Vec<f32> {
     v
 }
 
+/// Load an on-disk image into a normalized 8×8×3 RGB vision patch (`NCHW`).
+pub fn vision_rgb_patch_from_image_path(path: &std::path::Path) -> Result<Vec<f32>> {
+    mmn_data::rgb_patch_from_image_path(path)
+}
+
 /// Prepend ignored CE targets for `n_patches` vision prefix rows (`target == vocab_size` skips loss).
 pub fn targets_with_vision_prefix(
     targets: &[usize],

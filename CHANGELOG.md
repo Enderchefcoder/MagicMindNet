@@ -37,6 +37,11 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Added (DatasetQA disk image paths for vision training)
+- Optional `image` JSON column (`image_row` config); resolves relative paths against the QA manifest directory
+- `vision_rgb_patch_from_image_path` resizes PNG/JPEG to 8×8×3 NCHW; grayscale fallback for legacy patch-only models
+- Python `sample_image_path`, `ai.vision_rgb_patch_from_image_path`; train/mean-loss use file patches when present
+
 ### Fixed (vision cross-attention multi-layer training)
 - `backward_lm_grads` iterated blocks in wrong order (`enumerate().rev()`); gradient apply now matches push order for `n_layer >= 2`
 

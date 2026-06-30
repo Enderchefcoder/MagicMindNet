@@ -16,3 +16,4 @@ rand.workspace = true
 
 [dev-dependencies]
 mmn-io.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }

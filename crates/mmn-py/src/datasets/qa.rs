@@ -12,23 +12,30 @@ pub struct PyDatasetQA {
 #[pymethods]
 impl PyDatasetQA {
     #[new]
-    #[pyo3(signature = (file, user_row="input", ai_row="output", system_row=None, multipleturn=true, tokenizer="ChatXML", cot=true, thinktag=""))]
+    #[pyo3(signature = (file, user_row="input", ai_row="output", system_row=None, image_row="image", multipleturn=true, tokenizer="ChatXML", cot=true, thinktag=""))]
     pub fn new(
         file: String,
         user_row: &str,
         ai_row: &str,
         system_row: Option<String>,
+        image_row: &str,
         multipleturn: bool,
         tokenizer: &str,
         cot: bool,
         thinktag: &str,
     ) -> PyResult<Self> {
         let _ = (multipleturn, tokenizer);
+        let image_row = if image_row.is_empty() {
+            None
+        } else {
+            Some(image_row.to_string())
+        };
         let inner = DatasetQA::load(DatasetQAConfig {
             file,
             user_row: user_row.to_string(),
             ai_row: ai_row.to_string(),
             system_row,
+            image_row,
             multiple_turn: multipleturn,
             thinktag: thinktag.to_string(),
             cot,
@@ -63,6 +70,14 @@ impl PyDatasetQA {
             .inner
             .chatxml
             .format_conversation(s.system.as_deref(), &turns))
+    }
+
+    fn sample_image_path(&self, index: usize) -> PyResult<Option<String>> {
+        Ok(self
+            .inner
+            .samples
+            .get(index)
+            .and_then(|s| s.image_path.clone()))
     }
 
     fn __repr__(&self) -> String {

@@ -15,7 +15,9 @@ The `Chatbot(vision=True)` flag enables a **conv + linear patch prefix encoder**
 | Forward with patch prefix | `forward_hidden_with_patches` | `compute_loss(..., image_patch=...)` |
 | Demo grayscale patch | `vision_patch_from_text` | `ai.vision_patch_from_text` |
 | Demo RGB patch | `vision_rgb_patch_from_text` | `ai.vision_rgb_patch_from_text` |
-| QA train uses input patch | `train` (RGB when conv loaded) | `ai.Train` on vision bot |
+| Disk image → RGB patch | `vision_rgb_patch_from_image_path` | `ai.vision_rgb_patch_from_image_path` |
+| QA `image` column | `DatasetQA` + `source_dir` resolve | `DatasetQA(..., image_row="image")`, `sample_image_path` |
+| QA train uses input patch | `train` (file image or RGB text surrogate) | `ai.Train` on vision bot |
 | Safetensors `vision_patch_proj` + `vision_patch_conv` | export/import | `test_vision_patch_encoder_py.py` |
 | `bin` meta `vision_patch_dim` / `vision_rgb_dim` | `export_bin` | `safetensors_vision_patch_proj_roundtrip` (Rust) |
 | Merge OR semantics + proj/conv average | `merge_models` | `test_merge_vision_or.py` |
@@ -56,8 +58,7 @@ When `vision=true`, safetensors checkpoints include:
 
 ## Limitations
 
-- 8×8 surrogate patches from UTF-8 bytes (not disk image files yet).
-- Corpus LM training does not attach patches (text-only); QA training uses `vision_rgb_patch_from_text(input)` when conv is loaded.
+- Corpus LM training does not attach patches (text-only); QA training uses disk `image` paths when present, else `vision_rgb_patch_from_text(input)` when conv is loaded.
 - `DatasetImageGen` / `DatasetImageEdit` remain diffusion stubs, not `Chatbot` training.
 
 ## Diffusion / Conv2d
@@ -67,7 +68,6 @@ When `vision=true`, safetensors checkpoints include:
 
 ## Roadmap
 
-1. **DatasetQA image paths** — load files from disk into normalized RGB patches.
-2. **Multi-patch memory** — cross-attn over multiple image tokens.
+1. **Multi-patch memory** — cross-attn over multiple image tokens.
 
 See also [training.md](training.md), [checkpoint_coverage.md](checkpoint_coverage.md), and [limitations.md](limitations.md).
