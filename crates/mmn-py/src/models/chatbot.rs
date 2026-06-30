@@ -17,7 +17,7 @@ pub struct PyChatbot {
 #[pymethods]
 impl PyChatbot {
     #[new]
-    #[pyo3(signature = (vision=false, autoset=None, vocab_size=32000, n_layer=None, d_model=None, seed=None, use_learned_pos_embed=false, max_seq_len=512, use_rope=false, rope_theta=10000.0))]
+    #[pyo3(signature = (vision=false, autoset=None, vocab_size=32000, n_layer=None, d_model=None, seed=None, use_learned_pos_embed=false, max_seq_len=512, use_rope=false, rope_theta=10000.0, n_heads=None, n_kv_heads=None))]
     pub fn new(
         vision: bool,
         autoset: Option<String>,
@@ -29,6 +29,8 @@ impl PyChatbot {
         max_seq_len: usize,
         use_rope: bool,
         rope_theta: f32,
+        n_heads: Option<usize>,
+        n_kv_heads: Option<usize>,
     ) -> Self {
         if use_learned_pos_embed && use_rope {
             panic!("Chatbot cannot use both use_learned_pos_embed and use_rope");
@@ -45,6 +47,8 @@ impl PyChatbot {
                 max_seq_len,
                 use_rope,
                 rope_theta,
+                n_heads,
+                n_kv_heads,
             ),
         }
     }
@@ -137,6 +141,16 @@ impl PyChatbot {
     #[getter]
     fn d_model(&self) -> usize {
         self.inner.shape.d_model
+    }
+
+    #[getter]
+    fn n_heads(&self) -> usize {
+        self.inner.shape.n_heads
+    }
+
+    #[getter]
+    fn n_kv_heads(&self) -> usize {
+        self.inner.shape.n_kv_heads
     }
 
     fn __repr__(&self) -> String {

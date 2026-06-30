@@ -34,7 +34,7 @@ fn solve_shape(param_budget: usize, vocab_size: usize) -> ModelShape {
         let n_heads = (d_model / 64).max(1);
         let ffn_dim = d_model * 4;
         for n_layer in [2usize, 4, 6, 8, 12, 16, 24, 32] {
-            let params = estimate_params(n_layer, d_model, ffn_dim, vocab_size, n_heads);
+            let params = estimate_params(n_layer, d_model, ffn_dim, vocab_size, n_heads, n_heads);
             if params <= param_budget && params >= best.estimated_params {
                 best = ModelShape {
                     n_layer,
@@ -56,7 +56,7 @@ fn solve_shape(param_budget: usize, vocab_size: usize) -> ModelShape {
             n_kv_heads: 1,
             ffn_dim: 256,
             vocab_size,
-            estimated_params: estimate_params(2, 64, 256, vocab_size, 1),
+            estimated_params: estimate_params(2, 64, 256, vocab_size, 1, 1),
         };
     }
     best
@@ -67,10 +67,14 @@ pub fn estimate_params(
     d_model: usize,
     ffn_dim: usize,
     vocab_size: usize,
-    _n_heads: usize,
+    n_heads: usize,
+    n_kv_heads: usize,
 ) -> usize {
+    let head_dim = if n_heads > 0 { d_model / n_heads } else { d_model };
+    let kv_dim = n_kv_heads * head_dim;
     let embed = vocab_size * d_model;
-    let per_layer = 4 * d_model * d_model + 2 * d_model * ffn_dim + 4 * d_model;
+    let attn = 2 * d_model * d_model + 2 * kv_dim * d_model;
+    let per_layer = attn + 2 * d_model * ffn_dim + 4 * d_model;
     embed * 2 + per_layer * n_layer
 }
 

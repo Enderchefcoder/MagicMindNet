@@ -306,6 +306,8 @@ impl Chatbot {
             max_seq_len,
             false,
             DEFAULT_ROPE_THETA,
+            None,
+            None,
         )
     }
 
@@ -320,6 +322,8 @@ impl Chatbot {
         max_seq_len: usize,
         use_rope: bool,
         rope_theta: f32,
+        n_heads: Option<usize>,
+        n_kv_heads: Option<usize>,
     ) -> Self {
         Self::new_with_position_and_ffn(
             vision,
@@ -328,8 +332,8 @@ impl Chatbot {
             n_layer,
             d_model,
             None,
-            None,
-            None,
+            n_heads,
+            n_kv_heads,
             seed,
             use_learned_pos_embed,
             max_seq_len,
@@ -465,6 +469,7 @@ impl Chatbot {
                 self.shape.ffn_dim,
                 self.shape.vocab_size,
                 self.shape.n_heads,
+                self.shape.n_kv_heads,
             )
         };
         let pe = if self.use_learned_pos_embed {
@@ -1520,6 +1525,7 @@ mod chatbot_tests {
     fn rope_enabled_on_attention_blocks() {
         let rope_model = Chatbot::new_with_position_options(
             false, None, 64, Some(1), Some(16), Some(1), false, 512, true, DEFAULT_ROPE_THETA,
+            None, None,
         );
         assert!(rope_model.use_rope);
         assert_eq!(
@@ -1535,6 +1541,7 @@ mod chatbot_tests {
         let plain = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(2));
         let rope_model = Chatbot::new_with_position_options(
             false, None, 64, Some(1), Some(16), Some(2), false, 512, true, DEFAULT_ROPE_THETA,
+            None, None,
         );
         let tokens = vec![3, 4, 5, 6];
         let l_plain = plain.loss_on_batch(&tokens, &tokens).unwrap();

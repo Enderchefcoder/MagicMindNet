@@ -114,6 +114,8 @@ bot = ai.Chatbot(
     vocab_size=32000,
     n_layer=4,
     d_model=128,
+    n_heads=4,                 # optional; default 4 when not using autoset
+    n_kv_heads=2,              # optional grouped-query attention (default = n_heads)
     vision=False,
     autoset=None,              # or "sub-100M" | "sub-1B" | "sub-10B"
     seed=42,                   # optional deterministic init
@@ -135,7 +137,7 @@ bot = ai.Chatbot(
 - RL updates `lm_head` only; SPIN runs `Train()` and can update learned PE. See [position_encoding_coverage.md](position_encoding_coverage.md).
 - Runnable roundtrip: `python examples/learned_pos_embed_roundtrip.py`
 
-**Getters:** `vocab_size`, `n_layer`, `d_model`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`
+**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`
 
 **Methods:**
 

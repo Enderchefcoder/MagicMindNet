@@ -976,6 +976,7 @@ mod tests {
         };
         let mut model = Chatbot::new_with_position_options(
             false, None, 256, Some(2), Some(32), Some(4), false, 512, true, 10_000.0,
+            None, None,
         );
         let before = mean_corpus_loss(&model, &ds).unwrap();
         train_corpus(
@@ -1160,6 +1161,7 @@ mod tests {
         let ds = toy_dataset();
         let mut model = Chatbot::new_with_position_options(
             false, None, 256, Some(1), Some(32), Some(15), false, 512, true, 10_000.0,
+            None, None,
         );
         train(
             &mut model,

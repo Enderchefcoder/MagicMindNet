@@ -559,6 +559,7 @@ use std::fs;
     fn safetensors_rope_meta_roundtrip() {
         let model = Chatbot::new_with_position_options(
             false, None, 128, Some(1), Some(16), Some(3), false, 512, true, 5000.0,
+            None, None,
         );
         assert!(model.uses_rope());
         let path = temp_file("rope_meta.mmn");
@@ -574,6 +575,7 @@ use std::fs;
     fn import_preserves_forward_loss_rope() {
         let model = Chatbot::new_with_position_options(
             false, None, 128, Some(1), Some(16), Some(11), false, 512, true, 8000.0,
+            None, None,
         );
         let tokens: Vec<usize> = (0..6).collect();
         let targets: Vec<usize> = (1..7).collect();
@@ -596,6 +598,7 @@ use std::fs;
     fn bin_rope_roundtrip_preserves_meta() {
         let model = Chatbot::new_with_position_options(
             false, None, 128, Some(2), Some(32), Some(5), false, 512, true, 7500.0,
+            None, None,
         );
         let path = temp_file("rope_arch.bin");
         export_bin(&model, path.to_str().unwrap()).unwrap();

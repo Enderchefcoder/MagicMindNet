@@ -467,6 +467,8 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
         max_seq_len,
         use_rope,
         rope_theta,
+        None,
+        None,
     ))
 }
 

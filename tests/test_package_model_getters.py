@@ -7,6 +7,8 @@ def test_chatbot_exposes_documented_getters():
         "vocab_size",
         "n_layer",
         "d_model",
+        "n_heads",
+        "n_kv_heads",
         "parameters",
         "layer_size",
         "tokenizer",

@@ -12,6 +12,18 @@ merge heads → out_proj
 
 Implementation: `crates/mmn-nn/src/lib.rs` (`scaled_dot_product_attention`, `MultiHeadAttention`, `TransformerBlock`).
 
+## Grouped-query attention (GQA)
+
+When `n_kv_heads < n_heads`, `k_proj`/`v_proj` output `[n_kv_heads * head_dim, d_model]` and attention maps query head `h` to KV head `h * n_kv_heads / n_heads`. HF import keeps native KV shapes (no expansion). Python: `Chatbot(..., n_heads=4, n_kv_heads=2)`.
+
+| Behavior | Test |
+|----------|------|
+| Forward matches expanded MHA | `gqa_forward_matches_expanded_mha` |
+| Backward finite-diff | `gqa_backward_finite_diff` |
+| Train updates KV weights | `gqa_train_step_updates_kv_weights` |
+| HF import native KV | `import_external_gqa_checkpoint_keeps_native_kv` |
+| Python getters + IO + train | `tests/test_gqa_chatbot_py.py` |
+
 ## Block stack
 
 ```

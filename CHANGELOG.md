@@ -53,6 +53,10 @@
 - Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
 - Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
 
+### Added (Python GQA API)
+- `Chatbot(..., n_heads=, n_kv_heads=)` constructor kwargs; getters `n_heads`, `n_kv_heads`
+- `tests/test_gqa_chatbot_py.py`: HF/JSON roundtrip, fewer params than MHA, training reduces loss
+
 ### Added (native grouped-query attention)
 - `ModelShape.n_kv_heads` (defaults to `n_heads`); `MultiHeadAttention` uses `[n_kv_heads * head_dim, d_model]` for `k_proj`/`v_proj`
 - GQA-aware `scaled_dot_product_attention` forward/backward maps query heads to shared KV heads; RoPE rotates K over `n_kv_heads`
