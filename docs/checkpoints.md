@@ -66,6 +66,8 @@ assert bpe2.encode("hello") == bpe.encode("hello")
 
 **Meta:** `format` (`mmn-bpe-v1`), `vocab_size` (≥ 256), `merges` (list of `[left, right]` byte or merged token ids). BPE checkpoints are separate from Chatbot weights — pass the loaded encoder to `Train()` / `compute_mean_loss()`.
 
+Chatbot `mmn-safetensors-v1` may reference a sibling sidecar via `meta.bpe_checkpoint` (e.g. `bot.bpe.mmn`). Use `export(bot, "safetensors", path, bpe_encoder=enc)` to write both files, then `load_bpe_sidecar(path)` after import.
+
 See [checkpoint_coverage.md](checkpoint_coverage.md) for the full chatbot tensor regression matrix (100% key coverage).
 
 Rust `mmn-io` modules: `chatbot_io`, `classifier_io`, `block_tensors`, `checkpoint_util`, `tensor_merge`. Regression tests live in `io_tests/` (`chatbot_io_tests`, `classifier_io_tests`).

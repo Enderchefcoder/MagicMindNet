@@ -52,7 +52,7 @@ use std::fs;
     fn import_classifier_rejects_chatbot_checkpoint() {
         let model = Chatbot::new(false, None, 256, Some(2), Some(32));
         let path = temp_file("wrong_fmt.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let result = import_classifier(path.to_str().unwrap());
         let msg = result.as_ref().err().expect("import should fail").message();
         assert!(

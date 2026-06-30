@@ -9,7 +9,11 @@ use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN};
 use std::collections::HashMap;
 use std::fs;
 
-pub fn export_safetensors(model: &Chatbot, path: &str) -> Result<(), MmnError> {
+pub fn export_safetensors(
+    model: &Chatbot,
+    path: &str,
+    bpe_checkpoint: Option<&str>,
+) -> Result<(), MmnError> {
     let mut map = HashMap::new();
     map.insert("embed".to_string(), tensor_to_entry(&model.embed.weight));
     map.insert("lm_head".to_string(), tensor_to_entry(&model.lm_head.weight));
@@ -30,6 +34,9 @@ pub fn export_safetensors(model: &Chatbot, path: &str) -> Result<(), MmnError> {
             "pos_embed".to_string(),
             tensor_to_entry(&model.pos_embed.as_ref().unwrap().weight),
         );
+    }
+    if let Some(bpe_path) = bpe_checkpoint {
+        meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
     }
     let wrapper = serde_json::json!({
         "tensors": map,
@@ -247,7 +254,7 @@ mod tests {
             "embed",
             std::process::id()
         ));
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 64).unwrap();
         let w0 = model.embed.weight.data[[0, 0]];
         let w1 = loaded.embed.weight.data[[0, 0]];

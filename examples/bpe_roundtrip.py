@@ -34,6 +34,12 @@ def main() -> None:
         )
         loss1 = bot.compute_mean_loss(ds, bpe_encoder=loaded)
         print(f"trained with BPE: loss {loss0:.4f} -> {loss1:.4f}")
+        ckpt = OUT.with_name("bot_with_bpe.mmn")
+        ai.export(bot, "safetensors", str(ckpt), bpe_encoder=loaded)
+        sidecar = ai.load_bpe_sidecar(ckpt)
+        assert sidecar is not None
+        assert sidecar.encode(sample) == loaded.encode(sample)
+        print(f"export sidecar ok: {ckpt.name} + meta.bpe_checkpoint")
     print(
         f"bpe roundtrip ok: {OUT} "
         f"(merges={loaded.merge_count}, vocab_size={loaded.vocab_size}, encode len={len(after_ids)})"

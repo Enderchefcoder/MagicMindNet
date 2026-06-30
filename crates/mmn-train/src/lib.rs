@@ -943,7 +943,7 @@ mod tests {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 256).unwrap();
         assert!(loaded.use_learned_pos_embed);
         assert_eq!(loaded.max_seq_len, 64);
@@ -1002,7 +1002,7 @@ mod tests {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 256).unwrap();
         assert!(loaded.use_learned_pos_embed);
         let loss_after = mean_corpus_loss(&loaded, &ds).unwrap();

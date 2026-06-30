@@ -24,9 +24,21 @@ use std::fs;
         let base = temp_file("nested_export");
         let _ = fs::remove_dir_all(&base);
         let path = base.join("nested").join("bot.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         assert!(path.is_file());
         let _ = fs::remove_dir_all(&base);
+    }
+
+
+    #[test]
+    fn export_includes_bpe_checkpoint_meta() {
+        let model = Chatbot::new(false, None, 128, Some(1), Some(16));
+        let path = temp_file("bpe_meta.mmn");
+        export_safetensors(&model, path.to_str().unwrap(), Some("bot.bpe.mmn")).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["meta"]["bpe_checkpoint"].as_str(), Some("bot.bpe.mmn"));
+        let _ = fs::remove_file(&path);
     }
 
 
@@ -34,7 +46,7 @@ use std::fs;
     fn export_includes_seed_in_meta() {
         let model = Chatbot::new_with_seed(false, None, 256, Some(2), Some(32), Some(42));
         let path = temp_file("seed_meta.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["meta"]["seed"].as_u64(), Some(42));
@@ -50,7 +62,7 @@ use std::fs;
         let embed_before: Vec<f32> = model.embed.weight.data.iter().copied().collect();
         let head_before: Vec<f32> = model.lm_head.weight.data.iter().copied().collect();
         let path = temp_file("roundtrip.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 512).unwrap();
         let embed_after: Vec<f32> = loaded.embed.weight.data.iter().copied().collect();
         let head_after: Vec<f32> = loaded.lm_head.weight.data.iter().copied().collect();
@@ -84,7 +96,7 @@ use std::fs;
             .copied()
             .collect();
         let path = temp_file("learned_pos.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["meta"]["use_learned_pos_embed"], true);
@@ -112,7 +124,7 @@ use std::fs;
             false, None, 64, Some(1), Some(16), None, true, 16,
         );
         let path = temp_file("missing_pos_embed.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"].as_object_mut().unwrap().remove("pos_embed");
@@ -131,7 +143,7 @@ use std::fs;
         let targets: Vec<usize> = (1..9).collect();
         let loss_before = model.loss_on_batch(&tokens, &targets).unwrap();
         let path = temp_file("loss.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 256).unwrap();
         let loss_after = loaded.loss_on_batch(&tokens, &targets).unwrap();
         assert!(
@@ -151,7 +163,7 @@ use std::fs;
         let targets: Vec<usize> = (1..7).collect();
         let loss_before = model.loss_on_batch(&tokens, &targets).unwrap();
         let path = temp_file("learned_pos_loss.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 128).unwrap();
         assert!(loaded.use_learned_pos_embed);
         assert_eq!(loaded.max_seq_len, 32);
@@ -199,7 +211,7 @@ use std::fs;
     fn import_bin_rejects_safetensors_checkpoint() {
         let model = Chatbot::new(false, None, 256, Some(2), Some(32));
         let path = temp_file("safetensors_for_bin.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let result = import_bin(path.to_str().unwrap());
         let msg = result.as_ref().err().expect("import should fail").message();
         assert!(
@@ -276,7 +288,7 @@ use std::fs;
     fn import_rejects_missing_embed_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_embed.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"].as_object_mut().unwrap().remove("embed");
@@ -295,7 +307,7 @@ use std::fs;
     fn import_rejects_incomplete_meta() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("incomplete_meta.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["meta"].as_object_mut().unwrap().remove("n_layer");
@@ -314,7 +326,7 @@ use std::fs;
     fn import_rejects_tensor_data_length_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_tensor.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["embed"]["data"] = serde_json::json!([0, 0, 0, 0]);
@@ -335,7 +347,7 @@ use std::fs;
             false, None, 128, Some(1), Some(16), None, true, 32,
         );
         let path = temp_file("bad_pos_embed_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["meta"]["max_seq_len"] = serde_json::json!(64);
@@ -367,7 +379,7 @@ use std::fs;
     fn import_rejects_embed_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_embed_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["meta"]["d_model"] = serde_json::json!(32);
@@ -386,7 +398,7 @@ use std::fs;
     fn import_rejects_non_numeric_tensor_bytes() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_bytes.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["embed"]["data"] = serde_json::json!([999, 999, 999, 999]);
@@ -425,7 +437,7 @@ use std::fs;
     fn import_rejects_missing_vocab_size_meta() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("no_vocab_meta.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["meta"].as_object_mut().unwrap().remove("vocab_size");
@@ -514,7 +526,7 @@ use std::fs;
     fn import_rejects_block_tensor_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_block_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.attn.q"]["shape"] = serde_json::json!([8, 32]);
@@ -533,7 +545,7 @@ use std::fs;
     fn import_rejects_n_layer_meta_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_n_layer.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["meta"]["n_layer"] = serde_json::json!(2);
@@ -552,7 +564,7 @@ use std::fs;
     fn import_rejects_missing_d_model_meta() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("no_d_model_meta.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["meta"].as_object_mut().unwrap().remove("d_model");
@@ -571,7 +583,7 @@ use std::fs;
     fn import_rejects_ffn_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_ffn_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.ffn"]["shape"] = serde_json::json!([128, 8]);
@@ -590,7 +602,7 @@ use std::fs;
     fn import_rejects_ln_gamma_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_ln_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.ln1.gamma"]["shape"] = serde_json::json!([4, 4]);
@@ -609,7 +621,7 @@ use std::fs;
     fn import_rejects_missing_block_ffn_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_ffn.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"].as_object_mut().unwrap().remove("blocks.0.ffn");
@@ -628,7 +640,7 @@ use std::fs;
     fn import_rejects_lm_head_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_lm_head_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["lm_head"]["shape"] = serde_json::json!([128, 32]);
@@ -659,7 +671,7 @@ use std::fs;
     fn import_rejects_ffn2_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_ffn2_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.ffn2"]["shape"] = serde_json::json!([32, 32]);
@@ -750,7 +762,7 @@ use std::fs;
     fn import_rejects_attn_k_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_attn_k_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.attn.k"]["shape"] = serde_json::json!([8, 32]);
@@ -769,7 +781,7 @@ use std::fs;
     fn import_rejects_ln2_gamma_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_ln2_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.ln2.gamma"]["shape"] = serde_json::json!([4, 4]);
@@ -788,7 +800,7 @@ use std::fs;
     fn import_rejects_attn_v_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("attn_v_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.attn.v"]["shape"] = serde_json::json!([8, 32]);
@@ -807,7 +819,7 @@ use std::fs;
     fn import_rejects_attn_out_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("attn_out_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.attn.out"]["shape"] = serde_json::json!([8, 32]);
@@ -826,7 +838,7 @@ use std::fs;
     fn import_rejects_missing_lm_head_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_lm_head.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"].as_object_mut().unwrap().remove("lm_head");
@@ -854,7 +866,7 @@ use std::fs;
     fn import_rejects_ln1_beta_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("ln1_beta_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.ln1.beta"]["shape"] = serde_json::json!([4, 4]);
@@ -873,7 +885,7 @@ use std::fs;
     fn import_rejects_ln2_beta_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("ln2_beta_shape.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]["blocks.0.ln2.beta"]["shape"] = serde_json::json!([4, 4]);
@@ -928,7 +940,7 @@ use std::fs;
     fn import_rejects_missing_block_attn_q_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_attn_q.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -950,7 +962,7 @@ use std::fs;
     fn import_rejects_missing_block_ffn2_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_ffn2.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"].as_object_mut().unwrap().remove("blocks.0.ffn2");
@@ -993,7 +1005,7 @@ use std::fs;
     fn import_rejects_missing_block_attn_k_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_attn_k.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1015,7 +1027,7 @@ use std::fs;
     fn import_rejects_missing_block_ln1_gamma_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_ln1_gamma.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1245,7 +1257,7 @@ use std::fs;
         quantize_model(&mut model, "int8").unwrap();
         assert!(model.vision);
         let path = temp_file("vision_quant.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 128).unwrap();
         assert!(loaded.vision);
         let _ = fs::remove_file(&path);
@@ -1256,7 +1268,7 @@ use std::fs;
     fn import_rejects_missing_block_attn_v_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_attn_v.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1278,7 +1290,7 @@ use std::fs;
     fn import_rejects_missing_block_attn_out_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_attn_out.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1300,7 +1312,7 @@ use std::fs;
     fn import_rejects_missing_block_ln1_beta_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_ln1_beta.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1322,7 +1334,7 @@ use std::fs;
     fn import_rejects_missing_block_ln2_gamma_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_ln2_gamma.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1344,7 +1356,7 @@ use std::fs;
     fn import_rejects_missing_block_ln2_beta_tensor() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("missing_ln2_beta.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1366,7 +1378,7 @@ use std::fs;
     fn import_rejects_missing_block1_ffn_tensor() {
         let model = Chatbot::new(false, None, 256, Some(2), Some(16));
         let path = temp_file("missing_b1_ffn.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]
@@ -1388,7 +1400,7 @@ use std::fs;
     fn import_rejects_missing_block1_attn_q_tensor() {
         let model = Chatbot::new(false, None, 256, Some(2), Some(16));
         let path = temp_file("missing_b1_attn_q.mmn");
-        export_safetensors(&model, path.to_str().unwrap()).unwrap();
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let mut v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         v["tensors"]

@@ -217,6 +217,8 @@ Wrong dataset type → `DataMismatchError`. See [training_coverage.md](training_
 | Function | Format | Notes |
 |----------|--------|-------|
 | `export(bot, "safetensors", path)` | `mmn-safetensors-v1` | Full weights + meta |
+| `export(bot, "safetensors", path, bpe_encoder=enc)` | `mmn-safetensors-v1` + `*.bpe.mmn` | Weights + `meta.bpe_checkpoint` sidecar |
+| `load_bpe_sidecar(checkpoint_path)` | — | Load `mmn-bpe-v1` sibling referenced in meta |
 | `export(bot, "bin", path)` | `mmn-bin-v1` | Architecture meta only |
 | `import_model("safetensors", [path])` | — | **First path only**; strict tensor validation |
 | `export_classifier(clf, "safetensors", path)` | `mmn-classifier-v1` | backbone + head |

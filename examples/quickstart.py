@@ -59,7 +59,7 @@ def main() -> None:
         print("Training finished.")
 
         out = Path(tmp) / "bot.safetensors"
-        ai.export(bot, "safetensors", str(out))
+        ai.export(bot, "safetensors", str(out), bpe_encoder=bpe)
         print(f"Exported to {out}")
 
 

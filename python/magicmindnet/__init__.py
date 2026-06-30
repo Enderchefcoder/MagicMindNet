@@ -41,6 +41,7 @@ from magicmindnet._native import (
     quantize,
     quantize_classifier_model,
 )
+from magicmindnet.bpe_io import load_bpe_sidecar
 
 # Public aliases matching chatbot IO naming
 export_classifier = export_classifier_model
@@ -76,6 +77,7 @@ __all__ = [
     "import_model",
     "limit",
     "limit_percent",
+    "load_bpe_sidecar",
     "merge",
     "merge_classifier",
     "quantize",
