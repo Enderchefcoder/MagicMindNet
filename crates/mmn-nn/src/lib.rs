@@ -107,6 +107,105 @@ pub fn add_sinusoidal_position_encoding(x: &Tensor) -> Result<Tensor> {
     x.add(&pe)
 }
 
+/// Default θ for rotary position embedding (LLaMA-style).
+pub const DEFAULT_ROPE_THETA: f32 = 10_000.0;
+
+fn rope_cos_sin(seq_len: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Vec<f32>) {
+    let half = head_dim / 2;
+    let mut cos = vec![0.0f32; seq_len * half];
+    let mut sin = vec![0.0f32; seq_len * half];
+    for pos in 0..seq_len {
+        for i in 0..half {
+            let freq = 1.0 / theta.powf(2.0 * i as f32 / head_dim as f32);
+            let angle = pos as f32 * freq;
+            cos[pos * half + i] = angle.cos();
+            sin[pos * half + i] = angle.sin();
+        }
+    }
+    (cos, sin)
+}
+
+/// Apply RoPE to Q and K tensors `[seq_len, d_model]` (rotates within each head).
+pub fn apply_rope(q: &Tensor, k: &Tensor, n_heads: usize, theta: f32) -> Result<(Tensor, Tensor)> {
+    if q.shape != k.shape || q.shape.len() != 2 {
+        return Err(MmnError::Shape {
+            message: "apply_rope expects q,k shape [seq_len, d_model]".into(),
+        });
+    }
+    let seq = q.shape[0];
+    let d_model = q.shape[1];
+    if d_model % n_heads != 0 {
+        return Err(MmnError::Shape {
+            message: format!("d_model {d_model} not divisible by n_heads {n_heads}"),
+        });
+    }
+    let head_dim = d_model / n_heads;
+    if head_dim % 2 != 0 {
+        return Err(MmnError::Shape {
+            message: format!("head_dim {head_dim} must be even for RoPE"),
+        });
+    }
+    let half = head_dim / 2;
+    let (cos, sin) = rope_cos_sin(seq, head_dim, theta);
+    let mut q_out = q.data.as_ref().clone();
+    let mut k_out = k.data.as_ref().clone();
+    for h in 0..n_heads {
+        let base = h * head_dim;
+        for s in 0..seq {
+            for i in 0..half {
+                let idx0 = base + 2 * i;
+                let idx1 = base + 2 * i + 1;
+                let c = cos[s * half + i];
+                let sn = sin[s * half + i];
+                for (src, dst) in [(&q.data, &mut q_out), (&k.data, &mut k_out)] {
+                    let x0 = src[[s, idx0]];
+                    let x1 = src[[s, idx1]];
+                    dst[[s, idx0]] = x0 * c - x1 * sn;
+                    dst[[s, idx1]] = x0 * sn + x1 * c;
+                }
+            }
+        }
+    }
+    Ok((
+        Tensor::from_array(q_out, q.requires_grad),
+        Tensor::from_array(k_out, k.requires_grad),
+    ))
+}
+
+/// Backprop through RoPE: `grad_*` w.r.t. rotated tensors → gradients w.r.t. pre-rotation inputs.
+pub fn apply_rope_backward(
+    grad_q: &ArrayD<f32>,
+    grad_k: &ArrayD<f32>,
+    n_heads: usize,
+    theta: f32,
+    seq_len: usize,
+) -> Result<(ArrayD<f32>, ArrayD<f32>)> {
+    let d_model = grad_q.shape()[1];
+    let head_dim = d_model / n_heads;
+    let half = head_dim / 2;
+    let (cos, sin) = rope_cos_sin(seq_len, head_dim, theta);
+    let mut gq = grad_q.clone();
+    let mut gk = grad_k.clone();
+    for h in 0..n_heads {
+        let base = h * head_dim;
+        for s in 0..seq_len {
+            for i in 0..half {
+                let idx0 = base + 2 * i;
+                let idx1 = base + 2 * i + 1;
+                let c = cos[s * half + i];
+                let sn = sin[s * half + i];
+                for grad in [&mut gq, &mut gk] {
+                    let gy0 = grad[[s, idx0]];
+                    let gy1 = grad[[s, idx1]];
+                    grad[[s, idx0]] = gy0 * c + gy1 * sn;
+                    grad[[s, idx1]] = -gy0 * sn + gy1 * c;
+                }
+            }
+        }
+    }
+    Ok((gq, gk))
+}
+
 impl Linear {
     pub fn new(in_features: usize, out_features: usize) -> Self {
         Self::new_rng(in_features, out_features, &mut rand::thread_rng())
@@ -462,12 +561,66 @@ mod position_encoding_tests {
         assert!(pe.data[[0, 0]].abs() < 1e-6);
         assert!((pe.data[[0, 1]] - 1.0).abs() < 1e-5);
     }
+
+    #[test]
+    fn rope_changes_qk_values() {
+        let q = Tensor::from_array(
+            ndarray::arr2(&[[1.0, 0.0, 0.5, 0.5], [0.0, 1.0, 0.5, 0.5]]).into_dyn(),
+            true,
+        );
+        let k = q.clone();
+        let (qr, _kr) = apply_rope(&q, &k, 2, DEFAULT_ROPE_THETA).unwrap();
+        assert_ne!(qr.data[[1, 0]], q.data[[1, 0]]);
+        assert_eq!(qr.data[[0, 0]], q.data[[0, 0]]);
+    }
+
+    #[test]
+    fn rope_backward_matches_finite_diff() {
+        let seq = 2usize;
+        let d_model = 4usize;
+        let n_heads = 2usize;
+        let theta = DEFAULT_ROPE_THETA;
+        let q = Tensor::from_array(
+            ndarray::arr2(&[[0.3, -0.2, 0.7, 0.1], [0.5, 0.4, -0.3, 0.2]]).into_dyn(),
+            true,
+        );
+        let k = q.clone();
+        let eps = 1e-3f32;
+        let (_qr, _) = apply_rope(&q, &k, n_heads, theta).unwrap();
+        let grad_out_q = ndarray::arr2(&[[0.2, -0.1, 0.4, 0.3], [0.1, 0.2, -0.2, 0.5]]).into_dyn();
+        let grad_out_k = grad_out_q.clone();
+        let (gq, _) =
+            apply_rope_backward(&grad_out_q, &grad_out_k, n_heads, theta, seq).unwrap();
+        for j in 0..d_model {
+            let mut q_plus = q.data.as_ref().clone();
+            q_plus[[0, j]] += eps;
+            let qp = Tensor::from_array(q_plus.clone(), true);
+            let (qr_plus, _) = apply_rope(&qp, &k, n_heads, theta).unwrap();
+            let mut q_minus = q.data.as_ref().clone();
+            q_minus[[0, j]] -= eps;
+            let qm = Tensor::from_array(q_minus, true);
+            let (qr_minus, _) = apply_rope(&qm, &k, n_heads, theta).unwrap();
+            let numeric = (grad_out_q[[0, 0]] * (qr_plus.data[[0, 0]] - qr_minus.data[[0, 0]])
+                + grad_out_q[[0, 1]] * (qr_plus.data[[0, 1]] - qr_minus.data[[0, 1]])
+                + grad_out_q[[0, 2]] * (qr_plus.data[[0, 2]] - qr_minus.data[[0, 2]])
+                + grad_out_q[[0, 3]] * (qr_plus.data[[0, 3]] - qr_minus.data[[0, 3]]))
+                / (2.0 * eps);
+            assert!(
+                (gq[[0, j]] - numeric).abs() < 0.05,
+                "j={j} analytic={} numeric={}",
+                gq[[0, j]],
+                numeric
+            );
+        }
+    }
 }
 
 pub struct MultiHeadAttention {
     pub d_model: usize,
     pub n_heads: usize,
     pub causal: bool,
+    /// When set, apply rotary position embedding to Q/K after projection.
+    pub rope_theta: Option<f32>,
     pub q_proj: Linear,
     pub k_proj: Linear,
     pub v_proj: Linear,
@@ -489,11 +642,22 @@ impl MultiHeadAttention {
         causal: bool,
         rng: &mut impl Rng,
     ) -> Self {
+        Self::new_rng_causal_rope(d_model, n_heads, causal, None, rng)
+    }
+
+    pub fn new_rng_causal_rope(
+        d_model: usize,
+        n_heads: usize,
+        causal: bool,
+        rope_theta: Option<f32>,
+        rng: &mut impl Rng,
+    ) -> Self {
         assert_eq!(d_model % n_heads, 0);
         Self {
             d_model,
             n_heads,
             causal,
+            rope_theta,
             q_proj: Linear::new_rng(d_model, d_model, rng),
             k_proj: Linear::new_rng(d_model, d_model, rng),
             v_proj: Linear::new_rng(d_model, d_model, rng),
@@ -501,10 +665,20 @@ impl MultiHeadAttention {
         }
     }
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
+    fn project_qkv(&self, x: &Tensor) -> Result<(Tensor, Tensor, Tensor, Option<Tensor>, Option<Tensor>)> {
+        let q_lin = self.q_proj.forward(x)?;
+        let k_lin = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
+        if let Some(theta) = self.rope_theta {
+            let (q, k) = apply_rope(&q_lin, &k_lin, self.n_heads, theta)?;
+            Ok((q, k, v, Some(q_lin), Some(k_lin)))
+        } else {
+            Ok((q_lin.clone(), k_lin.clone(), v, None, None))
+        }
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let (q, k, v, _, _) = self.project_qkv(x)?;
         let (merged, _) =
             scaled_dot_product_attention_with_cache(&q, &k, &v, self.n_heads, self.causal)?;
         self.out_proj.forward(&merged)
@@ -513,14 +687,21 @@ impl MultiHeadAttention {
     pub fn forward_with_cache(
         &self,
         x: &Tensor,
-    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, SdpAttentionCache)> {
-        let q = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+    ) -> Result<(
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Option<Tensor>,
+        Option<Tensor>,
+        SdpAttentionCache,
+    )> {
+        let (q, k, v, q_lin, k_lin) = self.project_qkv(x)?;
         let (merged, sdp) =
             scaled_dot_product_attention_with_cache(&q, &k, &v, self.n_heads, self.causal)?;
         let out = self.out_proj.forward(&merged)?;
-        Ok((out, q, k, v, merged, sdp))
+        Ok((out, q, k, v, merged, q_lin, k_lin, sdp))
     }
 }
 
@@ -683,6 +864,8 @@ pub struct BlockForwardCache {
     pub f_lin: Tensor,
     pub f_post: Tensor,
     pub sdp: SdpAttentionCache,
+    pub q_lin: Option<Tensor>,
+    pub k_lin: Option<Tensor>,
 }
 
 impl TransformerBlock {
@@ -691,8 +874,18 @@ impl TransformerBlock {
     }
 
     pub fn new_rng(d_model: usize, n_heads: usize, ffn_dim: usize, rng: &mut impl Rng) -> Self {
+        Self::new_rng_rope(d_model, n_heads, ffn_dim, None, rng)
+    }
+
+    pub fn new_rng_rope(
+        d_model: usize,
+        n_heads: usize,
+        ffn_dim: usize,
+        rope_theta: Option<f32>,
+        rng: &mut impl Rng,
+    ) -> Self {
         Self {
-            attn: MultiHeadAttention::new_rng(d_model, n_heads, rng),
+            attn: MultiHeadAttention::new_rng_causal_rope(d_model, n_heads, true, rope_theta, rng),
             ln1: LayerNorm::new(d_model),
             ln2: LayerNorm::new(d_model),
             ffn: Linear::new_rng(d_model, ffn_dim, rng),
@@ -708,7 +901,7 @@ impl TransformerBlock {
     pub fn forward_with_cache(&self, x: &Tensor) -> Result<(Tensor, BlockForwardCache)> {
         let x_in = x.clone();
         let h_ln1 = self.ln1.forward(x)?;
-        let (a, q, k, v, merged, sdp) = self.attn.forward_with_cache(&h_ln1)?;
+        let (a, q, k, v, merged, q_lin, k_lin, sdp) = self.attn.forward_with_cache(&h_ln1)?;
         let x2 = x.add(&a)?;
         let h2 = self.ln2.forward(&x2)?;
         let f_lin = self.ffn.forward(&h2)?;
@@ -729,6 +922,8 @@ impl TransformerBlock {
                 f_lin,
                 f_post,
                 sdp,
+                q_lin,
+                k_lin,
             },
         ))
     }
@@ -771,6 +966,17 @@ impl TransformerBlock {
             &grad_merged,
             self.attn.n_heads,
         )?;
+        let (grad_q, grad_k) = if let Some(theta) = self.attn.rope_theta {
+            apply_rope_backward(
+                &grad_q,
+                &grad_k,
+                self.attn.n_heads,
+                theta,
+                cache.h_ln1.shape[0],
+            )?
+        } else {
+            (grad_q, grad_k)
+        };
         let (grad_q_w, grad_q_in) = linear_backward(
             cache.h_ln1.data.as_ref(),
             self.attn.q_proj.weight.data.as_ref(),

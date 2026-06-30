@@ -17,7 +17,7 @@ pub struct PyChatbot {
 #[pymethods]
 impl PyChatbot {
     #[new]
-    #[pyo3(signature = (vision=false, autoset=None, vocab_size=32000, n_layer=None, d_model=None, seed=None, use_learned_pos_embed=false, max_seq_len=512))]
+    #[pyo3(signature = (vision=false, autoset=None, vocab_size=32000, n_layer=None, d_model=None, seed=None, use_learned_pos_embed=false, max_seq_len=512, use_rope=false, rope_theta=10000.0))]
     pub fn new(
         vision: bool,
         autoset: Option<String>,
@@ -27,9 +27,14 @@ impl PyChatbot {
         seed: Option<u64>,
         use_learned_pos_embed: bool,
         max_seq_len: usize,
+        use_rope: bool,
+        rope_theta: f32,
     ) -> Self {
+        if use_learned_pos_embed && use_rope {
+            panic!("Chatbot cannot use both use_learned_pos_embed and use_rope");
+        }
         Self {
-            inner: Chatbot::new_with_pe_options(
+            inner: Chatbot::new_with_position_options(
                 vision,
                 autoset.as_deref(),
                 vocab_size,
@@ -38,6 +43,8 @@ impl PyChatbot {
                 seed,
                 use_learned_pos_embed,
                 max_seq_len,
+                use_rope,
+                rope_theta,
             ),
         }
     }
@@ -80,6 +87,16 @@ impl PyChatbot {
     #[getter]
     fn use_learned_pos_embed(&self) -> bool {
         self.inner.use_learned_pos_embed
+    }
+
+    #[getter]
+    fn use_rope(&self) -> bool {
+        self.inner.use_rope
+    }
+
+    #[getter]
+    fn rope_theta(&self) -> f32 {
+        self.inner.rope_theta
     }
 
     #[getter]

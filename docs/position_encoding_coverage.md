@@ -1,11 +1,14 @@
 # Position encoding coverage
 
-MagicMindNet supports two position-encoding modes on `Chatbot`:
+MagicMindNet supports three position-encoding modes on `Chatbot`:
 
 | Mode | Flag | Checkpoint | Trained |
 |------|------|------------|---------|
-| Sinusoidal (default) | `use_learned_pos_embed=False` | none (runtime) | no |
+| Sinusoidal (default) | `use_learned_pos_embed=False`, `use_rope=False` | none (runtime) | no |
 | Learned table | `use_learned_pos_embed=True` | `pos_embed` `[max_seq_len, d_model]` | yes |
+| Rotary (RoPE) | `use_rope=True` | meta `rope_theta` only | no extra weights |
+
+`use_learned_pos_embed` and `use_rope` are mutually exclusive.
 
 ## Sinusoidal (default)
 
@@ -13,7 +16,7 @@ MagicMindNet supports two position-encoding modes on `Chatbot`:
 - Applied after `embed.forward` in `forward_hidden` / `backward_lm_grads`
 - Gradients do not flow into PE (fixed)
 
-## Learned `pos_embed` (opt-in, pass 86)
+## Learned `pos_embed` (opt-in)
 
 - `Chatbot::new_with_pe_options(..., use_learned_pos_embed, max_seq_len)` — default `max_seq_len=512`
 - Python: `Chatbot(..., use_learned_pos_embed=True, max_seq_len=64)`
@@ -21,11 +24,27 @@ MagicMindNet supports two position-encoding modes on `Chatbot`:
 - `train_step_lm` updates `pos_embed` via `embedding_backward` on position indices `0..seq-1`
 - merge / quantize include `pos_embed` when enabled
 
+## RoPE (opt-in)
+
+- `apply_rope` / `apply_rope_backward` in `mmn-nn`; rotates Q/K per head after projection
+- `Chatbot::new_with_position_options(..., use_rope, rope_theta)` — default `rope_theta=10000`
+- Python: `Chatbot(..., use_rope=True, rope_theta=10000.0)`
+- Skips additive sinusoidal/learned PE on embeddings
+- IO meta: `use_rope`, `rope_theta`; no extra checkpoint tensors
+- merge requires matching `use_rope` and `rope_theta`
+
 ## Tests
 
 | Behavior | Test |
 |----------|------|
 | PE differs by row index | `position_encoding_tests::sinusoidal_pe_differs_by_position` |
+| RoPE changes Q/K | `position_encoding_tests::rope_changes_qk_values` |
+| RoPE backward | `position_encoding_tests::rope_backward_matches_finite_diff` |
+| RoPE skips additive PE | `chatbot_tests::rope_skips_additive_position_encoding` |
+| RoPE changes loss | `chatbot_tests::rope_attention_differs_from_no_rope` |
+| RoPE IO meta | `safetensors_rope_meta_roundtrip`, `test_rope_chatbot_py.py` |
+| RoPE trains | `test_rope_trains_and_reduces_loss` |
+| `benchmark_train --rope` | `test_benchmark_train_rope_example_runs` |
 | Chatbot forward uses PE | `chatbot_tests::position_encoding_affects_forward_hidden` |
 | Learned PE trains | `chatbot_tests::train_step_updates_learned_pos_embed` |
 | IO roundtrip | `learned_pos_embed_roundtrip_preserves_weights`, `test_learned_pos_embed_io_py.py` |
@@ -58,16 +77,9 @@ MagicMindNet supports two position-encoding modes on `Chatbot`:
 | Missing `pos_embed` strict | `import_rejects_missing_pos_embed_when_meta_requires` |
 | Python getters | `test_mmn_py_bindings_py.py` |
 
-## RoPE design sketch (not implemented)
+## Roadmap
 
-Rotary Position Embedding would replace additive PE:
-
-1. Precompute `cos/sin` tables for positions `0..max_seq_len` per head dimension pair.
-2. Apply rotation to Q and K **after** `q_proj` / `k_proj`, **before** attention scores.
-3. V and residual stream unchanged; pairs naturally with causal masking.
-4. Checkpoint: optional `rope_theta` meta; no extra weights (or learned freq scale later).
-5. Backward: rotate gradients with inverse rotation on Q/K branches.
-
-Until RoPE lands, use sinusoidal default or learned `pos_embed` for position signal.
+- Learned RoPE frequency scale (optional trainable θ per layer)
+- Long-context scaling (NTK / YaRN-style) for `max_seq_len` beyond training
 
 See [attention_coverage.md](attention_coverage.md) and [limitations.md](limitations.md).

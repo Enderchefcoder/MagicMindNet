@@ -536,6 +536,20 @@ use std::fs;
 
 
     #[test]
+    fn safetensors_rope_meta_roundtrip() {
+        let model = Chatbot::new_with_position_options(
+            false, None, 128, Some(1), Some(16), Some(3), false, 512, true, 5000.0,
+        );
+        assert!(model.uses_rope());
+        let path = temp_file("rope_meta.mmn");
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
+        let loaded = import_safetensors(path.to_str().unwrap(), 128).unwrap();
+        assert!(loaded.uses_rope());
+        assert!((loaded.rope_theta - 5000.0).abs() < 1e-3);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn import_rejects_block_tensor_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_block_shape.mmn");

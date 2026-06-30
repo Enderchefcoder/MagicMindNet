@@ -37,6 +37,12 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Added (RoPE position encoding)
+- Opt-in rotary position embedding on Q/K after projection (`use_rope=True`, `rope_theta=10000`)
+- `apply_rope` / `apply_rope_backward` in `mmn-nn`; mutually exclusive with learned `pos_embed`
+- Checkpoint meta `use_rope` + `rope_theta`; merge requires matching RoPE settings
+- Python getters `use_rope`, `rope_theta`; `benchmark_train.py --rope`; `tests/test_rope_chatbot_py.py`
+
 ### Added (vision patch encoder)
 - `Chatbot(vision=True)` linear patch prefix projector (`VISION_PATCH_DIM=64`): prepends projected 8×8 patch row before text embeddings in forward/train
 - `forward_hidden_with_patches`, `loss_on_batch_with_patches`, QA `Train` auto-uses `vision_patch_from_text(input)`

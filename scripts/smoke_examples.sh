@@ -31,6 +31,9 @@ echo "== examples/benchmark_train =="
 echo "== examples/benchmark_train bpe =="
 "$PY" examples/benchmark_train.py --bpe
 
+echo "== examples/benchmark_train rope =="
+"$PY" examples/benchmark_train.py --rope
+
 echo "== examples/rl_spin =="
 "$PY" examples/rl_spin.py
 

@@ -5,7 +5,7 @@ use crate::checkpoint_util::{
 };
 use crate::tensor_merge::average_tensors;
 use mmn_core::MmnError;
-use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN};
+use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
 use std::collections::HashMap;
 use std::fs;
 
@@ -43,6 +43,10 @@ pub fn export_safetensors(
             "pos_embed".to_string(),
             tensor_to_entry(&model.pos_embed.as_ref().unwrap().weight),
         );
+    }
+    if model.use_rope {
+        meta["use_rope"] = serde_json::json!(true);
+        meta["rope_theta"] = serde_json::json!(model.rope_theta);
     }
     if let Some(bpe_path) = bpe_checkpoint {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
@@ -82,10 +86,14 @@ pub fn import_safetensors(path: &str, _vocab_size: usize) -> Result<Chatbot, Mmn
     let vision = meta["vision"].as_bool().unwrap_or(false);
     let init_seed = meta["seed"].as_u64();
     let use_learned_pos_embed = meta["use_learned_pos_embed"].as_bool().unwrap_or(false);
+    let use_rope = meta["use_rope"].as_bool().unwrap_or(false);
+    let rope_theta = meta["rope_theta"]
+        .as_f64()
+        .unwrap_or(DEFAULT_ROPE_THETA as f64) as f32;
     let max_seq_len = meta["max_seq_len"]
         .as_u64()
         .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize;
-    let mut model = Chatbot::new_with_pe_options(
+    let mut model = Chatbot::new_with_position_options(
         vision,
         None,
         vocab_size,
@@ -94,6 +102,8 @@ pub fn import_safetensors(path: &str, _vocab_size: usize) -> Result<Chatbot, Mmn
         init_seed,
         use_learned_pos_embed,
         max_seq_len,
+        use_rope,
+        rope_theta,
     );
     model.embed.weight = tensor_from_entry(require_tensor_entry(&v["tensors"], "embed")?)?;
     model.lm_head.weight = tensor_from_entry(require_tensor_entry(&v["tensors"], "lm_head")?)?;
@@ -134,14 +144,18 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
                 .into(),
         });
     }
-    if a.use_learned_pos_embed != b.use_learned_pos_embed || a.max_seq_len != b.max_seq_len {
+    if a.use_learned_pos_embed != b.use_learned_pos_embed
+        || a.max_seq_len != b.max_seq_len
+        || a.use_rope != b.use_rope
+        || (a.use_rope && (a.rope_theta - b.rope_theta).abs() > 1e-3)
+    {
         return Err(MmnError::ModelMismatch {
             message: "Cannot merge models with different position-embedding settings".into(),
-            fix: "Use two models with the same use_learned_pos_embed and max_seq_len.".into(),
+            fix: "Use two models with the same use_learned_pos_embed, use_rope, max_seq_len, and rope_theta.".into(),
             explanation: "merge() requires matching position embedding configuration.".into(),
         });
     }
-    let mut out = Chatbot::new_with_pe_options(
+    let mut out = Chatbot::new_with_position_options(
         a.vision || b.vision,
         None,
         a.shape.vocab_size,
@@ -150,6 +164,8 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         a.init_seed.or(b.init_seed),
         a.use_learned_pos_embed,
         a.max_seq_len,
+        a.use_rope,
+        a.rope_theta,
     );
     out.embed.weight = average_tensors(&a.embed.weight, &b.embed.weight);
     out.lm_head.weight = average_tensors(&a.lm_head.weight, &b.lm_head.weight);
@@ -236,6 +252,10 @@ pub fn export_bin(model: &Chatbot, path: &str) -> Result<(), MmnError> {
         json["use_learned_pos_embed"] = serde_json::json!(true);
         json["max_seq_len"] = serde_json::json!(model.max_seq_len);
     }
+    if model.use_rope {
+        json["use_rope"] = serde_json::json!(true);
+        json["rope_theta"] = serde_json::json!(model.rope_theta);
+    }
     write_file_create_parents(path, json.to_string())?;
     Ok(())
 }
@@ -264,10 +284,14 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
     let n_layer = v["n_layer"].as_u64().unwrap_or(4) as usize;
     let vision = v["vision"].as_bool().unwrap_or(false);
     let use_learned_pos_embed = v["use_learned_pos_embed"].as_bool().unwrap_or(false);
+    let use_rope = v["use_rope"].as_bool().unwrap_or(false);
+    let rope_theta = v["rope_theta"]
+        .as_f64()
+        .unwrap_or(DEFAULT_ROPE_THETA as f64) as f32;
     let max_seq_len = v["max_seq_len"]
         .as_u64()
         .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize;
-    Ok(Chatbot::new_with_pe_options(
+    Ok(Chatbot::new_with_position_options(
         vision,
         None,
         vocab,
@@ -276,6 +300,8 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
         None,
         use_learned_pos_embed,
         max_seq_len,
+        use_rope,
+        rope_theta,
     ))
 }
 

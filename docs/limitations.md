@@ -5,12 +5,13 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 ## Training
 
 - Tokenization defaults to byte-level (`bytes % vocab_size`). Opt-in **BPE**: train `ai.BytePairEncoder` on QA/corpus text and pass `bpe_encoder=` to `Train()` (`crates/mmn-data/src/bpe.rs`, `tests/test_bpe_tokenizer_py.py`).
-- Token embeddings use **sinusoidal position encoding** by default (runtime, not checkpointed). Opt-in **learned `pos_embed`** is checkpointed in `mmn-safetensors-v1` and architecture flags are in `mmn-bin-v1` — see [position_encoding_coverage.md](position_encoding_coverage.md).
+- Token embeddings use **sinusoidal position encoding** by default (runtime, not checkpointed). Opt-in **learned `pos_embed`** or **RoPE** (`use_rope=True`) — see [position_encoding_coverage.md](position_encoding_coverage.md).
 - Each `TransformerBlock` uses **two residuals**: `x2 = x + attn(ln1(x))` and `out = x2 + ffn(ln2(x2))` (pass 83). Backward routes skip grads through both adds.
 - `TrainClassifier` updates backbone + head with CE; byte features are not a production text encoder.
 - RL/SPIN use heuristic rewards, not environment rollouts.
 - `TrainConfig.batch_size` on `Train()` and `TrainClassifier()` accumulates gradients over that many micro-batches (QA rows, corpus rows, or labeled classification rows) before one optimizer step (`batch_size=1` applies each step immediately).
 - `Train()` accepts `DatasetQA` (aligned input→output) or `DatasetCorpus` (next-token LM on each row).
+- RoPE rotates Q/K in attention (`use_rope=True`); mutually exclusive with learned `pos_embed` (see [position_encoding_coverage.md](position_encoding_coverage.md))
 - `Chatbot(vision=True)` includes a linear 8×8 patch prefix encoder (see [vision_coverage.md](vision_coverage.md)); real RGB / cross-attn not implemented yet.
 
 ## IO

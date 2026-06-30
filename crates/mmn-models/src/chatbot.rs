@@ -8,6 +8,8 @@ use std::collections::HashMap;
 /// Default maximum sequence length for learned position embeddings.
 pub const DEFAULT_MAX_SEQ_LEN: usize = 512;
 
+pub use mmn_nn::DEFAULT_ROPE_THETA;
+
 /// Flat 8×8 grayscale patch size for the vision prefix projector.
 pub const VISION_PATCH_DIM: usize = 64;
 
@@ -45,6 +47,9 @@ pub struct Chatbot {
     pub init_seed: Option<u64>,
     /// When true, use trainable `pos_embed` instead of fixed sinusoidal PE.
     pub use_learned_pos_embed: bool,
+    /// When true, apply rotary position embedding in attention (no additive PE).
+    pub use_rope: bool,
+    pub rope_theta: f32,
     pub max_seq_len: usize,
     pub pos_embed: Option<Embedding>,
 }
@@ -205,6 +210,35 @@ impl Chatbot {
         use_learned_pos_embed: bool,
         max_seq_len: usize,
     ) -> Self {
+        Self::new_with_position_options(
+            vision,
+            autoset_budget,
+            vocab_size,
+            n_layer,
+            d_model,
+            seed,
+            use_learned_pos_embed,
+            max_seq_len,
+            false,
+            DEFAULT_ROPE_THETA,
+        )
+    }
+
+    pub fn new_with_position_options(
+        vision: bool,
+        autoset_budget: Option<&str>,
+        vocab_size: usize,
+        n_layer: Option<usize>,
+        d_model: Option<usize>,
+        seed: Option<u64>,
+        use_learned_pos_embed: bool,
+        max_seq_len: usize,
+        use_rope: bool,
+        rope_theta: f32,
+    ) -> Self {
+        if use_learned_pos_embed && use_rope {
+            panic!("Chatbot cannot use both use_learned_pos_embed and use_rope");
+        }
         let mut rng = mmn_nn::rng_from_seed(seed);
         let shape = if let Some(b) = autoset_budget {
             autoset(b, vocab_size)
@@ -219,11 +253,13 @@ impl Chatbot {
             }
         };
         let mut blocks = Vec::new();
+        let rope = if use_rope { Some(rope_theta) } else { None };
         for _ in 0..shape.n_layer {
-            blocks.push(TransformerBlock::new_rng(
+            blocks.push(TransformerBlock::new_rng_rope(
                 shape.d_model,
                 shape.n_heads,
                 shape.ffn_dim,
+                rope,
                 &mut rng,
             ));
         }
@@ -252,12 +288,17 @@ impl Chatbot {
             device: Device::Cpu,
             init_seed: seed,
             use_learned_pos_embed,
+            use_rope,
+            rope_theta,
             max_seq_len,
             pos_embed,
         }
     }
 
     fn apply_position_encoding(&self, h: Tensor) -> Result<Tensor> {
+        if self.use_rope {
+            return Ok(h);
+        }
         if let Some(pe) = &self.pos_embed {
             let seq = h.shape[0];
             if seq > self.max_seq_len {
@@ -381,6 +422,10 @@ impl Chatbot {
             .first()
             .map(|b| b.attn.causal)
             .unwrap_or(true)
+    }
+
+    pub fn uses_rope(&self) -> bool {
+        self.use_rope
     }
 
     pub fn forward_hidden(&self, token_ids: &[usize]) -> Result<Tensor> {
@@ -1088,6 +1133,32 @@ mod chatbot_tests {
             msg.contains("max_seq_len") || msg.contains("sequence"),
             "expected max_seq_len error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn rope_enabled_on_attention_blocks() {
+        let rope_model = Chatbot::new_with_position_options(
+            false, None, 64, Some(1), Some(16), Some(1), false, 512, true, DEFAULT_ROPE_THETA,
+        );
+        assert!(rope_model.use_rope);
+        assert_eq!(
+            rope_model.blocks[0].attn.rope_theta,
+            Some(DEFAULT_ROPE_THETA)
+        );
+        let plain = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(1));
+        assert!(plain.blocks[0].attn.rope_theta.is_none());
+    }
+
+    #[test]
+    fn rope_attention_differs_from_no_rope() {
+        let plain = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(2));
+        let rope_model = Chatbot::new_with_position_options(
+            false, None, 64, Some(1), Some(16), Some(2), false, 512, true, DEFAULT_ROPE_THETA,
+        );
+        let tokens = vec![3, 4, 5, 6];
+        let l_plain = plain.loss_on_batch(&tokens, &tokens).unwrap();
+        let l_rope = rope_model.loss_on_batch(&tokens, &tokens).unwrap();
+        assert_ne!(l_plain, l_rope);
     }
 
     #[test]

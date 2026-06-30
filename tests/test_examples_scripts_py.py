@@ -16,8 +16,13 @@ def test_benchmark_train_learned_pe_example_runs(run_example):
 
 def test_benchmark_train_bpe_example_runs(run_example):
     proc = run_example("benchmark_train.py", "--bpe")
+    assert proc.returncode == 0
+
+
+def test_benchmark_train_rope_example_runs(run_example):
+    proc = run_example("benchmark_train.py", "--rope")
     assert proc.returncode == 0, proc.stderr or proc.stdout
-    assert "bpe merges:" in proc.stdout
+    assert "use_rope: True" in proc.stdout
     assert "mean loss before" in proc.stdout
 
 
