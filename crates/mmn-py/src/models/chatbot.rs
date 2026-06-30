@@ -255,4 +255,23 @@ impl PyChatbot {
             "compute_mean_loss on Chatbot requires DatasetQA or DatasetCorpus.\nFix: Use DatasetQA or DatasetCorpus.\nExplanation: Classification datasets use Classifier.compute_mean_loss.".to_string(),
         ))
     }
+
+    /// Autoregressive continuation from `prompt` (greedy when `temperature=0`).
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, bpe_encoder=None))]
+    fn generate(
+        &self,
+        prompt: &str,
+        max_new_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+    ) -> PyResult<String> {
+        let bpe = bpe_encoder.map(|e| &e.inner);
+        let cfg = mmn_train::GenerateConfig {
+            max_new_tokens,
+            temperature,
+            top_k,
+        };
+        mmn_train::generate_text(&self.inner, prompt, bpe, &cfg).map_err(mmn_err_to_py)
+    }
 }

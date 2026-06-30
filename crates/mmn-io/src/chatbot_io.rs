@@ -401,6 +401,9 @@ pub fn export_bin(model: &Chatbot, path: &str) -> Result<(), MmnError> {
         "vocab_size": model.shape.vocab_size,
         "d_model": model.shape.d_model,
         "n_layer": model.shape.n_layer,
+        "n_heads": model.shape.n_heads,
+        "n_kv_heads": model.shape.n_kv_heads,
+        "ffn_dim": model.shape.ffn_dim,
         "vision": model.vision,
     });
     if model.vision {
@@ -447,6 +450,17 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
     let vocab = v["vocab_size"].as_u64().unwrap_or(32000) as usize;
     let d_model = v["d_model"].as_u64().unwrap_or(128) as usize;
     let n_layer = v["n_layer"].as_u64().unwrap_or(4) as usize;
+    let n_heads = v
+        .get("n_heads")
+        .or_else(|| v.get("num_attention_heads"))
+        .and_then(|m| m.as_u64())
+        .map(|n| n as usize);
+    let n_kv_heads = v
+        .get("n_kv_heads")
+        .or_else(|| v.get("num_key_value_heads"))
+        .and_then(|m| m.as_u64())
+        .map(|n| n as usize);
+    let ffn_dim = v["ffn_dim"].as_u64().map(|n| n as usize);
     let vision = v["vision"].as_bool().unwrap_or(false);
     let use_learned_pos_embed = v["use_learned_pos_embed"].as_bool().unwrap_or(false);
     let use_rope = v["use_rope"].as_bool().unwrap_or(false);
@@ -456,19 +470,20 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
     let max_seq_len = v["max_seq_len"]
         .as_u64()
         .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize;
-    Ok(Chatbot::new_with_position_options(
+    Ok(Chatbot::new_with_position_and_ffn(
         vision,
         None,
         vocab,
         Some(n_layer),
         Some(d_model),
+        ffn_dim,
+        n_heads,
+        n_kv_heads,
         None,
         use_learned_pos_embed,
         max_seq_len,
         use_rope,
         rope_theta,
-        None,
-        None,
     ))
 }
 

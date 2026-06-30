@@ -616,6 +616,79 @@ use std::fs;
     }
 
     #[test]
+    fn bin_gqa_meta_roundtrip_preserves_head_counts() {
+        let model = Chatbot::new_with_position_and_ffn(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            None,
+            Some(4),
+            Some(2),
+            Some(9),
+            false,
+            512,
+            false,
+            mmn_models::DEFAULT_ROPE_THETA,
+        );
+        let path = temp_file("gqa_arch.bin");
+        export_bin(&model, path.to_str().unwrap()).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["n_heads"], 4);
+        assert_eq!(v["n_kv_heads"], 2);
+        let loaded = import_bin(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.shape.n_heads, 4);
+        assert_eq!(loaded.shape.n_kv_heads, 2);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn merge_rejects_n_kv_heads_mismatch() {
+        let a = Chatbot::new_with_position_and_ffn(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            None,
+            Some(4),
+            Some(2),
+            Some(1),
+            false,
+            512,
+            false,
+            mmn_models::DEFAULT_ROPE_THETA,
+        );
+        let b = Chatbot::new_with_position_and_ffn(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            None,
+            Some(4),
+            Some(4),
+            Some(2),
+            false,
+            512,
+            false,
+            mmn_models::DEFAULT_ROPE_THETA,
+        );
+        match merge_models(&a, &b) {
+            Err(e) => {
+                let err = e.to_string();
+                assert!(
+                    err.contains("different sizes"),
+                    "expected merge mismatch, got: {err}"
+                );
+            }
+            Ok(_) => panic!("expected merge to fail on n_kv_heads mismatch"),
+        }
+    }
+
+    #[test]
     fn import_rejects_block_tensor_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));
         let path = temp_file("bad_block_shape.mmn");

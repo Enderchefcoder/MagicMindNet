@@ -64,6 +64,9 @@ Write-Host "== examples/benchmark_train bpe =="
 Write-Host "== examples/benchmark_train rope =="
 & $PY examples/benchmark_train.py --rope
 
+Write-Host "== examples/generate_reply =="
+& $PY examples/generate_reply.py
+
 Write-Host "== examples/bpe_roundtrip =="
 & $PY examples/bpe_roundtrip.py
 

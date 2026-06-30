@@ -48,6 +48,10 @@ impl PyBytePairEncoder {
         self.inner.encode(text)
     }
 
+    fn decode(&self, ids: Vec<usize>) -> String {
+        self.inner.decode(&ids)
+    }
+
     fn save(&self, path: &str) -> PyResult<()> {
         self.inner.export_json(path).map_err(crate::errors::mmn_err_to_py)
     }

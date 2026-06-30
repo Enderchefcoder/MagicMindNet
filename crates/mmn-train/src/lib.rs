@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
 use rand::Rng;
 
+mod generate;
+
+pub use generate::{decode_tokens, generate_text, GenerateConfig};
+
 #[derive(Clone, Debug)]
 pub struct TrainConfig {
     pub epochs: usize,

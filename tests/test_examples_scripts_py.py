@@ -101,6 +101,12 @@ def test_classifier_roundtrip_example_runs(run_example):
     assert proc.returncode == 0, proc.stderr or proc.stdout
 
 
+def test_generate_reply_example_runs(run_example):
+    proc = run_example("generate_reply.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "reply:" in proc.stdout
+
+
 def test_rl_spin_example_runs(run_example):
     proc = run_example("rl_spin.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

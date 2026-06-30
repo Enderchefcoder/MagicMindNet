@@ -53,6 +53,11 @@
 - Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
 - Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
 
+### Added (Chatbot autoregressive generation)
+- `Chatbot.generate(prompt, ...)` with greedy (`temperature=0`) and temperature/top-k sampling
+- `BytePairEncoder.decode` for BPE token roundtrip; `mmn-train::generate_text`
+- `examples/generate_reply.py` + smoke; bin format stores `n_heads`/`n_kv_heads`/`ffn_dim`
+
 ### Added (Python GQA API)
 - `Chatbot(..., n_heads=, n_kv_heads=)` constructor kwargs; getters `n_heads`, `n_kv_heads`
 - `tests/test_gqa_chatbot_py.py`: HF/JSON roundtrip, fewer params than MHA, training reduces loss

@@ -164,4 +164,5 @@
 [X] GQA K/V expansion + BF16/F16 import on HF safetensors; 252 Rust / 530 pytest, verify_gate
 [X] Classifier HF binary safetensors (mmn-hf-classifier-v1) + shared tensor codec; 255 Rust / 532 pytest, verify_gate — pushed 77a4180
 [X] Native GQA forward in attention + HF import without KV expansion; 258 Rust / 532 pytest — pushed 9702629
-[X] Python GQA API (n_heads/n_kv_heads getters, param count, tests); 258 Rust / 538 pytest, verify_gate
+[X] Python GQA API (n_heads/n_kv_heads getters, param count, tests); 258 Rust / 538 pytest, verify_gate — pushed 3dcdabd
+[X] Chatbot generate + BPE decode + bin GQA meta; 263 Rust / 545 pytest, verify_gate

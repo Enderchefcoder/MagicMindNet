@@ -153,6 +153,30 @@ impl BytePairEncoder {
     pub fn vocab_size(&self) -> usize {
         self.vocab_size
     }
+
+    fn expand_token(id: usize, merges: &[(usize, usize)]) -> Vec<u8> {
+        if id < 256 {
+            return vec![id as u8];
+        }
+        let merge_idx = id.wrapping_sub(256);
+        if merge_idx >= merges.len() {
+            return vec![(id % 256) as u8];
+        }
+        let (a, b) = merges[merge_idx];
+        let mut out = Self::expand_token(a, merges);
+        out.extend(Self::expand_token(b, merges));
+        out
+    }
+
+    /// Decode BPE token ids back to UTF-8 (lossy for invalid byte sequences).
+    pub fn decode(&self, ids: &[usize]) -> String {
+        let mut bytes = Vec::new();
+        for &id in ids {
+            let clamped = id % self.vocab_size;
+            bytes.extend(Self::expand_token(clamped, &self.merges));
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +212,15 @@ mod tests {
         let raw_len = "aaaa".bytes().count();
         let bpe_len = enc.encode("aaaa").len();
         assert!(bpe_len <= raw_len);
+    }
+
+    #[test]
+    fn bpe_decode_roundtrip_ascii() {
+        let enc = BytePairEncoder::train(&["hello hello", "hello world"], 512, 8);
+        let text = "hello";
+        let ids = enc.encode(text);
+        let decoded = enc.decode(&ids);
+        assert_eq!(decoded, text);
     }
 
     #[test]
