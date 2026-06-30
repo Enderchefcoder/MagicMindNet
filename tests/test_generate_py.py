@@ -80,3 +80,30 @@ def test_sliding_window_past_learned_max_seq_len():
         "ab", max_new_tokens=12, temperature=0.0, use_kv_cache=False
     )
     assert ids == full
+
+
+def test_frequency_and_presence_penalty_kwargs():
+    bot = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, seed=9)
+    ids = bot.generate_tokens(
+        "xy",
+        max_new_tokens=4,
+        temperature=0.0,
+        frequency_penalty=0.5,
+        presence_penalty=0.25,
+    )
+    assert len(ids) == 4
+
+def test_rope_kv_slide_matches_full_forward():
+    bot = ai.Chatbot(
+        vocab_size=128,
+        n_layer=1,
+        d_model=16,
+        use_rope=True,
+        max_seq_len=8,
+        seed=77,
+    )
+    kv = bot.generate_tokens("hi", max_new_tokens=10, temperature=0.0)
+    full = bot.generate_tokens(
+        "hi", max_new_tokens=10, temperature=0.0, use_kv_cache=False
+    )
+    assert kv == full

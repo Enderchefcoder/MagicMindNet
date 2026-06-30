@@ -795,6 +795,31 @@ impl Chatbot {
         self.forward_logits_with_kv_cache(token_ids, cache)
     }
 
+    /// Evict the oldest cached token and re-index RoPE K positions (fast sliding-window step).
+    pub fn slide_kv_cache_one(&self, cache: &mut ChatbotKvCache) -> Result<()> {
+        if !self.use_rope {
+            return Err(mmn_core::MmnError::Other {
+                message: "slide_kv_cache_one requires RoPE; learned/sinusoidal PE need full re-prefill"
+                    .into(),
+            });
+        }
+        if cache.seq_len == 0 {
+            return Err(mmn_core::MmnError::Shape {
+                message: "slide_kv_cache_one on empty cache".into(),
+            });
+        }
+        for (i, block) in self.blocks.iter().enumerate() {
+            let theta = block.attn.rope_theta.unwrap_or(self.rope_theta);
+            mmn_nn::slide_rope_kv_window_one(
+                &mut cache.transformer.layers[i],
+                block.attn.n_kv_heads,
+                theta,
+            )?;
+        }
+        cache.seq_len = cache.seq_len.saturating_sub(1);
+        Ok(())
+    }
+
     pub fn loss_on_batch(&self, token_ids: &[usize], targets: &[usize]) -> Result<f32> {
         self.loss_on_batch_with_patches(token_ids, targets, None)
     }

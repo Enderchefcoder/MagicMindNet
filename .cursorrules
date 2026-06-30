@@ -170,3 +170,4 @@
 [X] Unigram tokenizer + top-p/repetition penalty generation + TextEncoderRef; 271 Rust / 554 pytest — pushed feb3ed7
 [X] KV-cache inference generation + GQA RoPE benchmark; 273 Rust / 556 pytest — pushed aaba108
 [X] Sliding context window + min-p sampling for generation; 275 Rust / 557 pytest, verify_gate
+[X] RoPE KV-cache incremental slide + frequency/presence penalties; 279 Rust / 559 pytest, verify_gate

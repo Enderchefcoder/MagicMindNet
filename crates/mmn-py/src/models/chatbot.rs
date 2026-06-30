@@ -261,7 +261,7 @@ impl PyChatbot {
     }
 
     /// Autoregressive continuation from `prompt` (greedy when `temperature=0`).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
     fn generate(
         &self,
         prompt: &str,
@@ -271,6 +271,8 @@ impl PyChatbot {
         top_p: f32,
         min_p: f32,
         repetition_penalty: f32,
+        frequency_penalty: f32,
+        presence_penalty: f32,
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
@@ -285,6 +287,8 @@ impl PyChatbot {
             top_p,
             min_p,
             repetition_penalty,
+            frequency_penalty,
+            presence_penalty,
             use_kv_cache,
             stop_token_ids: stop_token_ids.unwrap_or_default(),
             stop_strings: stop_strings.unwrap_or_default(),
@@ -293,7 +297,7 @@ impl PyChatbot {
     }
 
     /// Sample new token ids after `prompt` (excludes prompt tokens).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, stop_token_ids=None, stop_strings=None))]
     fn generate_tokens(
         &self,
         prompt: &str,
@@ -303,6 +307,8 @@ impl PyChatbot {
         top_p: f32,
         min_p: f32,
         repetition_penalty: f32,
+        frequency_penalty: f32,
+        presence_penalty: f32,
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
@@ -317,6 +323,8 @@ impl PyChatbot {
             top_p,
             min_p,
             repetition_penalty,
+            frequency_penalty,
+            presence_penalty,
             use_kv_cache,
             stop_token_ids: stop_token_ids.unwrap_or_default(),
             stop_strings: stop_strings.unwrap_or_default(),

@@ -64,6 +64,12 @@
 - `GenerateConfig.min_p` tail-probability filter after nucleus sampling; Python `min_p=` kwarg
 - Tests: `sliding_window_generates_past_max_ctx`, `test_sliding_window_past_learned_max_seq_len`
 
+### Added (RoPE KV-cache slide and frequency/presence penalties)
+- Incremental RoPE sliding window: drop oldest K/V row + re-index K positions instead of full re-prefill when context grows by one token
+- `Chatbot.slide_kv_cache_one`; `LayerKvCache.truncate_front` + `slide_rope_kv_window_one` in `mmn-nn`
+- `GenerateConfig.frequency_penalty` / `presence_penalty` (OpenAI-style logit penalties); Python kwargs on `generate` / `generate_tokens`
+- Tests: `rope_kv_slide_matches_windowed_block_forward`, `rope_sliding_kv_generation_matches_full_forward`
+
 ### Added (unigram tokenizer and nucleus sampling)
 - `UnigramEncoder`: Viterbi segmentation, EM training, `mmn-unigram-v1` JSON save/load; Python `train` / `train_from_qa` / `train_from_corpus`
 - `Train` / `RL` / `SPIN` / `compute_mean_loss` accept `unigram_encoder=` (mutually exclusive with `bpe_encoder`)

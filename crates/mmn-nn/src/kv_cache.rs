@@ -3,7 +3,7 @@
 use mmn_core::{MmnError, Result, Tensor};
 use ndarray::{ArrayD, IxDyn};
 
-use crate::{concat_sequence_rows, gelu, MultiHeadAttention, TransformerBlock};
+use crate::{concat_sequence_rows, gelu, slice_sequence_rows, MultiHeadAttention, TransformerBlock};
 
 /// Per-layer cached K/V projections (after RoPE when enabled).
 #[derive(Clone, Default)]
@@ -21,6 +21,88 @@ impl LayerKvCache {
         self.k = None;
         self.v = None;
     }
+
+    /// Drop the first `n` cached sequence rows from K/V (sliding-window eviction).
+    pub fn truncate_front(&mut self, n: usize) -> Result<()> {
+        if n == 0 {
+            return Ok(());
+        }
+        let len = self.len();
+        if n > len {
+            return Err(MmnError::Shape {
+                message: format!("truncate_front {n} exceeds KV cache len {len}"),
+            });
+        }
+        if n == len {
+            self.clear();
+            return Ok(());
+        }
+        if let (Some(k), Some(v)) = (&self.k, &self.v) {
+            self.k = Some(slice_sequence_rows(k, n, len)?);
+            self.v = Some(slice_sequence_rows(v, n, len)?);
+        }
+        Ok(())
+    }
+}
+
+/// Re-index RoPE-encoded K rows after dropping the front cache row (absolute positions shift down by 1).
+pub fn rerope_k_cache_after_front_drop(
+    k: &mut Tensor,
+    n_kv_heads: usize,
+    theta: f32,
+) -> Result<()> {
+    let rows = k.shape[0];
+    if rows == 0 {
+        return Ok(());
+    }
+    let kv_dim = k.shape[1];
+    if kv_dim % n_kv_heads != 0 {
+        return Err(MmnError::Shape {
+            message: format!("k width {kv_dim} not divisible by n_kv_heads {n_kv_heads}"),
+        });
+    }
+    let head_dim = kv_dim / n_kv_heads;
+    if head_dim % 2 != 0 {
+        return Err(MmnError::Shape {
+            message: format!("head_dim {head_dim} must be even for RoPE rerope"),
+        });
+    }
+    let half = head_dim / 2;
+    let mut data = (*k.data).clone();
+    for r in 0..rows {
+        let from_pos = r + 1;
+        let to_pos = r;
+        for h in 0..n_kv_heads {
+            let base = h * head_dim;
+            for j in 0..half {
+                let idx0 = base + 2 * j;
+                let idx1 = base + 2 * j + 1;
+                let freq = 1.0 / theta.powf(2.0 * j as f32 / head_dim as f32);
+                let delta = (to_pos as f32 - from_pos as f32) * freq;
+                let c = delta.cos();
+                let s = delta.sin();
+                let x0 = data[[r, idx0]];
+                let x1 = data[[r, idx1]];
+                data[[r, idx0]] = x0 * c - x1 * s;
+                data[[r, idx1]] = x0 * s + x1 * c;
+            }
+        }
+    }
+    *k = Tensor::from_array(data, k.requires_grad);
+    Ok(())
+}
+
+/// Drop one cached token and fix RoPE positions on surviving K rows (V unchanged).
+pub fn slide_rope_kv_window_one(
+    cache: &mut LayerKvCache,
+    n_kv_heads: usize,
+    theta: f32,
+) -> Result<()> {
+    cache.truncate_front(1)?;
+    if let Some(k) = cache.k.as_mut() {
+        rerope_k_cache_after_front_drop(k, n_kv_heads, theta)?;
+    }
+    Ok(())
 }
 
 /// One KV slot per transformer block.
@@ -361,5 +443,49 @@ mod tests {
             );
         }
         assert_eq!(cache.len(), tokens);
+    }
+
+    #[test]
+    fn rope_kv_slide_matches_windowed_block_forward() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(101);
+        let d_model = 32;
+        let block = TransformerBlock::new_rng_rope_gqa(d_model, 4, 2, 64, Some(10_000.0), &mut rng);
+        let total = 6usize;
+        let mut rows = vec![0.0f32; total * d_model];
+        for (i, v) in rows.iter_mut().enumerate() {
+            *v = ((i % 19) as f32) * 0.04 - 0.2;
+        }
+        let row_tensor = |start: usize| {
+            Tensor::from_array(
+                ArrayD::from_shape_vec(
+                    IxDyn(&[1, d_model]),
+                    rows[start * d_model..(start + 1) * d_model].to_vec(),
+                )
+                .unwrap(),
+                false,
+            )
+        };
+        let window = Tensor::from_array(
+            ArrayD::from_shape_vec(
+                IxDyn(&[5, d_model]),
+                rows[d_model..6 * d_model].to_vec(),
+            )
+            .unwrap(),
+            false,
+        );
+        let full = block.forward(&window).unwrap();
+
+        let mut cache = LayerKvCache::default();
+        for pos in 0..5 {
+            block_forward_with_kv_cache(&block, &row_tensor(pos), &mut cache, pos).unwrap();
+        }
+        slide_rope_kv_window_one(&mut cache, block.attn.n_kv_heads, 10_000.0).unwrap();
+        let slide = block_forward_with_kv_cache(&block, &row_tensor(5), &mut cache, 4).unwrap();
+
+        for i in 0..d_model {
+            let a = slide.data[[0, i]];
+            let b = full.data[[4, i]];
+            assert!((a - b).abs() < 1e-4, "dim {i}: slide={a} full={b}");
+        }
     }
 }

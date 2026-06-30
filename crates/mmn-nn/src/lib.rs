@@ -5,7 +5,8 @@ use rand::{Rng, SeedableRng};
 mod kv_cache;
 pub use kv_cache::{
     apply_rope_with_position_offset, block_forward_with_kv_cache, mha_forward_with_kv_cache,
-    scaled_dot_product_attention_with_kv, LayerKvCache, TransformerKvCache,
+    rerope_k_cache_after_front_drop, scaled_dot_product_attention_with_kv, slide_rope_kv_window_one,
+    LayerKvCache, TransformerKvCache,
 };
 
 fn transpose_tensor(t: &Tensor) -> Result<Tensor> {

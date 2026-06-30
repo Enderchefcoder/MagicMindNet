@@ -19,6 +19,10 @@ pub struct GenerateConfig {
     pub min_p: f32,
     /// Penalize tokens already in the generation context (`1.0` = off, `>1` discourages repeats).
     pub repetition_penalty: f32,
+    /// Subtract `frequency_penalty * count(token)` from logits (`0` = off).
+    pub frequency_penalty: f32,
+    /// Subtract `presence_penalty` once per token type seen in context (`0` = off).
+    pub presence_penalty: f32,
     /// Stop when a sampled token id is in this set (token is excluded from output).
     pub stop_token_ids: Vec<usize>,
     /// Stop when decoded new text contains any of these substrings (suffix removed).
@@ -36,6 +40,8 @@ impl Default for GenerateConfig {
             top_p: 0.0,
             min_p: 0.0,
             repetition_penalty: 1.0,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
             stop_token_ids: Vec::new(),
             stop_strings: Vec::new(),
             use_kv_cache: true,
@@ -114,7 +120,35 @@ pub fn apply_repetition_penalty(scores: &mut [f32], context: &[usize], penalty: 
     }
 }
 
-/// Zero out tail mass so cumulative probability reaches at most `top_p` (nucleus sampling).
+/// Subtract `penalty * occurrence_count` from logits (OpenAI-style frequency penalty).
+pub fn apply_frequency_penalty(scores: &mut [f32], context: &[usize], penalty: f32) {
+    if penalty.abs() < 1e-6 {
+        return;
+    }
+    let mut counts = std::collections::HashMap::new();
+    for &t in context {
+        *counts.entry(t).or_insert(0usize) += 1;
+    }
+    for (t, c) in counts {
+        if t < scores.len() {
+            scores[t] -= penalty * c as f32;
+        }
+    }
+}
+
+/// Subtract `penalty` once per distinct token in context (OpenAI-style presence penalty).
+pub fn apply_presence_penalty(scores: &mut [f32], context: &[usize], penalty: f32) {
+    if penalty.abs() < 1e-6 {
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for &t in context {
+        if seen.insert(t) && t < scores.len() {
+            scores[t] -= penalty;
+        }
+    }
+}
+
 pub fn apply_top_p(probs: &mut [f32], top_p: f32) {
     if top_p <= 0.0 || top_p >= 1.0 {
         return;
@@ -212,7 +246,7 @@ fn last_token_scores(
     logits: &mmn_core::Tensor,
     vocab: usize,
     tokens: &[usize],
-    repetition_penalty: f32,
+    config: &GenerateConfig,
 ) -> Result<Vec<f32>> {
     if logits.shape.len() != 2 {
         return Err(MmnError::Shape {
@@ -222,7 +256,9 @@ fn last_token_scores(
     let last = logits.shape[0] - 1;
     let vocab_size = logits.shape[1].min(vocab);
     let mut scores: Vec<f32> = (0..vocab_size).map(|i| logits.data[[last, i]]).collect();
-    apply_repetition_penalty(&mut scores, tokens, repetition_penalty);
+    apply_repetition_penalty(&mut scores, tokens, config.repetition_penalty);
+    apply_frequency_penalty(&mut scores, tokens, config.frequency_penalty);
+    apply_presence_penalty(&mut scores, tokens, config.presence_penalty);
     Ok(scores)
 }
 
@@ -238,6 +274,16 @@ fn forward_logits_after_append(
     max_ctx: usize,
 ) -> Result<mmn_core::Tensor> {
     if tokens.len() > max_ctx {
+        let overflow = tokens.len() - max_ctx;
+        if model.uses_rope() && overflow == 1 && cache.seq_len >= max_ctx {
+            model.slide_kv_cache_one(cache)?;
+            let last = *tokens
+                .last()
+                .ok_or_else(|| MmnError::Shape {
+                    message: "forward_logits_after_append requires at least one token".into(),
+                })?;
+            return model.forward_logits_with_kv_cache(&[last], cache);
+        }
         model.reset_kv_cache_prefill(context_window(tokens, max_ctx), cache)
     } else {
         let last = *tokens
@@ -282,7 +328,7 @@ fn generate_token_ids_with_kv_cache(
     let mut rng = rand::thread_rng();
     let mut logits =
         model.reset_kv_cache_prefill(context_window(tokens, max_ctx), &mut cache)?;
-    let mut scores = last_token_scores(&logits, vocab, tokens, config.repetition_penalty)?;
+    let mut scores = last_token_scores(&logits, vocab, tokens, config)?;
 
     for _ in 0..config.max_new_tokens {
         let next = pick_next_token(
@@ -318,7 +364,7 @@ fn generate_token_ids_with_kv_cache(
         }
 
         logits = forward_logits_after_append(model, tokens, &mut cache, max_ctx)?;
-        scores = last_token_scores(&logits, vocab, tokens, config.repetition_penalty)?;
+        scores = last_token_scores(&logits, vocab, tokens, config)?;
     }
 
     Ok(tokens[prompt_len..].to_vec())
@@ -353,7 +399,7 @@ pub fn generate_token_ids(
     for _ in 0..config.max_new_tokens {
         let ctx = context_window(&tokens, max_ctx);
         let logits = model.forward_logits(ctx)?;
-        let mut scores = last_token_scores(&logits, vocab, &tokens, config.repetition_penalty)?;
+        let mut scores = last_token_scores(&logits, vocab, &tokens, config)?;
         let next = pick_next_token(
             &mut scores,
             config.temperature,
@@ -518,6 +564,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ids, full_ids);
+    }
+
+    #[test]
+    fn frequency_penalty_reduces_repeated_logits() {
+        let mut scores = vec![1.0f32, 2.0, 3.0, 4.0];
+        apply_frequency_penalty(&mut scores, &[1, 1, 2], 0.5);
+        assert!((scores[1] - 1.0).abs() < 1e-5);
+        assert!((scores[2] - 2.5).abs() < 1e-5);
+        assert!((scores[0] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn presence_penalty_applies_once_per_type() {
+        let mut scores = vec![1.0f32, 2.0, 3.0];
+        apply_presence_penalty(&mut scores, &[0, 0, 1], 1.0);
+        assert!((scores[0] - 0.0).abs() < 1e-5);
+        assert!((scores[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rope_sliding_kv_generation_matches_full_forward() {
+        let model = Chatbot::new_with_position_options(
+            false,
+            None,
+            128,
+            Some(1),
+            Some(16),
+            Some(77),
+            false,
+            8,
+            true,
+            10_000.0,
+            None,
+            None,
+        );
+        let cfg = GenerateConfig {
+            max_new_tokens: 10,
+            temperature: 0.0,
+            ..Default::default()
+        };
+        let kv_ids = generate_token_ids(&model, "hi", None, &cfg).unwrap();
+        let full_ids = generate_token_ids(
+            &model,
+            "hi",
+            None,
+            &GenerateConfig {
+                use_kv_cache: false,
+                ..cfg
+            },
+        )
+        .unwrap();
+        assert_eq!(kv_ids, full_ids);
     }
 
     #[test]
