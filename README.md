@@ -59,7 +59,7 @@ Learned position embeddings (opt-in; adds `pos_embed` to checkpoints):
 bot = ai.Chatbot(vocab_size=512, n_layer=2, d_model=64, use_learned_pos_embed=True, max_seq_len=128)
 ```
 
-See [docs/position_encoding_coverage.md](docs/position_encoding_coverage.md) and `examples/learned_pos_embed_roundtrip.py`.
+See [docs/position_encoding_coverage.md](docs/position_encoding_coverage.md), `examples/learned_pos_embed_roundtrip.py`, and `examples/rope_roundtrip.py`.
 
 Classification:
 
@@ -244,6 +244,7 @@ Format details: [docs/checkpoints.md](docs/checkpoints.md).
 | `examples/eval_mean_loss.py` | Mean QA / classification loss |
 | `examples/checkpoint_roundtrip.py` | Chatbot export → import |
 | `examples/learned_pos_embed_roundtrip.py` | Learned `pos_embed` export → import + loss parity |
+| `examples/rope_roundtrip.py` | RoPE chatbot export → import + loss parity |
 | `examples/classifier_roundtrip.py` | Classifier export → import |
 
 Full catalog: [examples/README.md](examples/README.md).
@@ -266,8 +267,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **223**
-- pytest: **509**
+- Rust `#[test]`: **228**
+- pytest: **512**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

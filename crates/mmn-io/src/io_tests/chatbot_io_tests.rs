@@ -549,6 +549,49 @@ use std::fs;
         let _ = fs::remove_file(&path);
     }
 
+
+    #[test]
+    fn import_preserves_forward_loss_rope() {
+        let model = Chatbot::new_with_position_options(
+            false, None, 128, Some(1), Some(16), Some(11), false, 512, true, 8000.0,
+        );
+        let tokens: Vec<usize> = (0..6).collect();
+        let targets: Vec<usize> = (1..7).collect();
+        let loss_before = model.loss_on_batch(&tokens, &targets).unwrap();
+        let path = temp_file("rope_loss.mmn");
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
+        let loaded = import_safetensors(path.to_str().unwrap(), 128).unwrap();
+        assert!(loaded.uses_rope());
+        assert!((loaded.rope_theta - 8000.0).abs() < 1e-3);
+        let loss_after = loaded.loss_on_batch(&tokens, &targets).unwrap();
+        assert!(
+            (loss_before - loss_after).abs() < 1e-4,
+            "RoPE loss drift after import: {loss_before} vs {loss_after}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+
+    #[test]
+    fn bin_rope_roundtrip_preserves_meta() {
+        let model = Chatbot::new_with_position_options(
+            false, None, 128, Some(2), Some(32), Some(5), false, 512, true, 7500.0,
+        );
+        let path = temp_file("rope_arch.bin");
+        export_bin(&model, path.to_str().unwrap()).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["use_rope"], true);
+        assert_eq!(v["rope_theta"].as_f64().unwrap(), 7500.0);
+        let loaded = import_bin(path.to_str().unwrap()).unwrap();
+        assert!(loaded.uses_rope());
+        assert!((loaded.rope_theta - 7500.0).abs() < 1e-3);
+        assert_eq!(loaded.shape.vocab_size, 128);
+        assert_eq!(loaded.shape.n_layer, 2);
+        assert_eq!(loaded.shape.d_model, 32);
+        let _ = fs::remove_file(&path);
+    }
+
     #[test]
     fn import_rejects_block_tensor_shape_mismatch() {
         let model = Chatbot::new(false, None, 256, Some(1), Some(16));

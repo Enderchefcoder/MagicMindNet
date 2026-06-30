@@ -82,6 +82,20 @@ def test_learned_pos_embed_roundtrip_train_example_runs(run_example):
     assert "learned pos_embed roundtrip ok" in proc.stdout
 
 
+def test_rope_roundtrip_example_runs(run_example):
+    proc = run_example("rope_roundtrip.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "rope roundtrip ok" in proc.stdout
+    assert "rope_theta=" in proc.stdout
+
+
+def test_rope_roundtrip_train_example_runs(run_example):
+    proc = run_example("rope_roundtrip.py", "--train")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "trained before export" in proc.stdout
+    assert "rope roundtrip ok" in proc.stdout
+
+
 def test_classifier_roundtrip_example_runs(run_example):
     proc = run_example("classifier_roundtrip.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

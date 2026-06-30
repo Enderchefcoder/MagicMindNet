@@ -43,6 +43,11 @@ MagicMindNet supports three position-encoding modes on `Chatbot`:
 | RoPE skips additive PE | `chatbot_tests::rope_skips_additive_position_encoding` |
 | RoPE changes loss | `chatbot_tests::rope_attention_differs_from_no_rope` |
 | RoPE IO meta | `safetensors_rope_meta_roundtrip`, `test_rope_chatbot_py.py` |
+| RoPE import loss parity | `import_preserves_forward_loss_rope`, `test_rope_export_import_preserves_mean_loss` |
+| RoPE train→export→import | `train_rope_export_import_preserves_mean_loss` |
+| `bin` RoPE meta | `bin_rope_roundtrip_preserves_meta` |
+| RoPE example roundtrip | `examples/rope_roundtrip.py`, `test_rope_roundtrip_example_runs` |
+| RoPE example roundtrip (train) | `rope_roundtrip.py --train`, `test_rope_roundtrip_train_example_runs` |
 | RoPE trains | `test_rope_trains_and_reduces_loss` |
 | RoPE corpus train | `train_corpus_rope_reduces_mean_loss` |
 | RoPE merge mismatch | `test_merge_rejects_rope_theta_mismatch`, `test_merge_rejects_rope_vs_sinusoidal` |

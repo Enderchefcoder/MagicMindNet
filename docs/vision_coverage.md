@@ -51,9 +51,14 @@ When `vision=true`, safetensors checkpoints include:
 - No cross-attention between image and text streams yet.
 - `DatasetImageGen` / `DatasetImageEdit` remain diffusion stubs, not `Chatbot` training.
 
+## Diffusion / Conv2d
+
+- `Conv2d::forward` applies real NCHW convolution with same padding (`kernel/2`) for VAE/UNet blocks.
+- `vae_encoder_preserves_8x8_latent_shape` (Rust) and `Diffusion.smoke_step()` (Python) assert finite 8×8 latents.
+
 ## Roadmap
 
-1. **Real patch embed** — `Conv2d` over RGB tiles instead of flat byte surrogate.
+1. **RGB conv patch embed** — `Conv2d` over RGB tiles for `Chatbot` vision prefix (byte surrogate remains default).
 2. **Cross-attn block** — Q from text, K/V from image patches after self-attn.
 3. **DatasetQA image paths** — load files from disk into normalized patches.
 

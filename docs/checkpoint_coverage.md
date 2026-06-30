@@ -77,6 +77,9 @@ See [position_encoding_coverage.md](position_encoding_coverage.md).
 | Learned PE loss after import | `import_preserves_forward_loss_learned_pos_embed` | `test_export_import_preserves_learned_pos_embed_compute_loss` |
 | Learned PE loss after train + export | — | `test_export_import_preserves_learned_pos_embed_after_train` |
 | Learned PE train→export→import (Rust) | `train_learned_pos_embed_export_import_preserves_mean_loss`, `train_corpus_learned_pos_embed_export_import_preserves_mean_loss` | — |
+| RoPE loss after import | `import_preserves_forward_loss_rope` | `test_rope_export_import_preserves_mean_loss` |
+| RoPE train→export→import (Rust) | `train_rope_export_import_preserves_mean_loss` | `test_rope_export_import_preserves_mean_loss` |
+| `bin` RoPE meta | `bin_rope_roundtrip_preserves_meta` | — |
 
 ## Classifier (`mmn-classifier-v1`)
 

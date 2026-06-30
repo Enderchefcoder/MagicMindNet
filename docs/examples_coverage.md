@@ -12,6 +12,7 @@ Runnable scripts under `examples/` and how they are regression-tested.
 | [classification_benchmark.py](../examples/classification_benchmark.py) | Classification train delta | yes | yes |
 | [checkpoint_roundtrip.py](../examples/checkpoint_roundtrip.py) | Chatbot export/import | yes | yes |
 | [learned_pos_embed_roundtrip.py](../examples/learned_pos_embed_roundtrip.py) | Learned `pos_embed` export/import + loss; `--train` | yes | yes |
+| [rope_roundtrip.py](../examples/rope_roundtrip.py) | RoPE chatbot export/import + loss; `--train` | yes | yes |
 | [classifier_roundtrip.py](../examples/classifier_roundtrip.py) | Classifier export/import | yes | yes |
 | [rl_spin.py](../examples/rl_spin.py) | `RL` + `SPIN` on fixture QA | yes | yes |
 | [diffusion_smoke.py](../examples/diffusion_smoke.py) | `Diffusion.smoke_step()` | yes | yes |

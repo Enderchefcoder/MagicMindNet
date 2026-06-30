@@ -154,3 +154,4 @@
 [X] Pass 118 — vision patch prefix encoder forward/train/IO; 217 Rust / 496 pytest
 [X] Pass 119 — RoPE Q/K rotation in attention with train/IO/Python; 222 Rust / 501 pytest
 [X] Pass 120 — --rope flags on eval_mean_loss, corpus_benchmark, quickstart + merge tests; verify_gate
+[X] Pass 121 — rope_roundtrip example + IO/train loss parity + real Conv2d forward; 228 Rust / 512 pytest, verify_gate

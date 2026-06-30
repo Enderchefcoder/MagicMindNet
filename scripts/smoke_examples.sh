@@ -10,6 +10,12 @@ echo "== examples/quickstart =="
 echo "== examples/checkpoint_roundtrip =="
 "$PY" examples/checkpoint_roundtrip.py
 
+echo "== examples/rope_roundtrip =="
+"$PY" examples/rope_roundtrip.py
+
+echo "== examples/rope_roundtrip train =="
+"$PY" examples/rope_roundtrip.py --train
+
 echo "== examples/classifier_roundtrip =="
 "$PY" examples/classifier_roundtrip.py
 

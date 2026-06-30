@@ -1085,6 +1085,47 @@ mod tests {
     }
 
     #[test]
+    fn train_rope_export_import_preserves_mean_loss() {
+        use mmn_io::{export_safetensors, import_safetensors};
+        use std::fs;
+        use std::path::PathBuf;
+
+        let ds = toy_dataset();
+        let mut model = Chatbot::new_with_position_options(
+            false, None, 256, Some(1), Some(32), Some(15), false, 512, true, 10_000.0,
+        );
+        train(
+            &mut model,
+            &ds,
+            &TrainConfig {
+                epochs: 3,
+                batch_size: 1,
+                learning_rate: 0.05,
+                optimizer: "adamw".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let loss_before = mean_qa_loss(&model, &ds).unwrap();
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test_rope_train_export.mmn");
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
+        let loaded = import_safetensors(path.to_str().unwrap(), 256).unwrap();
+        assert!(loaded.uses_rope());
+        assert!((loaded.rope_theta - 10_000.0).abs() < 1e-3);
+        let loss_after = mean_qa_loss(&loaded, &ds).unwrap();
+        assert!(
+            (loss_before - loss_after).abs() < 1e-4,
+            "trained RoPE mean loss drift after export/import: {loss_before} vs {loss_after}"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn train_learned_pos_embed_quantize_int8_preserves_mean_loss() {
         use mmn_io::quantize_model;
 

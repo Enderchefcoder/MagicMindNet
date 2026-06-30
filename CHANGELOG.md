@@ -37,6 +37,15 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Added (RoPE checkpoint roundtrip and trained export parity)
+- `examples/rope_roundtrip.py` with optional `--train` before export/import mean-loss check
+- Rust `import_preserves_forward_loss_rope`, `bin_rope_roundtrip_preserves_meta`, `train_rope_export_import_preserves_mean_loss`
+- pytest `test_rope_roundtrip_*`, `test_rope_export_import_preserves_mean_loss`; smoke gate wiring
+
+### Added (real Conv2d forward for diffusion blocks)
+- `Conv2d::forward` NCHW convolution with same padding (`kernel/2`) instead of identity clone
+- Tests `conv2d_same_padding_preserves_spatial_dims`, `vae_encoder_preserves_8x8_latent_shape`
+
 ### Added (RoPE example flags and corpus train test)
 - `--rope` on `eval_mean_loss.py`, `corpus_benchmark.py`, and `quickstart.py` (mutually exclusive with `--learned-pe`)
 - Rust `train_corpus_rope_reduces_mean_loss`; pytest merge mismatch + example smokes

@@ -1359,8 +1359,63 @@ impl Conv2d {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // Depthwise-simplified conv for diffusion blocks
-        Ok(x.clone())
+        let shape = &x.shape;
+        if shape.len() != 4 {
+            return Err(MmnError::Shape {
+                message: format!("Conv2d expects NCHW input, got shape {shape:?}"),
+            });
+        }
+        let (batch, in_ch, height, width) = (shape[0], shape[1], shape[2], shape[3]);
+        if in_ch != self.in_ch {
+            return Err(MmnError::Shape {
+                message: format!(
+                    "Conv2d input channels {in_ch} do not match layer in_ch {}",
+                    self.in_ch
+                ),
+            });
+        }
+        let pad = self.kernel / 2;
+        let out_h = height + 2 * pad + 1 - self.kernel;
+        let out_w = width + 2 * pad + 1 - self.kernel;
+        let mut out = ndarray::Array4::<f32>::zeros((batch, self.out_ch, out_h, out_w));
+        let w = self.weight.data.view();
+        let x_view = x.data.view();
+        for n in 0..batch {
+            for oc in 0..self.out_ch {
+                for oh in 0..out_h {
+                    for ow in 0..out_w {
+                        let mut sum = 0.0f32;
+                        for ic in 0..self.in_ch {
+                            for kh in 0..self.kernel {
+                                for kw in 0..self.kernel {
+                                    let ih = oh + kh;
+                                    let iw = ow + kw;
+                                    if ih >= pad
+                                        && iw >= pad
+                                        && ih < pad + height
+                                        && iw < pad + width
+                                    {
+                                        let xi = ih - pad;
+                                        let xj = iw - pad;
+                                        sum += x_view[[n, ic, xi, xj]]
+                                            * w[[oc, ic, kh, kw]];
+                                    }
+                                }
+                            }
+                        }
+                        out[[n, oc, oh, ow]] = sum;
+                    }
+                }
+            }
+        }
+        Ok(Tensor::from_array(
+            ndarray::ArrayD::from_shape_vec(
+                ndarray::IxDyn(&[batch, self.out_ch, out_h, out_w]),
+                out.iter().copied().collect(),
+            )
+            .unwrap(),
+            true,
+        ))
     }
 }
 
@@ -1401,5 +1456,45 @@ impl UNet2D {
         let h = self.down.forward(x)?;
         let h = self.mid.forward(&h)?;
         self.up.forward(&h)
+    }
+}
+
+#[cfg(test)]
+mod conv2d_tests {
+    use super::*;
+    use ndarray::Array4;
+
+    #[test]
+    fn conv2d_same_padding_preserves_spatial_dims() {
+        let conv = Conv2d::new(1, 2, 3);
+        let mut w = conv
+            .weight
+            .data
+            .as_ref()
+            .clone()
+            .into_dimensionality::<ndarray::Ix4>()
+            .unwrap();
+        w.fill(0.0);
+        w[[0, 0, 1, 1]] = 1.0;
+        w[[1, 0, 1, 1]] = 2.0;
+        let mut conv = conv;
+        conv.weight = Tensor::from_array(w.into_dyn(), true);
+        let x = Tensor::from_array(
+            Array4::from_elem((1, 1, 4, 4), 3.0f32).into_dyn(),
+            false,
+        );
+        let y = conv.forward(&x).unwrap();
+        assert_eq!(y.shape, vec![1, 2, 4, 4]);
+        assert!((y.data[[0, 0, 2, 2]] - 3.0).abs() < 1e-5);
+        assert!((y.data[[0, 1, 2, 2]] - 6.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn vae_encoder_preserves_8x8_latent_shape() {
+        let vae = VaeEncoder::new();
+        let x = Tensor::randn(&[1, 3, 8, 8], false);
+        let latent = vae.encode(&x).unwrap();
+        assert_eq!(latent.shape, vec![1, 4, 8, 8]);
+        assert!(latent.data.iter().all(|v| v.is_finite()));
     }
 }

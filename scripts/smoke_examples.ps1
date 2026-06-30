@@ -19,6 +19,12 @@ Write-Host "== examples/learned_pos_embed_roundtrip =="
 Write-Host "== examples/learned_pos_embed_roundtrip train =="
 & $PY examples/learned_pos_embed_roundtrip.py --train
 
+Write-Host "== examples/rope_roundtrip =="
+& $PY examples/rope_roundtrip.py
+
+Write-Host "== examples/rope_roundtrip train =="
+& $PY examples/rope_roundtrip.py --train
+
 Write-Host "== examples/classifier_roundtrip =="
 & $PY examples/classifier_roundtrip.py
 

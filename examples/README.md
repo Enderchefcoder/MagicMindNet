@@ -10,6 +10,7 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 | [rl_spin.py](rl_spin.py) | `RL` then `SPIN` on fixture QA |
 | [checkpoint_roundtrip.py](checkpoint_roundtrip.py) | Chatbot export/import parity |
 | [learned_pos_embed_roundtrip.py](learned_pos_embed_roundtrip.py) | Learned `pos_embed` export/import + mean-loss parity (optional `--train`) |
+| [rope_roundtrip.py](rope_roundtrip.py) | RoPE chatbot export/import + mean-loss parity (optional `--train`) |
 | [classifier_roundtrip.py](classifier_roundtrip.py) | Classifier export/import parity |
 | [classification.py](classification.py) | Train classifier, export, predict |
 | [classification_benchmark.py](classification_benchmark.py) | Classification mean loss before/after train |

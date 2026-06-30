@@ -58,3 +58,21 @@ def test_rope_trains_and_reduces_loss():
     ai.Train(bot, ds, cfg)
     loss_after = bot.compute_mean_loss(ds)
     assert loss_after < loss_before
+
+
+def test_rope_export_import_preserves_mean_loss(tmp_path: Path):
+    ds = ai.DatasetQA(
+        file=str(FIXTURES / "qa_valid.json"),
+        user_row="input",
+        ai_row="output",
+    )
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, use_rope=True, rope_theta=9000.0, seed=5)
+    ai.Train(bot, ds, ai.TrainConfig(epochs=2, batch_size=1, learning_rate=0.05))
+    loss_before = bot.compute_mean_loss(ds)
+    path = tmp_path / "rope_train.mmn"
+    ai.export(bot, "safetensors", str(path))
+    loaded = ai.import_model("safetensors", [str(path)])
+    assert loaded.use_rope is True
+    assert loaded.rope_theta == pytest.approx(9000.0)
+    loss_after = loaded.compute_mean_loss(ds)
+    assert abs(loss_before - loss_after) < 1e-4
