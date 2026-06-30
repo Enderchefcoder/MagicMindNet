@@ -70,6 +70,6 @@ When `vision=true`, safetensors checkpoints include:
 
 ## Roadmap
 
-- HF binary safetensors interchange (optional import/export adapter)
+- External HF model import (SwiGLU / fused QKV when shapes differ from MMN blocks)
 
 See also [training.md](training.md), [checkpoint_coverage.md](checkpoint_coverage.md), and [limitations.md](limitations.md).

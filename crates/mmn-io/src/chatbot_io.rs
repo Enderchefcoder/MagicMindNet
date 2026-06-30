@@ -88,10 +88,20 @@ pub fn export_safetensors(
 }
 
 pub fn import_safetensors(path: &str, _vocab_size: usize) -> Result<Chatbot, MmnError> {
-    let text = fs::read_to_string(path).map_err(|e| MmnError::Other {
+    let bytes = fs::read(path).map_err(|e| MmnError::Other {
         message: e.to_string(),
     })?;
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| MmnError::Other {
+    if crate::hf_safetensors::is_hf_safetensors_bytes(&bytes) {
+        return crate::hf_safetensors::import_hf_safetensors_bytes(&bytes);
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|e| MmnError::Other {
+        message: e.to_string(),
+    })?;
+    import_mmn_json_safetensors(text)
+}
+
+fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
         message: e.to_string(),
     })?;
     if v["format"].as_str() != Some("mmn-safetensors-v1") {

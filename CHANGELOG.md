@@ -42,6 +42,12 @@
 - QA `image` column accepts comma-separated paths or JSON array; `vision_patch_grid` on `DatasetQA`
 - Cross-attn uses all prefix rows as memory; Python `image_patches=` and `sample_image_paths`
 
+### Added (Hugging Face binary safetensors interchange)
+- `export(bot, "hf-safetensors", path)` / `import_model("hf-safetensors", [path])` via `safetensors` crate (F32, MMN key names)
+- `import_model("safetensors", …)` auto-detects binary HF files vs JSON `mmn-safetensors-v1`
+- Header metadata `format: mmn-hf-safetensors-v1` + JSON `meta`; Llama/GPT-style tensor name aliases on import
+- Rust `hf_safetensors` module; pytest `test_hf_safetensors_py.py`; `examples/hf_safetensors_roundtrip.py`
+
 ### Added (DatasetQA disk image paths for vision training)
 - Optional `image` JSON column (`image_row` config); resolves relative paths against the QA manifest directory
 - `vision_rgb_patch_from_image_path` resizes PNG/JPEG to 8×8×3 NCHW; grayscale fallback for legacy patch-only models

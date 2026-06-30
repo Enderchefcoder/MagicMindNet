@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn rgb_patches_grid_two_produces_four_tiles() {
         let mut img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(16, 16);
-        for (x, y, pixel) in img.enumerate_pixels_mut() {
+        for (x, _y, pixel) in img.enumerate_pixels_mut() {
             let r = if x < 8 { 255 } else { 0 };
             *pixel = Rgb([r, 0, 0]);
         }

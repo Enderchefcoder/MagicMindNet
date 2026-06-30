@@ -12,12 +12,13 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 - `TrainConfig.batch_size` on `Train()` and `TrainClassifier()` accumulates gradients over that many micro-batches (QA rows, corpus rows, or labeled classification rows) before one optimizer step (`batch_size=1` applies each step immediately).
 - `Train()` accepts `DatasetQA` (aligned input→output) or `DatasetCorpus` (next-token LM on each row).
 - RoPE rotates Q/K in attention (`use_rope=True`); mutually exclusive with learned `pos_embed` (see [position_encoding_coverage.md](position_encoding_coverage.md))
-- `Chatbot(vision=True)` includes RGB conv patch prefix + text→image cross-attention after block 0 (see [vision_coverage.md](vision_coverage.md)); disk image loading not implemented yet.
+- `Chatbot(vision=True)` includes RGB conv patch prefix + text→image cross-attention after block 0 (see [vision_coverage.md](vision_coverage.md)); QA training loads optional `image` paths from disk.
 
 ## IO
 
-- `mmn-safetensors-v1` (Chatbot) and `mmn-classifier-v1` (Classifier) are JSON checkpoints with tensor blobs. They are not Hugging Face binary safetensors.
-- `bin` / `mmn-bin-v1` stores architecture meta only (no weights), including optional `use_learned_pos_embed` / `max_seq_len`. Use `safetensors` for weight roundtrips.
+- `mmn-safetensors-v1` (Chatbot) and `mmn-classifier-v1` (Classifier) are JSON checkpoints with tensor blobs.
+- **`hf-safetensors`** / **`mmn-hf-safetensors-v1`**: optional Hugging Face **binary** safetensors interchange (F32, MMN tensor keys). `import_model("safetensors", …)` auto-detects binary vs JSON. Classifier HF import not implemented yet.
+- `bin` / `mmn-bin-v1` stores architecture meta only (no weights), including optional `use_learned_pos_embed` / `max_seq_len`. Use `safetensors` or `hf-safetensors` for weight roundtrips.
 - LayerNorm γ/β are included in `mmn-safetensors-v1` checkpoints per transformer block.
 
 ## CUDA
@@ -41,7 +42,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 | Scaled dot-product attention backward | [attention_coverage.md](attention_coverage.md) | ~~done pass 81~~ |
 | LayerNorm γ/β training | [layernorm_coverage.md](layernorm_coverage.md) | ~~done pass 82~~ |
 | Production tokenizer | this doc § Training | ~~BPE trainer + Python binding + Train(bpe_encoder=) + `mmn-bpe-v1` save/load~~; SentencePiece-scale vocab next |
-| Vision encoder | [vision_coverage.md](vision_coverage.md) | DatasetQA image file loading |
-| HF binary safetensors | this doc § IO | Optional interchange format |
+| Vision encoder | [vision_coverage.md](vision_coverage.md) | ~~DatasetQA image file loading~~; multi-patch tiles done |
+| HF binary safetensors | this doc § IO | ~~Chatbot export/import + auto-detect~~; external HF model import (SwiGLU/fused QKV) next |
 
 See also [optimizers_coverage.md](optimizers_coverage.md) (Muon matrix routing) and [training_coverage.md](training_coverage.md).

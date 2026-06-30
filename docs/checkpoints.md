@@ -1,15 +1,30 @@
 # Checkpoint formats
 
-MagicMindNet uses JSON wrappers with little-endian F32 tensor blobs (not Hugging Face binary safetensors).
+MagicMindNet uses two Chatbot weight formats:
+
+1. **`mmn-safetensors-v1`** — JSON wrapper with little-endian F32 tensor blobs (default `export(..., "safetensors", …)`).
+2. **`mmn-hf-safetensors-v1`** — Hugging Face **binary** safetensors (`export(..., "hf-safetensors", …)`). Same MMN tensor keys and meta; readable by HF tooling.
+
+`import_model("safetensors", [path])` auto-detects binary vs JSON from the first byte.
 
 Export creates missing parent directories for the output path (e.g. `checkpoints/run1/model.mmn`).
 
-## Chatbot — `mmn-safetensors-v1`
+## Chatbot — `mmn-safetensors-v1` (JSON)
 
 ```python
 ai.export(bot, "safetensors", "model.mmn")
 bot2 = ai.import_model("safetensors", ["model.mmn"])
 ```
+
+## Chatbot — `mmn-hf-safetensors-v1` (binary)
+
+```python
+ai.export(bot, "hf-safetensors", "model.safetensors")
+bot2 = ai.import_model("hf-safetensors", ["model.safetensors"])
+# or: ai.import_model("safetensors", ["model.safetensors"])  # auto-detect
+```
+
+Header `__metadata__` includes `format: mmn-hf-safetensors-v1` and a JSON `meta` string (`vocab_size`, `n_layer`, `d_model`, vision flags, etc.). Import also accepts common HF tensor name aliases (`model.layers.N.self_attn.q_proj.weight`, `transformer.wte.weight`, …) when loading external checkpoints without MMN keys.
 
 ### Chatbot — `mmn-bin-v1` (architecture stub only)
 

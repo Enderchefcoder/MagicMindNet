@@ -13,6 +13,9 @@ Write-Host "== examples/quickstart bpe =="
 Write-Host "== examples/checkpoint_roundtrip =="
 & $PY examples/checkpoint_roundtrip.py
 
+Write-Host "== examples/hf_safetensors_roundtrip =="
+& $PY examples/hf_safetensors_roundtrip.py
+
 Write-Host "== examples/learned_pos_embed_roundtrip =="
 & $PY examples/learned_pos_embed_roundtrip.py
 

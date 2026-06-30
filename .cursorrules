@@ -159,3 +159,4 @@
 [X] Vision cross-attention — block-0 text→image cross-attn, IO/merge/quantize, train backward, n_layer≥2 grad fix; 233 Rust / 519 pytest, verify_gate
 [X] DatasetQA disk image paths — PNG/JPEG load to RGB patches, train/mean-loss, Python API; 236 Rust / 522 pytest, verify_gate
 [X] Multi-patch vision cross-attn — tiled images, multi-path QA, image_patches API; 240 Rust / 526 pytest, verify_gate
+[X] HF binary safetensors — export/import hf-safetensors, auto-detect in import_safetensors, Llama name aliases; 243 Rust / 529 pytest, verify_gate

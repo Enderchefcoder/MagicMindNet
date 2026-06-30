@@ -124,13 +124,13 @@ flowchart TB
 | **Classifier** | `from_classification`, `with_labels`, CE training, `predict` probs |
 | **Training** | `Train`, `TrainClassifier`, batch accumulation, hybrid AdamW+Muon |
 | **RL / SPIN** | Toy alignment loops on small models |
-| **IO** | `mmn-safetensors-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** (no partial load) |
+| **IO** | `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF), `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** (no partial load) |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE + UNet foundation (structural; not production SD) |
 | **Errors** | Typed Python exceptions: `CUDAError`, `DataMismatchError`, `ModelMismatchError`, … |
 
-Known gaps: see [docs/limitations.md](docs/limitations.md) (embedding gather through blocks, HF binary safetensors, full diffusion backward, etc.).
+Known gaps: see [docs/limitations.md](docs/limitations.md) (external HF model import, full diffusion backward, etc.).
 
 ---
 
@@ -215,7 +215,7 @@ Full API reference: [docs/API.md](docs/API.md).
 
 ## Checkpoints & strict IO
 
-MagicMindNet uses a **JSON safetensors wrapper** (little-endian F32 blobs), not Hugging Face binary safetensors.
+MagicMindNet checkpoints: JSON `mmn-safetensors-v1` (default) or binary `mmn-hf-safetensors-v1` (Hugging Face tooling compatible). Classifier weights remain JSON-only.
 
 **Strict import guarantees:**
 
@@ -267,8 +267,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **240**
-- pytest: **526**
+- Rust `#[test]`: **243**
+- pytest: **529**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

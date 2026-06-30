@@ -1,6 +1,7 @@
 use mmn_io::{
-    export_bin, export_classifier, export_safetensors, import_bin, import_classifier,
-    import_safetensors, merge_classifiers, merge_models, quantize_classifier, quantize_model,
+    export_bin, export_classifier, export_hf_safetensors, export_safetensors, import_bin,
+    import_classifier, import_hf_safetensors, import_safetensors, merge_classifiers, merge_models,
+    quantize_classifier, quantize_model,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -59,6 +60,9 @@ pub fn export(
     match format {
         "safetensors" => export_safetensors(&model.inner, path, bpe_rel.as_deref())
             .map_err(mmn_err_to_py),
+        "hf-safetensors" | "hf_safetensors" => {
+            export_hf_safetensors(&model.inner, path, bpe_rel.as_deref()).map_err(mmn_err_to_py)
+        }
         "bin" => {
             if bpe_encoder.is_some() {
                 return Err(PyValueError::new_err(
@@ -76,6 +80,7 @@ pub fn import_model(format: &str, files: Vec<String>) -> PyResult<PyChatbot> {
     let path = files.first().ok_or_else(|| PyValueError::new_err("files required"))?;
     let m = match format {
         "safetensors" => import_safetensors(path, 0).map_err(mmn_err_to_py)?,
+        "hf-safetensors" | "hf_safetensors" => import_hf_safetensors(path).map_err(mmn_err_to_py)?,
         "bin" => import_bin(path).map_err(mmn_err_to_py)?,
         _ => return Err(PyValueError::new_err(format!("Unknown format: {format}"))),
     };
