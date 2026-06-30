@@ -2019,6 +2019,14 @@ fn denoise_loss_seed(x: &Tensor, t: usize) -> u64 {
     h
 }
 
+fn clamp_rgb_nchw(t: &Tensor) -> Result<Tensor> {
+    let mut data = (*t.data).clone();
+    for v in data.iter_mut() {
+        *v = (*v).clamp(0.0, 1.0);
+    }
+    Ok(Tensor::from_array(data, t.requires_grad))
+}
+
 impl Diffusion {
     pub fn new() -> Self {
         Self {
@@ -2082,12 +2090,70 @@ impl Diffusion {
     /// Sample an RGB image tensor `[1, 3, 8, 8]` via latent diffusion + VAE decode.
     pub fn sample_image(&self, steps: usize, seed: Option<u64>) -> Result<Tensor> {
         let latent = self.sample_latent(steps, seed)?;
-        self.vae_decoder.decode(&latent)
+        self.decode_latent(&latent)
     }
 
-    /// Decode a latent tensor to RGB NCHW `[1, 3, 8, 8]`.
+    /// Decode a latent tensor to RGB NCHW `[1, 3, 8, 8]` clamped to `[0, 1]`.
     pub fn decode_latent(&self, latent: &Tensor) -> Result<Tensor> {
-        self.vae_decoder.decode(latent)
+        clamp_rgb_nchw(&self.vae_decoder.decode(latent)?)
+    }
+
+    /// Mask-weighted denoise step for inpainting (`mask` is `[1, 1, 8, 8]` in `[0, 1]`).
+    pub fn train_step_denoise_masked(
+        &mut self,
+        x: &Tensor,
+        mask: &Tensor,
+        t: usize,
+        adamw: &mut mmn_optim::AdamW,
+        param_id: &mut usize,
+    ) -> Result<f32> {
+        let t_emb = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1]), t as f32),
+            false,
+        );
+        let latent = self.vae.encode(x)?;
+        let seed = denoise_loss_seed(x, t);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let noise = Tensor::randn_rng(&mut rng, &latent.shape, false);
+        let noisy = latent.add(&noise)?;
+        let (pred, cache) = self.unet.forward_with_cache(&noisy, &t_emb)?;
+        let spatial = mask.shape[2] * mask.shape[3];
+        let mut weight_sum = 0.0f32;
+        let mut loss = 0.0f32;
+        let mut grad_out = Vec::with_capacity(pred.data.len());
+        for (i, (&p, &n_)) in pred.data.iter().zip(noise.data.iter()).enumerate() {
+            let sy = (i % spatial) / mask.shape[3];
+            let sx = (i % spatial) % mask.shape[3];
+            let w = mask.data[[0, 0, sy, sx]];
+            let diff = p - n_;
+            loss += w * diff * diff;
+            grad_out.push(2.0 * w * diff);
+            weight_sum += w;
+        }
+        let norm = weight_sum.max(1.0);
+        loss /= norm;
+        for g in &mut grad_out {
+            *g /= norm;
+        }
+        let grad_out_arr =
+            ndarray::ArrayD::from_shape_vec(pred.shape.clone(), grad_out).map_err(|e| {
+                mmn_core::MmnError::Shape {
+                    message: format!("denoise masked grad reshape: {e}"),
+                }
+            })?;
+        let grads = self.unet.backward(&cache, &grad_out_arr)?;
+        let weights = [
+            &mut self.unet.down.weight,
+            &mut self.unet.mid.weight,
+            &mut self.unet.up.weight,
+        ];
+        for (w, g) in weights.into_iter().zip(grads) {
+            let mut data = w.data.as_ref().clone();
+            adamw.step_param(*param_id, &mut data, &g);
+            *param_id += 1;
+            *w = Tensor::from_array(data, true);
+        }
+        Ok(loss)
     }
 
     /// MSE between UNet noise prediction and sampled Gaussian noise (eval only).
@@ -2215,6 +2281,39 @@ mod diffusion_tests {
         let b = d.sample_image(3, Some(7)).unwrap();
         assert_eq!(a.data.as_slice().unwrap(), b.data.as_slice().unwrap());
     }
+
+    #[test]
+    fn sample_image_rgb_is_clamped_to_unit_interval() {
+        let d = Diffusion::new();
+        let img = d.sample_image(4, Some(11)).unwrap();
+        for &v in img.data.iter() {
+            assert!(
+                (0.0..=1.0).contains(&v),
+                "decoded RGB should be in [0,1], got {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn train_step_denoise_masked_updates_unet() {
+        let mut d = Diffusion::new();
+        let x = Tensor::randn(&[1, 3, 8, 8], false);
+        let mask = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1, 1, 8, 8]), 1.0f32),
+            false,
+        );
+        let w_before = d.unet.down.weight.data[[0, 0, 0, 0]];
+        let mut adamw = mmn_optim::AdamW::new(mmn_optim::AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        for _ in 0..6 {
+            d.train_step_denoise_masked(&x, &mask, 4, &mut adamw, &mut pid)
+                .unwrap();
+        }
+        assert_ne!(d.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+    }
 }
 
 #[cfg(test)]
@@ -2231,6 +2330,11 @@ mod dataset_validation_tests {
     #[test]
     fn diffusion_accepts_image_gen_dataset_type() {
         validate_dataset_for_diffusion(&DatasetType::ImageGen).unwrap();
+    }
+
+    #[test]
+    fn diffusion_accepts_image_edit_dataset_type() {
+        validate_dataset_for_diffusion(&DatasetType::ImageEdit).unwrap();
     }
 }
 

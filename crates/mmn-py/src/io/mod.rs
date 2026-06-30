@@ -1,6 +1,7 @@
 use mmn_io::{
     export_bin, export_classifier, export_diffusion, export_hf_classifier_safetensors,
     export_hf_safetensors, export_safetensors, import_bin, import_classifier, import_diffusion,
+    merge_diffusion,
     import_hf_classifier_safetensors, import_hf_safetensors, import_safetensors, merge_classifiers,
     merge_models, quantize_classifier, quantize_model, TokenizerSidecarRefs,
 };
@@ -176,5 +177,11 @@ pub fn import_diffusion_model(format: &str, files: Vec<String>) -> PyResult<PyDi
         "safetensors" => import_diffusion(path).map_err(mmn_err_to_py)?,
         _ => return Err(PyValueError::new_err(format!("Unknown format: {format}"))),
     };
+    Ok(PyDiffusion { inner: m })
+}
+
+#[pyfunction]
+pub fn merge_diffusion_model(model1: &PyDiffusion, model2: &PyDiffusion) -> PyResult<PyDiffusion> {
+    let m = merge_diffusion(&model1.inner, &model2.inner).map_err(mmn_err_to_py)?;
     Ok(PyDiffusion { inner: m })
 }

@@ -2,6 +2,7 @@ use crate::checkpoint_util::{
     expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry,
     write_file_create_parents,
 };
+use crate::tensor_merge::average_tensors;
 use mmn_core::MmnError;
 use mmn_models::Diffusion;
 use std::collections::HashMap;
@@ -87,6 +88,29 @@ fn import_diffusion_json(text: &str) -> Result<Diffusion, MmnError> {
     model.unet.up.weight = tensor_from_entry(require_tensor_entry(tensors, "unet_up")?)?;
     validate_diffusion_shapes(&model)?;
     Ok(model)
+}
+
+pub fn merge_diffusion(a: &Diffusion, b: &Diffusion) -> Result<Diffusion, MmnError> {
+    if a.latent_channels != b.latent_channels {
+        return Err(MmnError::ModelMismatch {
+            message: "Cannot merge diffusion models with different latent_channels".into(),
+            fix: "Use two Diffusion instances with the same latent_channels.".into(),
+            explanation: "merge_diffusion averages VAE and UNet weights in place.".into(),
+        });
+    }
+    let mut out = Diffusion::new();
+    out.latent_channels = a.latent_channels;
+    out.vae.conv1.weight = average_tensors(&a.vae.conv1.weight, &b.vae.conv1.weight);
+    out.vae.conv2.weight = average_tensors(&a.vae.conv2.weight, &b.vae.conv2.weight);
+    out.vae_decoder.conv1.weight =
+        average_tensors(&a.vae_decoder.conv1.weight, &b.vae_decoder.conv1.weight);
+    out.vae_decoder.conv2.weight =
+        average_tensors(&a.vae_decoder.conv2.weight, &b.vae_decoder.conv2.weight);
+    out.unet.down.weight = average_tensors(&a.unet.down.weight, &b.unet.down.weight);
+    out.unet.mid.weight = average_tensors(&a.unet.mid.weight, &b.unet.mid.weight);
+    out.unet.up.weight = average_tensors(&a.unet.up.weight, &b.unet.up.weight);
+    validate_diffusion_shapes(&out)?;
+    Ok(out)
 }
 
 fn validate_diffusion_shapes(model: &Diffusion) -> Result<(), MmnError> {

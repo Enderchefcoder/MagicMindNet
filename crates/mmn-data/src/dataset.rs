@@ -514,6 +514,21 @@ mod image_tests {
         assert_eq!(ds.samples[0].mask_image, "m.png");
         assert_eq!(ds.samples[0].negative_prompt.as_deref(), Some("haze"));
     }
+
+    #[test]
+    fn image_edit_resolve_paths_relative_to_manifest() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mmn_img_edit_paths.json");
+        fs::write(
+            &path,
+            r#"[{"prompt":"fix","image":"imgs/a.png","mask_image":"masks/m.png"}]"#,
+        )
+        .unwrap();
+        let ds = DatasetImageEdit::load(path.to_str().unwrap()).unwrap();
+        let base = path.parent().unwrap();
+        assert_eq!(ds.resolve_image_path("imgs/a.png"), base.join("imgs/a.png"));
+        assert_eq!(ds.resolve_mask_path("masks/m.png"), base.join("masks/m.png"));
+    }
 }
 
 pub struct ImageSample {
@@ -579,6 +594,7 @@ impl DatasetImageGen {
 pub struct DatasetImageEdit {
     pub meta: DatasetMeta,
     pub samples: Vec<ImageEditSample>,
+    pub manifest_path: String,
 }
 
 pub struct ImageEditSample {
@@ -629,6 +645,18 @@ impl DatasetImageEdit {
                 dataset_type: DatasetType::ImageEdit,
             },
             samples,
+            manifest_path: manifest.to_string(),
         })
+    }
+
+    pub fn resolve_image_path(&self, rel: &str) -> std::path::PathBuf {
+        let base = std::path::Path::new(&self.manifest_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        base.join(rel)
+    }
+
+    pub fn resolve_mask_path(&self, rel: &str) -> std::path::PathBuf {
+        self.resolve_image_path(rel)
     }
 }

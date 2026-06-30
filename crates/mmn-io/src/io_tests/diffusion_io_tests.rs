@@ -1,4 +1,4 @@
-use crate::{export_diffusion, import_diffusion};
+use crate::{export_diffusion, import_diffusion, merge_diffusion};
 use mmn_models::Diffusion;
 
 #[test]
@@ -42,4 +42,29 @@ fn import_diffusion_rejects_missing_unet_tensor() {
     });
     write_file_create_parents(path.to_str().unwrap(), wrapper.to_string()).unwrap();
     assert!(import_diffusion(path.to_str().unwrap()).is_err());
+}
+
+#[test]
+fn merge_diffusion_averages_unet_down_weight() {
+    let a = Diffusion::new();
+    let b = Diffusion::new();
+    let mut a_data = (*a.unet.down.weight.data).clone();
+    a_data[[0, 0, 0, 0]] = 0.2;
+    let mut b_data = (*b.unet.down.weight.data).clone();
+    b_data[[0, 0, 0, 0]] = 0.6;
+    let mut a2 = Diffusion::new();
+    let mut b2 = Diffusion::new();
+    a2.unet.down.weight = mmn_core::Tensor::from_array(a_data, false);
+    b2.unet.down.weight = mmn_core::Tensor::from_array(b_data, false);
+    let merged = merge_diffusion(&a2, &b2).unwrap();
+    let expected = (0.2 + 0.6) / 2.0;
+    assert!((merged.unet.down.weight.data[[0, 0, 0, 0]] - expected).abs() < 1e-6);
+}
+
+#[test]
+fn merge_diffusion_rejects_latent_channel_mismatch() {
+    let a = Diffusion::new();
+    let mut b = Diffusion::new();
+    b.latent_channels = 8;
+    assert!(merge_diffusion(&a, &b).is_err());
 }

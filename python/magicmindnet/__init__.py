@@ -42,6 +42,7 @@ from magicmindnet._native import (
     limit_percent,
     merge,
     merge_classifier,
+    merge_diffusion_model,
     quantize,
     quantize_classifier_model,
 )
@@ -64,6 +65,7 @@ import_classifier = import_classifier_model
 quantize_classifier = quantize_classifier_model
 export_diffusion = export_diffusion_model
 import_diffusion = import_diffusion_model
+merge_diffusion = merge_diffusion_model
 
 __all__ = [
     "__version__",
@@ -104,6 +106,8 @@ __all__ = [
     "load_unigram_sidecar",
     "merge",
     "merge_classifier",
+    "merge_diffusion",
+    "merge_diffusion_model",
     "quantize",
     "quantize_classifier",
     "quantize_classifier_model",

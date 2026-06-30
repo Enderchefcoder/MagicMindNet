@@ -2,6 +2,16 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (inpainting diffusion + RGB decode clamp + merge)
+- `Diffusion::decode_latent` clamps RGB to `[0, 1]`; `sample_rgb_patch` stays in unit interval
+- `train_step_denoise_masked` mask-weighted UNet step; `train_diffusion_edit` on `DatasetImageEdit`
+- `grayscale_mask_tensor_from_image_*`, `write_rgb_nchw_tensor_to_png`; `DatasetImageEdit::resolve_*_path`
+- `merge_diffusion` averages VAE + UNet weights (`mmn-diffusion-v1` models)
+- Python `TrainDiffusion` accepts `DatasetImageEdit`; `merge_diffusion` alias
+- Fixtures `tests/fixtures/samples/photo.png`, `mask.png`; example `diffusion_edit_train.py`
+- Tests: `sample_image_rgb_is_clamped_*`, `train_step_denoise_masked_*`, `train_diffusion_edit_*`, `merge_diffusion_*`, `test_train_diffusion_edit.py`
+- **301** Rust tests / **587** pytest (`verify_gate`)
+
 ### Added (diffusion sampling + checkpoint IO)
 - `VaeDecoder` + `Diffusion::sample_latent` / `sample_image` / `decode_latent` (seeded reverse-diffusion loop)
 - `export_diffusion` / `import_diffusion` (`mmn-diffusion-v1` JSON: VAE enc/dec + UNet conv weights)

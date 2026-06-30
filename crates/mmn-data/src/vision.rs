@@ -92,6 +92,67 @@ pub fn rgb_nchw_tensor_from_image_path(path: &Path) -> Result<mmn_core::Tensor, 
     rgb_nchw_tensor_from_image_bytes(&bytes)
 }
 
+/// Grayscale inpainting mask `[1, 1, 8, 8]` in `[0, 1]` from image bytes.
+pub fn grayscale_mask_tensor_from_image_bytes(bytes: &[u8]) -> Result<mmn_core::Tensor, MmnError> {
+    let img = image::load_from_memory(bytes).map_err(|e| MmnError::Other {
+        message: format!("failed to decode mask image: {e}"),
+    })?;
+    let luma = img.to_luma8();
+    let resized = image::imageops::resize(
+        &luma,
+        VISION_RGB_SPATIAL as u32,
+        VISION_RGB_SPATIAL as u32,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut planes = vec![0.0f32; VISION_PATCH_DIM];
+    for y in 0..VISION_RGB_SPATIAL {
+        for x in 0..VISION_RGB_SPATIAL {
+            planes[y * VISION_RGB_SPATIAL + x] =
+                resized.get_pixel(x as u32, y as u32)[0] as f32 / 255.0;
+        }
+    }
+    Ok(mmn_core::Tensor::from_array(
+        ndarray::ArrayD::from_shape_vec(
+            ndarray::IxDyn(&[1, 1, VISION_RGB_SPATIAL, VISION_RGB_SPATIAL]),
+            planes,
+        )
+        .unwrap(),
+        false,
+    ))
+}
+
+/// Load a mask image from disk as `[1, 1, 8, 8]`.
+pub fn grayscale_mask_tensor_from_image_path(path: &Path) -> Result<mmn_core::Tensor, MmnError> {
+    let bytes = std::fs::read(path).map_err(|e| MmnError::Other {
+        message: format!("failed to read mask {}: {e}", path.display()),
+    })?;
+    grayscale_mask_tensor_from_image_bytes(&bytes)
+}
+
+/// Write `[1, 3, 8, 8]` RGB NCHW tensor to an 8×8 PNG (values clamped to `[0, 1]`).
+pub fn write_rgb_nchw_tensor_to_png(t: &mmn_core::Tensor, path: &Path) -> Result<(), MmnError> {
+    if t.shape != [1, VISION_RGB_CHANNELS, VISION_RGB_SPATIAL, VISION_RGB_SPATIAL] {
+        return Err(MmnError::Shape {
+            message: format!("write_rgb_nchw_tensor_to_png expected [1,3,8,8], got {:?}", t.shape),
+        });
+    }
+    let mut img: image::RgbImage = image::ImageBuffer::new(
+        VISION_RGB_SPATIAL as u32,
+        VISION_RGB_SPATIAL as u32,
+    );
+    for y in 0..VISION_RGB_SPATIAL {
+        for x in 0..VISION_RGB_SPATIAL {
+            let r = (t.data[[0, 0, y, x]].clamp(0.0, 1.0) * 255.0) as u8;
+            let g = (t.data[[0, 1, y, x]].clamp(0.0, 1.0) * 255.0) as u8;
+            let b = (t.data[[0, 2, y, x]].clamp(0.0, 1.0) * 255.0) as u8;
+            img.put_pixel(x as u32, y as u32, image::Rgb([r, g, b]));
+        }
+    }
+    img.save(path).map_err(|e| MmnError::Other {
+        message: format!("failed to write png {}: {e}", path.display()),
+    })
+}
+
 /// Resize an image to 8×8 RGB and flatten as NCHW planes in `[0, 1]`.
 pub fn rgb_patch_from_image_bytes(bytes: &[u8]) -> Result<Vec<f32>, MmnError> {
     Ok(rgb_patches_from_image_bytes(bytes, DEFAULT_VISION_PATCH_GRID)?
@@ -145,7 +206,7 @@ pub fn grayscale_patch_from_rgb(rgb: &[f32]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{ImageBuffer, Rgb};
+    use image::{ImageBuffer, Luma, Rgb};
 
     #[test]
     fn rgb_patch_from_png_bytes_has_expected_length() {
@@ -209,5 +270,35 @@ mod tests {
         assert_eq!(patch.len(), VISION_RGB_DIM);
         assert!(patch[0] > 0.9);
         assert!(patch[VISION_PATCH_DIM] < 0.1);
+    }
+
+    #[test]
+    fn grayscale_mask_tensor_from_image_path_is_unit_interval() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mmn_mask_test.png");
+        let mut img: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::new(4, 4);
+        for (_x, _y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = Luma([200]);
+        }
+        img.save(&path).unwrap();
+        let mask = grayscale_mask_tensor_from_image_path(&path).unwrap();
+        assert_eq!(mask.shape, vec![1, 1, VISION_RGB_SPATIAL, VISION_RGB_SPATIAL]);
+        for &v in mask.data.iter() {
+            assert!((0.0..=1.0).contains(&v));
+        }
+    }
+
+    #[test]
+    fn write_rgb_nchw_tensor_to_png_roundtrip() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mmn_rgb_write_test.png");
+        let mut data = ndarray::ArrayD::<f32>::zeros(ndarray::IxDyn(&[1, 3, 8, 8]));
+        data[[0, 0, 0, 0]] = 1.0;
+        data[[0, 1, 1, 1]] = 0.5;
+        let t = mmn_core::Tensor::from_array(data, false);
+        write_rgb_nchw_tensor_to_png(&t, &path).unwrap();
+        let loaded = rgb_nchw_tensor_from_image_path(&path).unwrap();
+        assert!((loaded.data[[0, 0, 0, 0]] - 1.0).abs() < 0.05);
+        assert!((loaded.data[[0, 1, 1, 1]] - 0.5).abs() < 0.05);
     }
 }

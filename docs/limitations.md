@@ -28,7 +28,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 ## Diffusion
 
 - Foundation VAE encode/decode + UNet noise prediction with `TrainDiffusion` on `DatasetImageGen` (8×8 RGB). `sample_rgb_patch` runs a simplified reverse-diffusion loop — not a production scheduler or full-resolution sampler.
-- Checkpoints: `export_diffusion` / `import_diffusion` (`mmn-diffusion-v1` JSON). No merge/quantize yet.
+- Checkpoints: `export_diffusion` / `import_diffusion` / `merge_diffusion` (`mmn-diffusion-v1` JSON). No quantize yet.
 
 ## Layer norm / attention
 

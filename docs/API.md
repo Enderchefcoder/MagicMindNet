@@ -33,7 +33,7 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Datasets | `DatasetQA`, `DatasetCorpus`, `DatasetClassification`, `DatasetImageGen`, `DatasetImageEdit` |
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
-| IO | `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion` |
+| IO | `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
 | Aliases | `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
 | Resource | `limit`, `limit_percent` |
 | Errors | `CPUError`, `CUDAError`, `DataMismatchError`, `DataMissingRowError`, `ModelMismatchError` |
@@ -229,7 +229,7 @@ Persist with `uni.save("tokenizer.mmn")` and `UnigramEncoder.load("tokenizer.mmn
 | `Train`, `Chatbot.compute_mean_loss` | `DatasetQA` or `DatasetCorpus` |
 | `RL`, `SPIN` | `DatasetQA` |
 | `TrainClassifier`, `Classifier.compute_mean_loss` | `DatasetClassification` |
-| `TrainDiffusion` | `DatasetImageGen` |
+| `TrainDiffusion` | `DatasetImageGen` or `DatasetImageEdit` |
 
 Wrong dataset type → `DataMismatchError`. See [training_coverage.md](training_coverage.md).
 
@@ -244,7 +244,7 @@ ai.export_diffusion(d, "safetensors", "diffusion.mmn")
 d2 = ai.import_diffusion("safetensors", ["diffusion.mmn"])
 ```
 
-See `examples/diffusion_train.py`, `examples/diffusion_sample.py`, `examples/diffusion_roundtrip.py`.
+See `examples/diffusion_train.py`, `examples/diffusion_edit_train.py`, `examples/diffusion_sample.py`, `examples/diffusion_roundtrip.py`.
 
 ---
 
@@ -267,6 +267,9 @@ See `examples/diffusion_train.py`, `examples/diffusion_sample.py`, `examples/dif
 | `import_classifier("hf-safetensors", [path])` | `mmn-hf-classifier-v1` | Binary HF classifier only |
 | `merge(a, b)` | — | Average Chatbot weights; shape must match |
 | `merge_classifier(a, b)` | — | Labels + `input_dim` must match |
+| `export_diffusion(d, "safetensors", path)` | `mmn-diffusion-v1` | VAE enc/dec + UNet conv weights |
+| `import_diffusion("safetensors", [path])` | `mmn-diffusion-v1` | **First path only** |
+| `merge_diffusion(a, b)` | — | Average VAE + UNet; `latent_channels` must match |
 | `quantize(model, "int8" \| "int4")` | — | In-place Chatbot weights |
 | `quantize_classifier(clf, "int8" \| "int4")` | — | In-place Classifier weights |
 

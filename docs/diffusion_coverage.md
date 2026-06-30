@@ -12,6 +12,11 @@ Foundation VAE + UNet API (not production Stable Diffusion).
 | Rust `training_step` finite | `diffusion_tests::training_step_output_finite` |
 | `train_step_denoise` updates UNet | `diffusion_tests::train_step_denoise_updates_unet_and_reduces_loss` |
 | `TrainDiffusion` on `DatasetImageGen` | `test_train_diffusion.py`, `train_diffusion_fixture_reduces_denoise_loss` |
+| `TrainDiffusion` on `DatasetImageEdit` (masked inpainting) | `test_train_diffusion_edit.py`, `train_diffusion_edit_fixture_runs_masked_steps` |
+| `sample_rgb_patch` values in `[0, 1]` after decode clamp | `test_train_diffusion_edit.py`, `sample_image_rgb_is_clamped_to_unit_interval` |
+| `merge_diffusion` averages weights | `merge_diffusion_averages_unet_down_weight`, `test_train_diffusion_edit.py` |
+| Mask tensor from disk | `grayscale_mask_tensor_from_image_path_is_unit_interval` |
+| `write_rgb_nchw_tensor_to_png` | `write_rgb_nchw_tensor_to_png_roundtrip` |
 | `sample_rgb_patch(steps, seed)` finite + deterministic | `test_diffusion_sample_io_py.py`, `examples/diffusion_sample.py` |
 | `export_diffusion` / `import_diffusion` roundtrip | `diffusion_export_import_roundtrip_preserves_sample`, `test_diffusion_sample_io_py.py` |
 | `denoise_loss_on_image(path, t)` | `test_train_diffusion.py` |

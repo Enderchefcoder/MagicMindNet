@@ -1,7 +1,7 @@
 use mmn_core::{enable_grad, Device, Result};
 use mmn_data::{
-    BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetImageGen, DatasetQA, QaSample,
-    TextEncoderRef,
+    BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetImageEdit, DatasetImageGen,
+    DatasetQA, QaSample, TextEncoderRef,
 };
 use mmn_models::{
     targets_with_vision_prefix, validate_dataset_for_classifier, validate_dataset_for_diffusion,
@@ -560,6 +560,47 @@ pub fn train_diffusion(
     Ok(())
 }
 
+pub fn train_diffusion_edit(
+    model: &mut Diffusion,
+    dataset: &DatasetImageEdit,
+    config: &TrainConfig,
+) -> Result<()> {
+    Device::require_cuda_available_checked(config.cuda, mmn_cuda::is_available())?;
+    validate_dataset_for_diffusion(&dataset.meta.dataset_type)?;
+    if dataset.samples.is_empty() {
+        return Err(mmn_core::MmnError::DataMismatch {
+            message: "image_edit manifest has no samples".into(),
+            fix: "Add prompt/image/mask_image rows to the manifest JSON.".into(),
+            explanation: "Inpainting training needs at least one image + mask path.".into(),
+        });
+    }
+    enable_grad(true);
+    let mut adamw = AdamW::new(AdamWConfig {
+        lr: config.learning_rate,
+        ..Default::default()
+    });
+    let mut param_id = 0usize;
+    for _epoch in 0..config.epochs {
+        let mut rng = rand::thread_rng();
+        let mut indices: Vec<usize> = (0..dataset.samples.len()).collect();
+        for i in 0..indices.len() {
+            let j = rng.gen_range(0..indices.len());
+            indices.swap(i, j);
+        }
+        for &idx in &indices {
+            let sample = &dataset.samples[idx];
+            let image_path = dataset.resolve_image_path(&sample.image);
+            let mask_path = dataset.resolve_mask_path(&sample.mask_image);
+            let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path)?;
+            let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path)?;
+            let t = rng.gen_range(0..1000);
+            model.train_step_denoise_masked(&x, &mask, t, &mut adamw, &mut param_id)?;
+        }
+    }
+    enable_grad(false);
+    Ok(())
+}
+
 pub fn rl(
     model: &mut Chatbot,
     dataset: &DatasetQA,
@@ -965,6 +1006,40 @@ mod tests {
             ..Default::default()
         };
         train_diffusion(&mut model, &ds, &cfg).unwrap();
+    }
+
+    #[test]
+    fn train_diffusion_edit_fixture_runs_masked_steps() {
+        use mmn_data::DatasetImageEdit;
+        use mmn_models::Diffusion;
+        let manifest = format!(
+            "{}/../../tests/fixtures/image_edit.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let ds = DatasetImageEdit::load(&manifest).unwrap();
+        let image_path = ds.resolve_image_path(&ds.samples[0].image);
+        let mask_path = ds.resolve_mask_path(&ds.samples[0].mask_image);
+        let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path).unwrap();
+        let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path).unwrap();
+        let mut model = Diffusion::new();
+        let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
+        let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        for _ in 0..8 {
+            model
+                .train_step_denoise_masked(&x, &mask, 5, &mut adamw, &mut pid)
+                .unwrap();
+        }
+        assert_ne!(model.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+        let cfg = TrainConfig {
+            epochs: 2,
+            learning_rate: 0.05,
+            ..Default::default()
+        };
+        train_diffusion_edit(&mut model, &ds, &cfg).unwrap();
     }
 
     #[test]

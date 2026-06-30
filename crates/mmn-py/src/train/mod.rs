@@ -1,6 +1,6 @@
 use mmn_train::{
     rl_with_encoder, spin_with_encoder, train_classifier, train_corpus_with_encoder,
-    train_diffusion, train_with_encoder,
+    train_diffusion, train_diffusion_edit, train_with_encoder,
 };
 use pyo3::prelude::*;
 
@@ -66,7 +66,7 @@ pub fn TrainDiffusion(
     dataset: &Bound<'_, PyAny>,
     config: &PyTrainConfig,
 ) -> PyResult<()> {
-    use crate::datasets::PyDatasetImageGen;
+    use crate::datasets::{PyDatasetImageEdit, PyDatasetImageGen};
     if let Ok(ds) = dataset.downcast::<PyDatasetImageGen>() {
         train_diffusion(
             &mut model.inner,
@@ -74,9 +74,16 @@ pub fn TrainDiffusion(
             &config.to_train_config(),
         )
         .map_err(mmn_err_to_py)
+    } else if let Ok(ds) = dataset.downcast::<PyDatasetImageEdit>() {
+        train_diffusion_edit(
+            &mut model.inner,
+            &ds.borrow().inner,
+            &config.to_train_config(),
+        )
+        .map_err(mmn_err_to_py)
     } else {
         Err(PyErr::new::<DataMismatchError, _>(
-            "TrainDiffusion requires DatasetImageGen.\nFix: Use DatasetImageGen(file) with prompt/image rows.\nExplanation: QA/Corpus/Classification datasets cannot train Diffusion.".to_string(),
+            "TrainDiffusion requires DatasetImageGen or DatasetImageEdit.\nFix: Use DatasetImageGen(file) or DatasetImageEdit(file) with image rows.\nExplanation: QA/Corpus/Classification datasets cannot train Diffusion.".to_string(),
         ))
     }
 }
