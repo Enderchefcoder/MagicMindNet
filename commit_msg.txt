@@ -1,0 +1,4 @@
+[Cursor] Add mmn-bpe-v1 tokenizer checkpoints and corpus_benchmark --bpe
+
+Persist BytePairEncoder merge rules as JSON (save/load on Python), with Rust
+import validation and corpus LM example using BPE training.

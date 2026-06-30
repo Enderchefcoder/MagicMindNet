@@ -1,12 +1,26 @@
 //! Minimal byte-level BPE tokenizer for small corpora and tests.
 
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+use mmn_core::{MmnError, Result};
+use serde::{Deserialize, Serialize};
+
+const BPE_FORMAT: &str = "mmn-bpe-v1";
 
 /// Byte-pair encoder trained on UTF-8 bytes with merge rules up to `vocab_size`.
 #[derive(Clone, Debug)]
 pub struct BytePairEncoder {
     merges: Vec<(usize, usize)>,
     vocab_size: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+struct BpeCheckpoint {
+    format: String,
+    vocab_size: usize,
+    merges: Vec<[usize; 2]>,
 }
 
 impl BytePairEncoder {
@@ -40,6 +54,72 @@ impl BytePairEncoder {
         }
 
         Self { merges, vocab_size }
+    }
+
+    /// Restore from trained merge rules (used by checkpoint import).
+    pub fn from_merges(vocab_size: usize, merges: Vec<(usize, usize)>) -> Result<Self> {
+        if vocab_size < 256 {
+            return Err(MmnError::Other {
+                message: "BPE vocab_size must be at least 256 (byte tokens 0..255)".into(),
+            });
+        }
+        let max_merges = vocab_size - 256;
+        if merges.len() > max_merges {
+            return Err(MmnError::Other {
+                message: format!(
+                    "BPE merge count {} exceeds vocab_size {vocab_size} (max {max_merges} merges)",
+                    merges.len()
+                ),
+            });
+        }
+        Ok(Self { merges, vocab_size })
+    }
+
+    /// Write `mmn-bpe-v1` JSON checkpoint (creates parent directories).
+    pub fn export_json(&self, path: &str) -> Result<()> {
+        let p = Path::new(path);
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| MmnError::Other {
+                    message: e.to_string(),
+                })?;
+            }
+        }
+        let ckpt = BpeCheckpoint {
+            format: BPE_FORMAT.into(),
+            vocab_size: self.vocab_size,
+            merges: self
+                .merges
+                .iter()
+                .map(|(a, b)| [*a, *b])
+                .collect(),
+        };
+        let json = serde_json::to_string_pretty(&ckpt).map_err(|e| MmnError::Other {
+            message: e.to_string(),
+        })?;
+        fs::write(path, json).map_err(|e| MmnError::Other {
+            message: e.to_string(),
+        })
+    }
+
+    /// Load `mmn-bpe-v1` JSON checkpoint.
+    pub fn import_json(path: &str) -> Result<Self> {
+        let raw = fs::read_to_string(path).map_err(|e| MmnError::Other {
+            message: e.to_string(),
+        })?;
+        let ckpt: BpeCheckpoint = serde_json::from_str(&raw).map_err(|e| MmnError::Other {
+            message: format!("invalid BPE checkpoint JSON: {e}"),
+        })?;
+        if ckpt.format != BPE_FORMAT {
+            return Err(MmnError::Other {
+                message: format!(
+                    "expected format {BPE_FORMAT}, got {}",
+                    ckpt.format
+                ),
+            });
+        }
+        let merges: Vec<(usize, usize)> = ckpt.merges.into_iter().map(|[a, b]| (a, b)).collect();
+        Self::from_merges(ckpt.vocab_size, merges)
     }
 
     fn apply_merge(word: &[usize], pair: (usize, usize), merged: usize) -> Vec<usize> {
@@ -108,5 +188,49 @@ mod tests {
         let raw_len = "aaaa".bytes().count();
         let bpe_len = enc.encode("aaaa").len();
         assert!(bpe_len <= raw_len);
+    }
+
+    #[test]
+    fn bpe_json_roundtrip_preserves_encode() {
+        let enc = BytePairEncoder::train(&["repeat repeat token", "repeat repeat token"], 512, 12);
+        let path = format!(
+            "{}/../../target/test_bpe_roundtrip.mmn",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        enc.export_json(&path).unwrap();
+        let loaded = BytePairEncoder::import_json(&path).unwrap();
+        let sample = "repeat repeat token again";
+        assert_eq!(enc.encode(sample), loaded.encode(sample));
+        assert_eq!(enc.merge_count(), loaded.merge_count());
+        assert_eq!(enc.vocab_size(), loaded.vocab_size());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bpe_import_rejects_wrong_format() {
+        let path = format!(
+            "{}/../../target/test_bpe_bad_format.mmn",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        fs::write(&path, r#"{"format":"other","vocab_size":512,"merges":[]}"#).unwrap();
+        let err = BytePairEncoder::import_json(&path).unwrap_err();
+        assert!(err.to_string().contains("mmn-bpe-v1"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn bpe_import_rejects_vocab_too_small() {
+        let path = format!(
+            "{}/../../target/test_bpe_small_vocab.mmn",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        fs::write(
+            &path,
+            r#"{"format":"mmn-bpe-v1","vocab_size":128,"merges":[[97,97]]}"#,
+        )
+        .unwrap();
+        let err = BytePairEncoder::import_json(&path).unwrap_err();
+        assert!(err.to_string().contains("256"));
+        let _ = fs::remove_file(&path);
     }
 }

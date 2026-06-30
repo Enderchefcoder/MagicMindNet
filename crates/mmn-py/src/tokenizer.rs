@@ -48,6 +48,16 @@ impl PyBytePairEncoder {
         self.inner.encode(text)
     }
 
+    fn save(&self, path: &str) -> PyResult<()> {
+        self.inner.export_json(path).map_err(crate::errors::mmn_err_to_py)
+    }
+
+    #[staticmethod]
+    fn load(path: &str) -> PyResult<Self> {
+        let inner = BytePairEncoder::import_json(path).map_err(crate::errors::mmn_err_to_py)?;
+        Ok(Self { inner })
+    }
+
     #[getter]
     fn merge_count(&self) -> usize {
         self.inner.merge_count()

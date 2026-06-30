@@ -55,6 +55,17 @@ merged_clf = ai.merge_classifier(clf_a, clf_b)  # same labels + input_dim; avera
 
 Raises `ModelMismatchError` when shapes or label sets differ.
 
+## BytePairEncoder — `mmn-bpe-v1`
+
+```python
+bpe = ai.BytePairEncoder.train(["hello hello"], vocab_size=512, num_merges=32)
+bpe.save("tokenizer.mmn")
+bpe2 = ai.BytePairEncoder.load("tokenizer.mmn")
+assert bpe2.encode("hello") == bpe.encode("hello")
+```
+
+**Meta:** `format` (`mmn-bpe-v1`), `vocab_size` (≥ 256), `merges` (list of `[left, right]` byte or merged token ids). BPE checkpoints are separate from Chatbot weights — pass the loaded encoder to `Train()` / `compute_mean_loss()`.
+
 See [checkpoint_coverage.md](checkpoint_coverage.md) for the full chatbot tensor regression matrix (100% key coverage).
 
 Rust `mmn-io` modules: `chatbot_io`, `classifier_io`, `block_tensors`, `checkpoint_util`, `tensor_merge`. Regression tests live in `io_tests/` (`chatbot_io_tests`, `classifier_io_tests`).

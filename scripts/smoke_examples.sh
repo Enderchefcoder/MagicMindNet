@@ -40,6 +40,9 @@ echo "== examples/classification_benchmark =="
 echo "== examples/corpus_benchmark =="
 "$PY" examples/corpus_benchmark.py
 
+echo "== examples/corpus_benchmark bpe =="
+"$PY" examples/corpus_benchmark.py --bpe
+
 echo "== examples/diffusion_smoke =="
 "$PY" examples/diffusion_smoke.py
 

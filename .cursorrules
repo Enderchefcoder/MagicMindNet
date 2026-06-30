@@ -146,3 +146,5 @@
 [X] Git — 8 feature commits pushed to github.com/Enderchefcoder/MagicMindNet
 [X] Pass 111 — Python BytePairEncoder binding; Train() optional BPE tokenize; 210 Rust / 473 pytest
 [X] Pass 112 — BPE-aware loss eval + benchmark_train --bpe; 210 Rust / 474 pytest
+[X] Pass 113 — mmn-bpe-v1 save/load + corpus_benchmark --bpe; 213 Rust / 477 pytest
+[ ] Pass 114 — bpe_roundtrip example; train+export with saved tokenizer

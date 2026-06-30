@@ -90,6 +90,13 @@ def test_corpus_benchmark_learned_pe_example_runs(run_example):
     assert "mean corpus loss before" in proc.stdout
 
 
+def test_corpus_benchmark_bpe_example_runs(run_example):
+    proc = run_example("corpus_benchmark.py", "--bpe")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "bpe merges:" in proc.stdout
+    assert "mean corpus loss before" in proc.stdout
+
+
 def test_diffusion_smoke_example_runs(run_example):
     proc = run_example("diffusion_smoke.py", timeout=30)
     assert proc.returncode == 0, proc.stderr or proc.stdout

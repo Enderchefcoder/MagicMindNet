@@ -200,6 +200,8 @@ ids = bpe.encode("hello world")  # merge-aware token ids (clamped to vocab_size)
 
 Pass `bpe_encoder=bpe` to `Train()` for BPE tokenization during QA and corpus LM training (max 32 tokens per sequence).
 
+Persist merge rules with `bpe.save("tokenizer.mmn")` and `BytePairEncoder.load("tokenizer.mmn")` (`mmn-bpe-v1` JSON). See [checkpoints.md](checkpoints.md).
+
 | API | Required dataset |
 |-----|------------------|
 | `Train`, `Chatbot.compute_mean_loss` | `DatasetQA` or `DatasetCorpus` |

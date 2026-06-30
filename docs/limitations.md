@@ -39,7 +39,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 |-----|--------------|--------------|
 | Scaled dot-product attention backward | [attention_coverage.md](attention_coverage.md) | ~~done pass 81~~ |
 | LayerNorm γ/β training | [layernorm_coverage.md](layernorm_coverage.md) | ~~done pass 82~~ |
-| Production tokenizer | this doc § Training | ~~BPE trainer + Python `BytePairEncoder` + `Train(bpe_encoder=)`~~; SentencePiece-scale vocab next |
+| Production tokenizer | this doc § Training | ~~BPE trainer + Python binding + Train(bpe_encoder=) + `mmn-bpe-v1` save/load~~; SentencePiece-scale vocab next |
 | Vision encoder | [vision_coverage.md](vision_coverage.md) | Image → patch embed forward path |
 | HF binary safetensors | this doc § IO | Optional interchange format |
 

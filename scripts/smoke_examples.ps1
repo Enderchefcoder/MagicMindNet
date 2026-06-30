@@ -52,6 +52,9 @@ Write-Host "== examples/corpus_benchmark =="
 Write-Host "== examples/corpus_benchmark learned-pe =="
 & $PY examples/corpus_benchmark.py --learned-pe
 
+Write-Host "== examples/corpus_benchmark bpe =="
+& $PY examples/corpus_benchmark.py --bpe
+
 Write-Host "== examples/diffusion_smoke =="
 & $PY examples/diffusion_smoke.py
 

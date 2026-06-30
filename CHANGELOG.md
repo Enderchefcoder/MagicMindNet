@@ -33,6 +33,10 @@
 - ffn2 shape import test; classifier int8 head quantize; Rust int4 block ffn quantize
 - Subagent `magicmindnet-checkpoint-strict` for IO regression gap scans
 
+### Added (pass 113)
+- `mmn-bpe-v1` JSON checkpoints: `BytePairEncoder.export_json` / `import_json`, Python `save()` / `load()`
+- Rust roundtrip + format validation tests; `corpus_benchmark.py --bpe` example + smoke
+
 ### Added (pass 112)
 - `Chatbot.compute_mean_loss` / `compute_loss` optional `bpe_encoder=` (matches `Train` tokenization)
 - `benchmark_train.py --bpe` example + smoke/pytest; `mean_qa_loss_with_bpe` / `mean_corpus_loss_with_bpe`
