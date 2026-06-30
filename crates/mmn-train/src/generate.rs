@@ -2,7 +2,7 @@
 
 use mmn_core::{MmnError, Result};
 use mmn_data::TextEncoderRef;
-use mmn_models::Chatbot;
+use mmn_models::{Chatbot, ChatbotKvCache};
 use rand::Rng;
 
 /// Sampling options for `generate_text` / `generate_token_ids`.
@@ -15,6 +15,8 @@ pub struct GenerateConfig {
     pub top_k: usize,
     /// Nucleus sampling: keep smallest set with cumulative prob >= `top_p` (`0` = disabled).
     pub top_p: f32,
+    /// Drop tokens with probability below `min_p` after softmax (`0` = disabled).
+    pub min_p: f32,
     /// Penalize tokens already in the generation context (`1.0` = off, `>1` discourages repeats).
     pub repetition_penalty: f32,
     /// Stop when a sampled token id is in this set (token is excluded from output).
@@ -32,6 +34,7 @@ impl Default for GenerateConfig {
             temperature: 0.0,
             top_k: 0,
             top_p: 0.0,
+            min_p: 0.0,
             repetition_penalty: 1.0,
             stop_token_ids: Vec::new(),
             stop_strings: Vec::new(),
@@ -141,11 +144,30 @@ pub fn apply_top_p(probs: &mut [f32], top_p: f32) {
     }
 }
 
+/// Drop sampling candidates with probability below `min_p` (renormalizes survivors).
+pub fn apply_min_p(probs: &mut [f32], min_p: f32) {
+    if min_p <= 0.0 {
+        return;
+    }
+    for p in probs.iter_mut() {
+        if *p < min_p {
+            *p = 0.0;
+        }
+    }
+    let sum: f32 = probs.iter().sum();
+    if sum > 0.0 {
+        for p in probs.iter_mut() {
+            *p /= sum;
+        }
+    }
+}
+
 fn sample_next_token(
     scores: &mut [f32],
     temperature: f32,
     top_k: usize,
     top_p: f32,
+    min_p: f32,
     rng: &mut impl Rng,
 ) -> usize {
     if top_k > 0 && top_k < scores.len() {
@@ -174,6 +196,7 @@ fn sample_next_token(
         *p /= sum;
     }
     apply_top_p(&mut probs, top_p);
+    apply_min_p(&mut probs, min_p);
     let r: f32 = rng.gen();
     let mut acc = 0.0f32;
     for (i, p) in probs.iter().enumerate() {
@@ -203,11 +226,35 @@ fn last_token_scores(
     Ok(scores)
 }
 
+fn context_window<'a>(tokens: &'a [usize], max_ctx: usize) -> &'a [usize] {
+    let start = tokens.len().saturating_sub(max_ctx);
+    &tokens[start..]
+}
+
+fn forward_logits_after_append(
+    model: &Chatbot,
+    tokens: &[usize],
+    cache: &mut ChatbotKvCache,
+    max_ctx: usize,
+) -> Result<mmn_core::Tensor> {
+    if tokens.len() > max_ctx {
+        model.reset_kv_cache_prefill(context_window(tokens, max_ctx), cache)
+    } else {
+        let last = *tokens
+            .last()
+            .ok_or_else(|| MmnError::Shape {
+                message: "forward_logits_after_append requires at least one token".into(),
+            })?;
+        model.forward_logits_with_kv_cache(&[last], cache)
+    }
+}
+
 fn pick_next_token(
     scores: &mut [f32],
     temperature: f32,
     top_k: usize,
     top_p: f32,
+    min_p: f32,
     rng: &mut impl Rng,
 ) -> usize {
     if temperature <= 0.0 {
@@ -218,7 +265,7 @@ fn pick_next_token(
             .map(|(i, _)| i)
             .unwrap_or(0)
     } else {
-        sample_next_token(scores, temperature, top_k, top_p, rng)
+        sample_next_token(scores, temperature, top_k, top_p, min_p, rng)
     }
 }
 
@@ -233,18 +280,17 @@ fn generate_token_ids_with_kv_cache(
     let vocab = model.shape.vocab_size;
     let mut cache = model.init_kv_cache();
     let mut rng = rand::thread_rng();
-    let mut logits = model.reset_kv_cache_prefill(tokens, &mut cache)?;
+    let mut logits =
+        model.reset_kv_cache_prefill(context_window(tokens, max_ctx), &mut cache)?;
     let mut scores = last_token_scores(&logits, vocab, tokens, config.repetition_penalty)?;
 
     for _ in 0..config.max_new_tokens {
-        if tokens.len() >= max_ctx {
-            break;
-        }
         let next = pick_next_token(
             &mut scores,
             config.temperature,
             config.top_k,
             config.top_p,
+            config.min_p,
             &mut rng,
         );
         if config.stop_token_ids.contains(&next) {
@@ -271,10 +317,7 @@ fn generate_token_ids_with_kv_cache(
             }
         }
 
-        if tokens.len() >= max_ctx {
-            break;
-        }
-        logits = model.forward_logits_with_kv_cache(&[next], &mut cache)?;
+        logits = forward_logits_after_append(model, tokens, &mut cache, max_ctx)?;
         scores = last_token_scores(&logits, vocab, tokens, config.repetition_penalty)?;
     }
 
@@ -308,11 +351,7 @@ pub fn generate_token_ids(
     let mut rng = rand::thread_rng();
 
     for _ in 0..config.max_new_tokens {
-        if tokens.len() >= max_ctx {
-            break;
-        }
-        let start = tokens.len().saturating_sub(max_ctx);
-        let ctx = &tokens[start..];
+        let ctx = context_window(&tokens, max_ctx);
         let logits = model.forward_logits(ctx)?;
         let mut scores = last_token_scores(&logits, vocab, &tokens, config.repetition_penalty)?;
         let next = pick_next_token(
@@ -320,6 +359,7 @@ pub fn generate_token_ids(
             config.temperature,
             config.top_k,
             config.top_p,
+            config.min_p,
             &mut rng,
         );
 
@@ -444,6 +484,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(kv_ids, full_ids);
+    }
+
+    #[test]
+    fn min_p_zeros_low_prob_tail() {
+        let mut probs = vec![0.7f32, 0.2, 0.09, 0.01];
+        apply_min_p(&mut probs, 0.05);
+        assert!((probs[3] - 0.0).abs() < 1e-6);
+        let sum: f32 = probs.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sliding_window_generates_past_max_ctx() {
+        let model = Chatbot::new_with_pe_options(
+            false, None, 64, Some(1), Some(16), Some(33), true, 8,
+        );
+        let cfg = GenerateConfig {
+            max_new_tokens: 12,
+            temperature: 0.0,
+            ..Default::default()
+        };
+        let ids = generate_token_ids(&model, "ab", None, &cfg).unwrap();
+        assert_eq!(ids.len(), 12);
+        let full_ids = generate_token_ids(
+            &model,
+            "ab",
+            None,
+            &GenerateConfig {
+                use_kv_cache: false,
+                ..cfg
+            },
+        )
+        .unwrap();
+        assert_eq!(ids, full_ids);
     }
 
     #[test]

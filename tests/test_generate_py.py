@@ -63,3 +63,20 @@ def test_generate_long_prompt_not_truncated_to_32():
     prompt = "a" * 48
     ids = bot.generate_tokens(prompt, max_new_tokens=2, temperature=0.0)
     assert len(ids) == 2
+
+
+def test_sliding_window_past_learned_max_seq_len():
+    bot = ai.Chatbot(
+        vocab_size=64,
+        n_layer=1,
+        d_model=16,
+        use_learned_pos_embed=True,
+        max_seq_len=8,
+        seed=5,
+    )
+    ids = bot.generate_tokens("ab", max_new_tokens=12, temperature=0.0)
+    assert len(ids) == 12
+    full = bot.generate_tokens(
+        "ab", max_new_tokens=12, temperature=0.0, use_kv_cache=False
+    )
+    assert ids == full

@@ -59,6 +59,11 @@
 - Python `use_kv_cache=` on `generate` / `generate_tokens`; parity tests vs full forward
 - `examples/gqa_rope_generate.py` GQA+RoPE train + KV benchmark smoke
 
+### Added (sliding context window and min-p sampling)
+- Generation continues past `max_seq_len` / 512-byte context via rolling window (KV re-prefill + full-forward slice)
+- `GenerateConfig.min_p` tail-probability filter after nucleus sampling; Python `min_p=` kwarg
+- Tests: `sliding_window_generates_past_max_ctx`, `test_sliding_window_past_learned_max_seq_len`
+
 ### Added (unigram tokenizer and nucleus sampling)
 - `UnigramEncoder`: Viterbi segmentation, EM training, `mmn-unigram-v1` JSON save/load; Python `train` / `train_from_qa` / `train_from_corpus`
 - `Train` / `RL` / `SPIN` / `compute_mean_loss` accept `unigram_encoder=` (mutually exclusive with `bpe_encoder`)
