@@ -42,7 +42,14 @@ from magicmindnet._native import (
     quantize_classifier_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
-from magicmindnet.vision import VISION_PATCH_DIM, vision_patch_from_text
+from magicmindnet.vision import (
+    VISION_PATCH_DIM,
+    VISION_RGB_CHANNELS,
+    VISION_RGB_DIM,
+    VISION_RGB_SPATIAL,
+    vision_patch_from_text,
+    vision_rgb_patch_from_text,
+)
 
 # Public aliases matching chatbot IO naming
 export_classifier = export_classifier_model
@@ -85,7 +92,11 @@ __all__ = [
     "quantize_classifier",
     "quantize_classifier_model",
     "VISION_PATCH_DIM",
+    "VISION_RGB_CHANNELS",
+    "VISION_RGB_DIM",
+    "VISION_RGB_SPATIAL",
     "vision_patch_from_text",
+    "vision_rgb_patch_from_text",
 ]
 
 __version__ = "0.1.0"

@@ -37,6 +37,11 @@
 - `export(bot, "safetensors", path, bpe_encoder=)` writes `{stem}.bpe.mmn` + `meta.bpe_checkpoint`
 - `load_bpe_sidecar(checkpoint_path)` helper; Rust `export_includes_bpe_checkpoint_meta` test
 
+### Added (RGB conv vision patch encoder)
+- `vision_patch_conv` (`3×8×8 → 1×8×8` Conv2d) before linear `vision_patch_proj` on `Chatbot(vision=True)`
+- `vision_rgb_patch_from_text`, `VISION_RGB_DIM` (192); training defaults to RGB when conv is loaded
+- Checkpoint `vision_patch_conv` tensor + meta `vision_rgb_patch`; merge/quantize support; conv backward for training
+
 ### Added (RoPE checkpoint roundtrip and trained export parity)
 - `examples/rope_roundtrip.py` with optional `--train` before export/import mean-loss check
 - Rust `import_preserves_forward_loss_rope`, `bin_rope_roundtrip_preserves_meta`, `train_rope_export_import_preserves_mean_loss`

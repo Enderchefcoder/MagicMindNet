@@ -13,7 +13,26 @@ def test_vision_chatbot_has_patch_encoder():
     bot = ai.Chatbot(vocab_size=128, n_layer=1, d_model=16, vision=True, seed=1)
     assert bot.has_vision is True
     assert bot.has_vision_patch_encoder is True
+    assert bot.has_vision_rgb_conv is True
     assert bot.vision_patch_dim == ai.VISION_PATCH_DIM == 64
+    assert bot.vision_rgb_dim == ai.VISION_RGB_DIM == 192
+
+
+def test_vision_rgb_patch_changes_compute_loss():
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, vision=True, seed=2)
+    gray = ai.vision_patch_from_text("gray patch")
+    rgb = ai.vision_rgb_patch_from_text("rgb patch")
+    loss_gray = bot.compute_loss("hi", "hello", image_patch=gray)
+    loss_rgb = bot.compute_loss("hi", "hello", image_patch=rgb)
+    assert loss_gray != loss_rgb
+
+
+def test_vision_rgb_default_patch_from_input():
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, vision=True, seed=6)
+    loss_auto = bot.compute_loss("photo prompt", "caption")
+    rgb = ai.vision_rgb_patch_from_text("photo prompt")
+    loss_explicit = bot.compute_loss("photo prompt", "caption", image_patch=rgb)
+    assert loss_auto == pytest.approx(loss_explicit)
 
 
 def test_vision_patch_changes_compute_loss():

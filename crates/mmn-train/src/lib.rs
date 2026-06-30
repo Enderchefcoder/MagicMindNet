@@ -1,8 +1,8 @@
 use mmn_core::{enable_grad, Device, Result};
 use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA};
 use mmn_models::{
-    targets_with_vision_prefix, validate_dataset_for_classifier, vision_patch_from_text, Chatbot,
-    Classifier,
+    targets_with_vision_prefix, validate_dataset_for_classifier, vision_patch_from_text,
+    vision_rgb_patch_from_text, Chatbot, Classifier,
 };
 use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
 use rand::Rng;
@@ -82,7 +82,11 @@ pub fn mean_qa_loss(model: &Chatbot, dataset: &DatasetQA) -> Result<f32> {
 
 fn vision_patches_from_input(model: &Chatbot, input: &str) -> Option<Vec<Vec<f32>>> {
     if model.has_vision_patch_encoder() {
-        Some(vec![vision_patch_from_text(input)])
+        if model.has_vision_rgb_conv() {
+            Some(vec![vision_rgb_patch_from_text(input)])
+        } else {
+            Some(vec![vision_patch_from_text(input)])
+        }
     } else {
         None
     }

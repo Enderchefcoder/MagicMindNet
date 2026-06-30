@@ -194,7 +194,7 @@ impl HybridOptimizer {
     }
 
     pub fn classify_param(shape: &[usize]) -> ParamKind {
-        if shape.len() >= 2 && shape[shape.len() - 1] > 1 && shape[shape.len() - 2] > 1 {
+        if shape.len() == 2 && shape[0] > 1 && shape[1] > 1 {
             ParamKind::Matrix
         } else {
             ParamKind::Other
@@ -311,6 +311,10 @@ mod tests {
         ));
         assert!(matches!(
             HybridOptimizer::classify_param(&[16, 1]),
+            ParamKind::Other
+        ));
+        assert!(matches!(
+            HybridOptimizer::classify_param(&[1, 3, 3, 3]),
             ParamKind::Other
         ));
     }

@@ -529,8 +529,12 @@ use std::fs;
         export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
         let loaded = import_safetensors(path.to_str().unwrap(), 128).unwrap();
         assert!(loaded.has_vision_patch_encoder());
+        assert!(loaded.has_vision_rgb_conv());
         let w_after = loaded.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
         assert_eq!(w_before, w_after);
+        let c_before = model.vision_patch_conv.as_ref().unwrap().weight.data[[0, 0, 0, 0]];
+        let c_after = loaded.vision_patch_conv.as_ref().unwrap().weight.data[[0, 0, 0, 0]];
+        assert_eq!(c_before, c_after);
         let _ = fs::remove_file(&path);
     }
 

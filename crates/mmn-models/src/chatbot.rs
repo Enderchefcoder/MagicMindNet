@@ -1,7 +1,7 @@
 use crate::autoset::{autoset, ModelShape};
 use mmn_core::{cross_entropy_grad, embedding_backward, linear_backward, Device, Result, Tensor};
 use mmn_data::DatasetType;
-use mmn_nn::{gelu, gelu_backward, BlockForwardCache, Embedding, Linear, TransformerBlock};
+use mmn_nn::{gelu, gelu_backward, BlockForwardCache, Conv2d, Embedding, Linear, TransformerBlock};
 use ndarray::ArrayD;
 use std::collections::HashMap;
 
@@ -12,12 +12,34 @@ pub use mmn_nn::DEFAULT_ROPE_THETA;
 
 /// Flat 8×8 grayscale patch size for the vision prefix projector.
 pub const VISION_PATCH_DIM: usize = 64;
+/// Flat 8×8×3 RGB patch size (`NCHW` planes) for the vision conv encoder.
+pub const VISION_RGB_DIM: usize = VISION_PATCH_DIM * 3;
+pub const VISION_RGB_SPATIAL: usize = 8;
+pub const VISION_RGB_CHANNELS: usize = 3;
 
 /// Build a normalized demo patch from UTF-8 bytes (pads with zeros).
 pub fn vision_patch_from_text(text: &str) -> Vec<f32> {
     let mut v = vec![0.0f32; VISION_PATCH_DIM];
     for (i, b) in text.bytes().enumerate().take(VISION_PATCH_DIM) {
         v[i] = b as f32 / 255.0;
+    }
+    v
+}
+
+/// Build a normalized 8×8×3 RGB patch (`NCHW` layout) from UTF-8 bytes.
+pub fn vision_rgb_patch_from_text(text: &str) -> Vec<f32> {
+    let bytes: Vec<u8> = text.bytes().collect();
+    let mut v = vec![0.0f32; VISION_RGB_DIM];
+    if bytes.is_empty() {
+        return v;
+    }
+    for idx in 0..VISION_PATCH_DIM {
+        let b0 = bytes[idx % bytes.len()];
+        let b1 = bytes[(idx + 1) % bytes.len()];
+        let b2 = bytes[(idx + 2) % bytes.len()];
+        v[idx] = b0 as f32 / 255.0;
+        v[VISION_PATCH_DIM + idx] = b1 as f32 / 255.0;
+        v[2 * VISION_PATCH_DIM + idx] = b2 as f32 / 255.0;
     }
     v
 }
@@ -42,6 +64,8 @@ pub struct Chatbot {
     pub vision: bool,
     /// Linear patch projector (`vision=true`): `[VISION_PATCH_DIM] → d_model`.
     pub vision_patch_proj: Option<Linear>,
+    /// RGB conv patch encoder (`vision=true`): `3×8×8 → 1×8×8` before linear proj.
+    pub vision_patch_conv: Option<Conv2d>,
     pub device: Device,
     /// RNG seed used at construction (`None` = non-deterministic init).
     pub init_seed: Option<u64>,
@@ -277,6 +301,11 @@ impl Chatbot {
         } else {
             None
         };
+        let vision_patch_conv = if vision {
+            Some(Conv2d::new(VISION_RGB_CHANNELS, 1, 3))
+        } else {
+            None
+        };
         Self {
             embed: Embedding::new_rng(shape.vocab_size, shape.d_model, &mut rng),
             blocks,
@@ -285,6 +314,7 @@ impl Chatbot {
             tokenizer: "ChatXML".into(),
             vision,
             vision_patch_proj,
+            vision_patch_conv,
             device: Device::Cpu,
             init_seed: seed,
             use_learned_pos_embed,
@@ -338,7 +368,12 @@ impl Chatbot {
             .vision_patch_proj
             .as_ref()
             .map(|p| p.in_features * p.out_features + p.out_features)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            + self
+                .vision_patch_conv
+                .as_ref()
+                .map(|c| c.out_ch * c.in_ch * c.kernel * c.kernel)
+                .unwrap_or(0);
         base + pe + vision
     }
 
@@ -346,8 +381,16 @@ impl Chatbot {
         VISION_PATCH_DIM
     }
 
+    pub fn vision_rgb_dim(&self) -> usize {
+        VISION_RGB_DIM
+    }
+
     pub fn has_vision_patch_encoder(&self) -> bool {
         self.vision_patch_proj.is_some()
+    }
+
+    pub fn has_vision_rgb_conv(&self) -> bool {
+        self.vision_patch_conv.is_some()
     }
 
     pub fn layer_size(&self) -> usize {
@@ -358,7 +401,42 @@ impl Chatbot {
         self.vision
     }
 
-    fn project_patches(&self, patches: &[Vec<f32>]) -> Result<Tensor> {
+    fn rgb_patch_to_nchw(patch: &[f32]) -> Result<Tensor> {
+        if patch.len() != VISION_RGB_DIM {
+            return Err(mmn_core::MmnError::Shape {
+                message: format!(
+                    "RGB vision patch has length {}; expected {VISION_RGB_DIM}",
+                    patch.len()
+                ),
+            });
+        }
+        Ok(Tensor::from_array(
+            ndarray::ArrayD::from_shape_vec(
+                ndarray::IxDyn(&[1, VISION_RGB_CHANNELS, VISION_RGB_SPATIAL, VISION_RGB_SPATIAL]),
+                patch.to_vec(),
+            )
+            .unwrap(),
+            true,
+        ))
+    }
+
+    fn conv_flatten_to_rows(conv_out: &Tensor) -> Result<Vec<f32>> {
+        let spatial = VISION_RGB_SPATIAL * VISION_RGB_SPATIAL;
+        let view = conv_out.data.view();
+        let n = conv_out.shape[0];
+        let mut flat = vec![0.0f32; n * VISION_PATCH_DIM];
+        for i in 0..n {
+            for j in 0..spatial {
+                flat[i * VISION_PATCH_DIM + j] = view[[i, 0, j / VISION_RGB_SPATIAL, j % VISION_RGB_SPATIAL]];
+            }
+        }
+        Ok(flat)
+    }
+
+    fn patches_to_linear_input(
+        &self,
+        patches: &[Vec<f32>],
+    ) -> Result<(Tensor, Option<Tensor>)> {
         let proj = self
             .vision_patch_proj
             .as_ref()
@@ -371,50 +449,85 @@ impl Chatbot {
             });
         }
         let n = patches.len();
-        let mut flat = vec![0.0f32; n * VISION_PATCH_DIM];
+        let mut linear_rows = vec![0.0f32; n * VISION_PATCH_DIM];
+        let mut conv_inputs: Option<Vec<f32>> = None;
         for (i, patch) in patches.iter().enumerate() {
-            if patch.len() != VISION_PATCH_DIM {
+            if patch.len() == VISION_RGB_DIM {
+                let conv = self.vision_patch_conv.as_ref().ok_or_else(|| {
+                    mmn_core::MmnError::Shape {
+                        message: format!(
+                            "RGB patch length {VISION_RGB_DIM} requires vision_patch_conv; reload a checkpoint that includes vision_patch_conv or pass a {VISION_PATCH_DIM}-float grayscale patch"
+                        ),
+                    }
+                })?;
+                let x = Self::rgb_patch_to_nchw(patch)?;
+                let conv_out = conv.forward(&x)?;
+                let row = Self::conv_flatten_to_rows(&conv_out)?;
+                linear_rows[i * VISION_PATCH_DIM..(i + 1) * VISION_PATCH_DIM]
+                    .copy_from_slice(&row);
+                let mut stacked = conv_inputs.take().unwrap_or_default();
+                stacked.extend_from_slice(patch);
+                conv_inputs = Some(stacked);
+            } else if patch.len() == VISION_PATCH_DIM {
+                linear_rows[i * VISION_PATCH_DIM..(i + 1) * VISION_PATCH_DIM]
+                    .copy_from_slice(patch);
+            } else {
                 return Err(mmn_core::MmnError::Shape {
                     message: format!(
-                        "vision patch {i} has length {}; expected {VISION_PATCH_DIM}",
+                        "vision patch {i} has length {}; expected {VISION_PATCH_DIM} or {VISION_RGB_DIM}",
                         patch.len()
                     ),
                 });
             }
-            flat[i * VISION_PATCH_DIM..(i + 1) * VISION_PATCH_DIM].copy_from_slice(patch);
         }
-        let patch_t = Tensor::from_array(
-            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[n, VISION_PATCH_DIM]), flat).unwrap(),
+        let linear_input = Tensor::from_array(
+            ndarray::ArrayD::from_shape_vec(
+                ndarray::IxDyn(&[n, VISION_PATCH_DIM]),
+                linear_rows,
+            )
+            .unwrap(),
             true,
         );
-        proj.forward(&patch_t)
+        let conv_input = conv_inputs.map(|stacked| {
+            Tensor::from_array(
+                ndarray::ArrayD::from_shape_vec(
+                    ndarray::IxDyn(&[
+                        n,
+                        VISION_RGB_CHANNELS,
+                        VISION_RGB_SPATIAL,
+                        VISION_RGB_SPATIAL,
+                    ]),
+                    stacked,
+                )
+                .unwrap(),
+                true,
+            )
+        });
+        let _ = proj;
+        Ok((linear_input, conv_input))
     }
 
     fn embed_with_optional_patches(
         &self,
         token_ids: &[usize],
         patches: Option<&[Vec<f32>]>,
-    ) -> Result<(Tensor, usize, Option<Tensor>)> {
+    ) -> Result<(Tensor, usize, Option<Tensor>, Option<Tensor>)> {
         let mut h = self.embed.forward(token_ids)?;
         let n_patch = patches.map(|p| p.len()).unwrap_or(0);
-        let patch_input = if n_patch > 0 {
+        let (patch_input, conv_input) = if n_patch > 0 {
             let patches = patches.unwrap();
-            let h_patch = self.project_patches(patches)?;
-            let flat: Vec<f32> = patches.iter().flatten().copied().collect();
-            let patch_t = Tensor::from_array(
-                ndarray::ArrayD::from_shape_vec(
-                    ndarray::IxDyn(&[n_patch, VISION_PATCH_DIM]),
-                    flat,
-                )
-                .unwrap(),
-                true,
-            );
+            let (linear_input, conv_input) = self.patches_to_linear_input(patches)?;
+            let h_patch = self
+                .vision_patch_proj
+                .as_ref()
+                .unwrap()
+                .forward(&linear_input)?;
             h = mmn_nn::concat_sequence_rows(&h_patch, &h)?;
-            Some(patch_t)
+            (Some(linear_input), conv_input)
         } else {
-            None
+            (None, None)
         };
-        Ok((h, n_patch, patch_input))
+        Ok((h, n_patch, patch_input, conv_input))
     }
 
     pub fn uses_causal_attention(&self) -> bool {
@@ -437,7 +550,7 @@ impl Chatbot {
         token_ids: &[usize],
         patches: Option<&[Vec<f32>]>,
     ) -> Result<Tensor> {
-        let (mut h, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
+        let (mut h, _, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
         h = self.apply_position_encoding(h)?;
         for block in &self.blocks {
             h = block.forward(&h)?;
@@ -582,6 +695,18 @@ impl Chatbot {
                 &grad,
             );
         }
+        if self.vision_patch_conv.is_some() {
+            i += 1;
+            let grad = accum.averaged_grad(i);
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.vision_patch_conv.as_mut().unwrap().weight,
+                &grad,
+            );
+        }
         Ok(())
     }
 
@@ -674,6 +799,17 @@ impl Chatbot {
                 &grads[i],
             );
         }
+        if self.vision_patch_conv.is_some() {
+            i += 1;
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.vision_patch_conv.as_mut().unwrap().weight,
+                &grads[i],
+            );
+        }
         Ok(loss_val)
     }
 
@@ -683,7 +819,7 @@ impl Chatbot {
         targets: &[usize],
         patches: Option<&[Vec<f32>]>,
     ) -> Result<(f32, Vec<ArrayD<f32>>)> {
-        let (mut h, n_patch, patch_input) =
+        let (mut h, n_patch, patch_input, conv_input) =
             self.embed_with_optional_patches(token_ids, patches)?;
         h = self.apply_position_encoding(h)?;
         let seq = token_ids.len();
@@ -752,23 +888,56 @@ impl Chatbot {
             grads.push(grad_pos);
         }
         if let Some(proj) = &self.vision_patch_proj {
-            let grad_proj = if n_patch > 0 {
+            let (grad_proj, grad_conv) = if n_patch > 0 {
                 let mut prefix = ndarray::Array2::<f32>::zeros((n_patch, d_model));
                 for r in 0..n_patch {
                     for c in 0..d_model {
                         prefix[[r, c]] = grad_h2[[r, c]];
                     }
                 }
-                let (grad_w, _) = linear_backward(
+                let (grad_w, grad_linear_in) = linear_backward(
                     patch_input.as_ref().unwrap().data.as_ref(),
                     proj.weight.data.as_ref(),
                     &prefix.into_dyn(),
                 )?;
-                grad_w
+                let grad_conv = if let (Some(conv), Some(conv_in)) =
+                    (self.vision_patch_conv.as_ref(), conv_input.as_ref())
+                {
+                    let gli = grad_linear_in
+                        .view()
+                        .into_dimensionality::<ndarray::Ix2>()
+                        .map_err(|e| mmn_core::MmnError::Shape {
+                            message: e.to_string(),
+                        })?;
+                    let mut grad_conv_out =
+                        ndarray::Array4::<f32>::zeros((n_patch, 1, VISION_RGB_SPATIAL, VISION_RGB_SPATIAL));
+                    for i in 0..n_patch {
+                        for j in 0..VISION_PATCH_DIM {
+                            grad_conv_out[[i, 0, j / VISION_RGB_SPATIAL, j % VISION_RGB_SPATIAL]] =
+                                gli[[i, j]];
+                        }
+                    }
+                    let (_, grad_conv_w) =
+                        conv.backward(conv_in, &grad_conv_out.into_dyn())?;
+                    Some(grad_conv_w)
+                } else {
+                    None
+                };
+                (grad_w, grad_conv)
             } else {
-                ArrayD::zeros(proj.weight.data.shape())
+                (
+                    ArrayD::zeros(proj.weight.data.shape()),
+                    None,
+                )
             };
             grads.push(grad_proj);
+            if self.vision_patch_conv.is_some() {
+                grads.push(grad_conv.unwrap_or_else(|| {
+                    ArrayD::zeros(
+                        self.vision_patch_conv.as_ref().unwrap().weight.data.shape(),
+                    )
+                }));
+            }
         }
         Ok((loss_val, grads))
     }
@@ -1199,6 +1368,49 @@ mod chatbot_tests {
             )
             .unwrap();
         let w_after = model.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
+        assert_ne!(w_before, w_after);
+    }
+
+    #[test]
+    fn vision_rgb_patch_differs_from_grayscale() {
+        let model = Chatbot::new(true, None, 256, Some(1), Some(32));
+        assert!(model.has_vision_rgb_conv());
+        let tokens = vec![10, 20, 30];
+        let padded = targets_with_vision_prefix(&[20, 30, 40], 1, 256);
+        let gray = vision_patch_from_text("photo");
+        let rgb = vision_rgb_patch_from_text("photo");
+        let loss_gray = model
+            .loss_on_batch_with_patches(&tokens, &padded, Some(&[gray]))
+            .unwrap();
+        let loss_rgb = model
+            .loss_on_batch_with_patches(&tokens, &padded, Some(&[rgb]))
+            .unwrap();
+        assert_ne!(loss_gray, loss_rgb);
+    }
+
+    #[test]
+    fn vision_rgb_conv_updates_on_train_step() {
+        use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
+        let mut model = Chatbot::new(true, None, 256, Some(1), Some(16));
+        let tokens = vec![1, 2, 3];
+        let targets = targets_with_vision_prefix(&[2, 3, 4], 1, 256);
+        let patch = vec![vision_rgb_patch_from_text("rgb prompt")];
+        let w_before = model.vision_patch_conv.as_ref().unwrap().weight.data[[0, 0, 0, 0]];
+        let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
+        let mut adamw = AdamW::new(AdamWConfig { lr: 0.1, ..Default::default() });
+        model
+            .train_step_lm(
+                &tokens,
+                &targets,
+                &mut hybrid,
+                &mut adamw,
+                false,
+                &mut 0,
+                None,
+                Some(&patch),
+            )
+            .unwrap();
+        let w_after = model.vision_patch_conv.as_ref().unwrap().weight.data[[0, 0, 0, 0]];
         assert_ne!(w_before, w_after);
     }
 }

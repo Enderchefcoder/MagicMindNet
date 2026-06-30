@@ -26,10 +26,18 @@ pub fn export_safetensors(
     });
     if model.vision {
         meta["vision_patch_dim"] = serde_json::json!(mmn_models::VISION_PATCH_DIM);
+        meta["vision_rgb_dim"] = serde_json::json!(mmn_models::VISION_RGB_DIM);
         if let Some(proj) = &model.vision_patch_proj {
             map.insert(
                 "vision_patch_proj".to_string(),
                 tensor_to_entry(&proj.weight),
+            );
+        }
+        if let Some(conv) = &model.vision_patch_conv {
+            meta["vision_rgb_patch"] = serde_json::json!(true);
+            map.insert(
+                "vision_patch_conv".to_string(),
+                tensor_to_entry(&conv.weight),
             );
         }
     }
@@ -127,6 +135,24 @@ pub fn import_safetensors(path: &str, _vocab_size: usize) -> Result<Chatbot, Mmn
                 )?;
             }
         }
+        if let Ok(entry) = require_tensor_entry(&v["tensors"], "vision_patch_conv") {
+            let conv = model.vision_patch_conv.as_mut().ok_or_else(|| MmnError::Other {
+                message: "vision_patch_conv tensor present but model has no conv encoder".into(),
+            })?;
+            conv.weight = tensor_from_entry(entry)?;
+            expect_tensor_shape(
+                &conv.weight,
+                &[
+                    1,
+                    mmn_models::VISION_RGB_CHANNELS,
+                    3,
+                    3,
+                ],
+                "vision_patch_conv",
+            )?;
+        } else {
+            model.vision_patch_conv = None;
+        }
     }
     import_block_tensors(&mut model, &v["tensors"])?;
     Ok(model)
@@ -186,6 +212,16 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
             (None, None) => {}
         }
     }
+    if let Some(out_conv) = out.vision_patch_conv.as_mut() {
+        match (&a.vision_patch_conv, &b.vision_patch_conv) {
+            (Some(aa), Some(bb)) => {
+                out_conv.weight = average_tensors(&aa.weight, &bb.weight);
+            }
+            (Some(aa), None) => out_conv.weight = aa.weight.clone(),
+            (None, Some(bb)) => out_conv.weight = bb.weight.clone(),
+            (None, None) => {}
+        }
+    }
     for (i, block) in out.blocks.iter_mut().enumerate() {
         let ab = &a.blocks[i];
         let bb = &b.blocks[i];
@@ -217,6 +253,9 @@ pub fn quantize_model(model: &mut Chatbot, mode: &str) -> Result<(), MmnError> {
             if let Some(proj) = &mut model.vision_patch_proj {
                 quantize_tensor(&mut proj.weight, scale);
             }
+            if let Some(conv) = &mut model.vision_patch_conv {
+                quantize_tensor(&mut conv.weight, scale);
+            }
             for block in &mut model.blocks {
                 quantize_tensor(&mut block.attn.q_proj.weight, scale);
                 quantize_tensor(&mut block.attn.k_proj.weight, scale);
@@ -247,6 +286,10 @@ pub fn export_bin(model: &Chatbot, path: &str) -> Result<(), MmnError> {
     });
     if model.vision {
         json["vision_patch_dim"] = serde_json::json!(mmn_models::VISION_PATCH_DIM);
+        json["vision_rgb_dim"] = serde_json::json!(mmn_models::VISION_RGB_DIM);
+        if model.vision_patch_conv.is_some() {
+            json["vision_rgb_patch"] = serde_json::json!(true);
+        }
     }
     if model.use_learned_pos_embed {
         json["use_learned_pos_embed"] = serde_json::json!(true);

@@ -2,7 +2,7 @@ use mmn_models::Chatbot;
 use mmn_train::{
     align_qa_token_pairs, mean_corpus_loss_with_bpe, mean_qa_loss_with_bpe, tokenize_lm,
 };
-use mmn_models::{targets_with_vision_prefix, vision_patch_from_text};
+use mmn_models::{targets_with_vision_prefix, vision_patch_from_text, vision_rgb_patch_from_text};
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
@@ -77,6 +77,16 @@ impl PyChatbot {
     #[getter]
     fn vision_patch_dim(&self) -> usize {
         self.inner.vision_patch_dim()
+    }
+
+    #[getter]
+    fn has_vision_rgb_conv(&self) -> bool {
+        self.inner.has_vision_rgb_conv()
+    }
+
+    #[getter]
+    fn vision_rgb_dim(&self) -> usize {
+        self.inner.vision_rgb_dim()
     }
 
     #[getter]
@@ -162,15 +172,22 @@ impl PyChatbot {
         align_qa_token_pairs(&mut tokens, &mut targets);
         if self.inner.has_vision_patch_encoder() {
             let patch = if let Some(p) = image_patch {
-                if p.len() != self.inner.vision_patch_dim() {
+                let gray = self.inner.vision_patch_dim();
+                let rgb = self.inner.vision_rgb_dim();
+                if p.len() != gray && p.len() != rgb {
                     return Err(PyErr::new::<DataMismatchError, _>(format!(
-                        "image_patch length {} != vision_patch_dim {}.\nFix: Pass a flat {}-float patch.\nExplanation: Vision Chatbot expects an 8×8 grayscale patch.",
+                        "image_patch length {} != vision_patch_dim ({gray}) or vision_rgb_dim ({rgb}).\nFix: Pass a flat {gray}-float grayscale patch or {rgb}-float RGB patch.\nExplanation: Vision Chatbot accepts 8×8 grayscale or 8×8×3 RGB patches.",
                         p.len(),
-                        self.inner.vision_patch_dim(),
-                        self.inner.vision_patch_dim(),
+                    )));
+                }
+                if p.len() == rgb && !self.inner.has_vision_rgb_conv() {
+                    return Err(PyErr::new::<DataMismatchError, _>(format!(
+                        "image_patch length {rgb} requires vision_rgb_conv in the checkpoint.\nFix: Pass a {gray}-float grayscale patch or export/import a vision checkpoint with vision_patch_conv.\nExplanation: RGB patches need the conv encoder loaded from checkpoint."
                     )));
                 }
                 p
+            } else if self.inner.has_vision_rgb_conv() {
+                vision_rgb_patch_from_text(input)
             } else {
                 vision_patch_from_text(input)
             };

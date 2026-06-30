@@ -1417,6 +1417,62 @@ impl Conv2d {
             true,
         ))
     }
+
+    /// Backprop through conv: returns `(grad_input, grad_weight)` for NCHW same-padding conv.
+    pub fn backward(
+        &self,
+        x: &Tensor,
+        grad_out: &ndarray::ArrayD<f32>,
+    ) -> Result<(ArrayD<f32>, ArrayD<f32>)> {
+        let shape = &x.shape;
+        let (batch, in_ch, height, width) = (shape[0], shape[1], shape[2], shape[3]);
+        let pad = self.kernel / 2;
+        let out_h = height + 2 * pad + 1 - self.kernel;
+        let out_w = width + 2 * pad + 1 - self.kernel;
+        let x_view = x.data.view();
+        let go = grad_out
+            .view()
+            .into_dimensionality::<ndarray::Ix4>()
+            .map_err(|e| MmnError::Shape {
+                message: e.to_string(),
+            })?;
+        let w_view = self.weight.data.view();
+        let mut grad_w = ndarray::Array4::<f32>::zeros((self.out_ch, in_ch, self.kernel, self.kernel));
+        let mut grad_x = ndarray::Array4::<f32>::zeros((batch, in_ch, height, width));
+        for n in 0..batch {
+            for oc in 0..self.out_ch {
+                for oh in 0..out_h {
+                    for ow in 0..out_w {
+                        let g = go[[n, oc, oh, ow]];
+                        if g == 0.0 {
+                            continue;
+                        }
+                        for ic in 0..in_ch {
+                            for kh in 0..self.kernel {
+                                for kw in 0..self.kernel {
+                                    let ih = oh + kh;
+                                    let iw = ow + kw;
+                                    if ih >= pad
+                                        && iw >= pad
+                                        && ih < pad + height
+                                        && iw < pad + width
+                                    {
+                                        let xi = ih - pad;
+                                        let xj = iw - pad;
+                                        let xv = x_view[[n, ic, xi, xj]];
+                                        grad_w[[oc, ic, kh, kw]] += g * xv;
+                                        grad_x[[n, ic, xi, xj]] +=
+                                            g * w_view[[oc, ic, kh, kw]];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok((grad_x.into_dyn(), grad_w.into_dyn()))
+    }
 }
 
 pub struct VaeEncoder {
