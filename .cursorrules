@@ -180,3 +180,4 @@
 [X] Diffusion compute_mean_denoise_loss, IO matrix tests, edit roundtrip example; 309 Rust / 625 pytest, verify_gate
 [X] eval_mean_loss diffusion modes, fixed-t denoise loss regression, quantize roundtrip test fix; 310 Rust / 628 pytest, verify_gate
 [X] diffusion_benchmark example, masked fixed-t loss regression, eval_mean_loss edit --train; 311 Rust / 631 pytest, verify_gate
+[X] Diffusion parameters getter, quantize roundtrip example, roundtrip pytest; 313 Rust / 635 pytest, verify_gate

@@ -45,6 +45,17 @@ fn import_diffusion_rejects_missing_unet_tensor() {
 }
 
 #[test]
+fn diffusion_export_import_preserves_parameter_count() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("mmn_diffusion_param_count.mmn");
+    let model = Diffusion::new();
+    let count = model.parameters();
+    export_diffusion(&model, path.to_str().unwrap()).unwrap();
+    let loaded = import_diffusion(path.to_str().unwrap()).unwrap();
+    assert_eq!(loaded.parameters(), count);
+}
+
+#[test]
 fn merge_diffusion_averages_unet_down_weight() {
     let a = Diffusion::new();
     let b = Diffusion::new();

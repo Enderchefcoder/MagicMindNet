@@ -19,12 +19,14 @@ def test_diffusion_sample_rgb_patch_finite_and_deterministic():
 
 def test_diffusion_export_import_roundtrip(tmp_path: Path):
     d = ai.Diffusion()
+    count = d.parameters
     patch_before = d.sample_rgb_patch(steps=4, seed=3)
     path = tmp_path / "diff.mmn"
     ai.export_diffusion(d, "safetensors", str(path))
     loaded = ai.import_diffusion("safetensors", [str(path)])
     patch_after = loaded.sample_rgb_patch(steps=4, seed=3)
     assert patch_before == patch_after
+    assert loaded.parameters == count
 
 
 def test_import_diffusion_rejects_chatbot_checkpoint(tmp_path: Path):

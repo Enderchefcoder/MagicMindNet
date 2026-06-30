@@ -167,6 +167,7 @@ probs = clf.predict("some text")   # dict label -> probability
 ```python
 diff = ai.Diffusion()
 diff.latent_channels   # getter
+diff.parameters        # VAE + UNet conv weight count
 diff.compute_mean_denoise_loss(dataset_image_gen, t=7)
 diff.denoise_loss_on_image("photo.png", t=5)
 diff.sample_rgb_patch(steps=8, seed=42)

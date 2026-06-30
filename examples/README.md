@@ -16,8 +16,16 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 | [classification_benchmark.py](classification_benchmark.py) | Classification mean loss before/after train |
 | [corpus_benchmark.py](corpus_benchmark.py) | Corpus LM mean loss before/after `Train` (optional `--learned-pe`, `--rope`, `--bpe`) |
 | [diffusion_smoke.py](diffusion_smoke.py) | `Diffusion.smoke_step()` finite output check |
+| [diffusion_train.py](diffusion_train.py) | Single-image denoise loss before/after `TrainDiffusion` |
+| [diffusion_benchmark.py](diffusion_benchmark.py) | Mean denoise loss delta on `image_gen` or `--edit` inpainting |
+| [diffusion_sample.py](diffusion_sample.py) | `sample_rgb_patch` demo |
+| [diffusion_roundtrip.py](diffusion_roundtrip.py) | Train, export/import, sample parity |
+| [diffusion_edit_train.py](diffusion_edit_train.py) | Inpaint training smoke |
+| [diffusion_inpaint_sample.py](diffusion_inpaint_sample.py) | Inpaint sample + PNG export |
+| [diffusion_edit_roundtrip.py](diffusion_edit_roundtrip.py) | Inpaint train + checkpoint roundtrip |
+| [diffusion_quantize_roundtrip.py](diffusion_quantize_roundtrip.py) | int8 quantize + export/import sample parity |
 | [vision_chatbot.py](vision_chatbot.py) | Vision-flag chatbot train + export roundtrip |
-| [eval_mean_loss.py](eval_mean_loss.py) | `python eval_mean_loss.py qa`, `cls`, or `corpus` (add `--train`, `--learned-pe`, `--rope`, `--bpe`, or `--bpe-file PATH` for chatbot modes) |
+| [eval_mean_loss.py](eval_mean_loss.py) | `qa`, `cls`, `corpus`, `diffusion`, or `diffusion-edit` (add `--train`, `--learned-pe`, `--rope`, `--bpe`) |
 
 ## Quick commands
 

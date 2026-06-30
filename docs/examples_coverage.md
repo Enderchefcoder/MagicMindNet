@@ -17,6 +17,9 @@ Runnable scripts under `examples/` and how they are regression-tested.
 | [rl_spin.py](../examples/rl_spin.py) | `RL` + `SPIN` on fixture QA | yes | yes |
 | [diffusion_smoke.py](../examples/diffusion_smoke.py) | `Diffusion.smoke_step()` | yes | yes |
 | [diffusion_benchmark.py](../examples/diffusion_benchmark.py) | Mean denoise loss before/after `TrainDiffusion`; `--edit` for inpainting | yes | yes |
+| [diffusion_roundtrip.py](../examples/diffusion_roundtrip.py) | Train, export/import, sample parity | yes | yes |
+| [diffusion_edit_roundtrip.py](../examples/diffusion_edit_roundtrip.py) | Inpaint train + export/import inpaint sample parity | yes | yes |
+| [diffusion_quantize_roundtrip.py](../examples/diffusion_quantize_roundtrip.py) | int8 quantize + export/import sample parity | yes | yes |
 | [vision_chatbot.py](../examples/vision_chatbot.py) | Vision-flag train + export | yes | yes |
 
 ## Running

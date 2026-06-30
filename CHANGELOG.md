@@ -2,6 +2,11 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (Diffusion parameters getter + quantize roundtrip example)
+- `Diffusion.parameters()` counts VAE + UNet conv weights (Rust + Python getter/repr)
+- `examples/diffusion_quantize_roundtrip.py`; pytest for diffusion roundtrip examples
+- `diffusion_export_import_preserves_parameter_count` Rust regression
+
 ### Added (diffusion benchmark example + masked fixed-t loss regression)
 - `examples/diffusion_benchmark.py` for image_gen and `--edit` inpainting mean-loss deltas
 - `mean_denoise_loss_masked_decreases_after_fixed_t_training` Rust regression

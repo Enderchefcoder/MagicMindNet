@@ -38,10 +38,16 @@ impl PyDiffusion {
         self.inner.latent_channels
     }
 
+    #[getter]
+    fn parameters(&self) -> usize {
+        self.inner.parameters()
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "Diffusion(latent_channels={})",
-            self.inner.latent_channels
+            "Diffusion(latent_channels={}, parameters={})",
+            self.inner.latent_channels,
+            self.inner.parameters()
         )
     }
 

@@ -2043,6 +2043,17 @@ impl Diffusion {
         }
     }
 
+    /// Total trainable conv weight elements (VAE encoder/decoder + UNet).
+    pub fn parameters(&self) -> usize {
+        self.vae.conv1.weight.data.len()
+            + self.vae.conv2.weight.data.len()
+            + self.vae_decoder.conv1.weight.data.len()
+            + self.vae_decoder.conv2.weight.data.len()
+            + self.unet.down.weight.data.len()
+            + self.unet.mid.weight.data.len()
+            + self.unet.up.weight.data.len()
+    }
+
     pub fn training_step(&self, x: &Tensor, t: usize) -> Result<Tensor> {
         let t_emb = Tensor::from_array(
             ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1]), t as f32),
@@ -2322,6 +2333,20 @@ mod diffusion_tests {
         let x = Tensor::randn(&[1, 3, 8, 8], false);
         let out = d.training_step(&x, 3).unwrap();
         assert!(out.data.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn parameters_counts_all_conv_weights() {
+        let d = Diffusion::new();
+        let manual = d.vae.conv1.weight.data.len()
+            + d.vae.conv2.weight.data.len()
+            + d.vae_decoder.conv1.weight.data.len()
+            + d.vae_decoder.conv2.weight.data.len()
+            + d.unet.down.weight.data.len()
+            + d.unet.mid.weight.data.len()
+            + d.unet.up.weight.data.len();
+        assert_eq!(d.parameters(), manual);
+        assert!(d.parameters() > 10_000);
     }
 
     #[test]

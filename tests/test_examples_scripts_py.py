@@ -318,6 +318,25 @@ def test_diffusion_benchmark_edit_example_runs(run_example):
     assert "mean denoise loss after:" in proc.stdout
 
 
+def test_diffusion_roundtrip_example_runs(run_example):
+    proc = run_example("diffusion_roundtrip.py", timeout=120)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "diffusion roundtrip ok:" in proc.stdout
+
+
+def test_diffusion_edit_roundtrip_example_runs(run_example):
+    proc = run_example("diffusion_edit_roundtrip.py", timeout=120)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "diffusion edit roundtrip ok:" in proc.stdout
+
+
+def test_diffusion_quantize_roundtrip_example_runs(run_example):
+    proc = run_example("diffusion_quantize_roundtrip.py", timeout=60)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "diffusion quantize roundtrip ok:" in proc.stdout
+    assert "parameters=" in proc.stdout
+
+
 def test_vision_chatbot_example_runs(run_example):
     proc = run_example("vision_chatbot.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

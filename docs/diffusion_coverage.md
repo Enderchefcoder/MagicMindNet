@@ -8,6 +8,8 @@ Foundation VAE + UNet API (not production Stable Diffusion).
 |----------|------|
 | `Diffusion()` constructs | `test_datasets.py`, `test_diffusion_repr.py` |
 | `latent_channels` getter (default 4) | `test_diffusion_repr.py` |
+| `parameters` getter (VAE + UNet conv weights) | `parameters_counts_all_conv_weights`, `test_diffusion_repr.py` |
+| Export/import preserves `parameters` | `diffusion_export_import_preserves_parameter_count` |
 | `smoke_step()` → finite UNet output | `test_diffusion_smoke_py.py`, `examples/diffusion_smoke.py` |
 | Rust `training_step` finite | `diffusion_tests::training_step_output_finite` |
 | `train_step_denoise` updates UNet | `diffusion_tests::train_step_denoise_updates_unet_and_reduces_loss` |
