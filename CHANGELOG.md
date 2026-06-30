@@ -2,6 +2,11 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (diffusion benchmark example + masked fixed-t loss regression)
+- `examples/diffusion_benchmark.py` for image_gen and `--edit` inpainting mean-loss deltas
+- `mean_denoise_loss_masked_decreases_after_fixed_t_training` Rust regression
+- `eval_mean_loss diffusion-edit --train` pytest; smoke coverage
+
 ### Added (eval_mean_loss diffusion modes + mean loss training regression)
 - `eval_mean_loss.py` modes `diffusion` and `diffusion-edit` with optional `--train`
 - `mean_denoise_loss_decreases_after_fixed_t_training` Rust regression

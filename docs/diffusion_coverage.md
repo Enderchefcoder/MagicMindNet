@@ -22,6 +22,8 @@ Foundation VAE + UNet API (not production Stable Diffusion).
 | `compute_mean_denoise_loss` on ImageGen/ImageEdit | `test_diffusion_mean_loss_py.py`, `mean_denoise_loss_*` |
 | `eval_mean_loss.py diffusion` modes | `test_eval_mean_loss_diffusion_*` |
 | Fixed-`t` training lowers mean denoise loss | `mean_denoise_loss_decreases_after_fixed_t_training` |
+| Fixed-`t` masked training lowers mean denoise loss | `mean_denoise_loss_masked_decreases_after_fixed_t_training` |
+| `diffusion_benchmark.py` mean loss delta | `test_diffusion_benchmark_*` |
 | Diffusion IO missing/shape/merge/quantize matrix | `test_io_diffusion_matrix_py.py` |
 | Mask tensor from disk | `grayscale_mask_tensor_from_image_path_is_unit_interval` |
 | `write_rgb_nchw_tensor_to_png` | `write_rgb_nchw_tensor_to_png_roundtrip` |

@@ -1117,20 +1117,59 @@ mod tests {
         let x = mmn_data::rgb_nchw_tensor_from_image_path(&path).unwrap();
         let mut model = Diffusion::new();
         let before = mean_denoise_loss(&model, &ds, 7).unwrap();
+        assert_eq!(before, model.denoise_loss(&x, 7).unwrap());
+        let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
         let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
             lr: 0.05,
             ..Default::default()
         });
         let mut pid = 0usize;
-        for _ in 0..15 {
+        for _ in 0..12 {
             model
                 .train_step_denoise(&x, 7, &mut adamw, &mut pid)
                 .unwrap();
         }
         let after = mean_denoise_loss(&model, &ds, 7).unwrap();
+        assert_ne!(model.unet.down.weight.data[[0, 0, 0, 0]], w_before);
         assert!(
             after <= before,
             "mean denoise loss should decrease at fixed t: before={before} after={after}"
+        );
+        assert_eq!(after, model.denoise_loss(&x, 7).unwrap());
+    }
+
+    #[test]
+    fn mean_denoise_loss_masked_decreases_after_fixed_t_training() {
+        use mmn_data::DatasetImageEdit;
+        use mmn_models::Diffusion;
+        let manifest = format!(
+            "{}/../../tests/fixtures/image_edit.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let ds = DatasetImageEdit::load(&manifest).unwrap();
+        let sample = &ds.samples[0];
+        let image_path = ds.resolve_image_path(&sample.image);
+        let mask_path = ds.resolve_mask_path(&sample.mask_image);
+        let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path).unwrap();
+        let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path).unwrap();
+        let mut model = Diffusion::new();
+        let before = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
+        let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
+        let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        for _ in 0..12 {
+            model
+                .train_step_denoise_masked(&x, &mask, 5, &mut adamw, &mut pid)
+                .unwrap();
+        }
+        let after = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
+        assert_ne!(model.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+        assert!(
+            after <= before,
+            "mean masked denoise loss should decrease at fixed t: before={before} after={after}"
         );
     }
 

@@ -1,0 +1,6 @@
+[Cursor] diffusion_benchmark example and masked fixed-t denoise loss regression
+
+Add diffusion_benchmark.py for image_gen and inpainting mean-loss training deltas,
+mean_denoise_loss_masked_decreases_after_fixed_t_training Rust test, eval_mean_loss
+diffusion-edit --train pytest, and smoke coverage. Stabilize mean_denoise_loss
+decrease test with 12-step fixed-t training and API parity checks.

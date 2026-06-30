@@ -115,6 +115,12 @@ Write-Host "== examples/diffusion_smoke =="
 Write-Host "== examples/diffusion_train =="
 & $PY examples/diffusion_train.py
 
+Write-Host "== examples/diffusion_benchmark =="
+& $PY examples/diffusion_benchmark.py
+
+Write-Host "== examples/diffusion_benchmark edit =="
+& $PY examples/diffusion_benchmark.py --edit
+
 Write-Host "== examples/diffusion_sample =="
 & $PY examples/diffusion_sample.py
 

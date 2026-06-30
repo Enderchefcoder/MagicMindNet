@@ -88,6 +88,12 @@ echo "== examples/corpus_benchmark rope =="
 echo "== examples/diffusion_smoke =="
 "$PY" examples/diffusion_smoke.py
 
+echo "== examples/diffusion_benchmark =="
+"$PY" examples/diffusion_benchmark.py
+
+echo "== examples/diffusion_benchmark edit =="
+"$PY" examples/diffusion_benchmark.py --edit
+
 echo "== examples/vision_chatbot =="
 "$PY" examples/vision_chatbot.py
 

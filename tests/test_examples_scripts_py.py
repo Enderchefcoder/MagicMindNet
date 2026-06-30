@@ -297,6 +297,27 @@ def test_eval_mean_loss_diffusion_train_runs(run_example):
     assert "mean diffusion loss after:" in proc.stdout
 
 
+def test_eval_mean_loss_diffusion_edit_train_runs(run_example):
+    proc = run_example("eval_mean_loss.py", "diffusion-edit", "--train")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean diffusion-edit loss before:" in proc.stdout
+    assert "mean diffusion-edit loss after:" in proc.stdout
+
+
+def test_diffusion_benchmark_example_runs(run_example):
+    proc = run_example("diffusion_benchmark.py", timeout=120)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean denoise loss before:" in proc.stdout
+    assert "mean denoise loss after:" in proc.stdout
+
+
+def test_diffusion_benchmark_edit_example_runs(run_example):
+    proc = run_example("diffusion_benchmark.py", "--edit", timeout=120)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "mean denoise loss before:" in proc.stdout
+    assert "mean denoise loss after:" in proc.stdout
+
+
 def test_vision_chatbot_example_runs(run_example):
     proc = run_example("vision_chatbot.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout
