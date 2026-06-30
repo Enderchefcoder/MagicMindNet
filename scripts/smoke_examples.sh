@@ -28,6 +28,9 @@ echo "== examples/eval_mean_loss corpus =="
 echo "== examples/benchmark_train =="
 "$PY" examples/benchmark_train.py
 
+echo "== examples/benchmark_train bpe =="
+"$PY" examples/benchmark_train.py --bpe
+
 echo "== examples/rl_spin =="
 "$PY" examples/rl_spin.py
 

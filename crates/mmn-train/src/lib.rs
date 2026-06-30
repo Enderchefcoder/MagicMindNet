@@ -74,12 +74,20 @@ pub fn mean_classification_loss(model: &Classifier, dataset: &DatasetClassificat
 }
 
 pub fn mean_qa_loss(model: &Chatbot, dataset: &DatasetQA) -> Result<f32> {
+    mean_qa_loss_with_bpe(model, dataset, None)
+}
+
+pub fn mean_qa_loss_with_bpe(
+    model: &Chatbot,
+    dataset: &DatasetQA,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<f32> {
     let vocab = model.shape.vocab_size;
     let mut total = 0.0f32;
     let mut count = 0usize;
     for sample in &dataset.samples {
-        let mut tokens = simple_tokenize(&sample.input, vocab);
-        let mut targets = simple_tokenize(&sample.output, vocab);
+        let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
+        let mut targets = tokenize_lm(&sample.output, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
         total += model.loss_on_batch(&tokens, &targets)?;
         count += 1;
@@ -107,11 +115,19 @@ fn corpus_row_lm_pairs(
 
 /// Mean CE over corpus rows (next-token LM: input = tokens[:-1], target = tokens[1:]).
 pub fn mean_corpus_loss(model: &Chatbot, dataset: &DatasetCorpus) -> Result<f32> {
+    mean_corpus_loss_with_bpe(model, dataset, None)
+}
+
+pub fn mean_corpus_loss_with_bpe(
+    model: &Chatbot,
+    dataset: &DatasetCorpus,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<f32> {
     let vocab = model.shape.vocab_size;
     let mut total = 0.0f32;
     let mut count = 0usize;
     for row in &dataset.rows {
-        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, None) {
+        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, bpe) {
             total += model.loss_on_batch(&tokens, &targets)?;
             count += 1;
         }
@@ -1023,27 +1039,9 @@ mod tests {
             ..Default::default()
         };
 
-        let loss_before = mean_qa_loss_bpe(&model, &ds, &bpe).unwrap();
+        let loss_before = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
         train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
-        let loss_after = mean_qa_loss_bpe(&model, &ds, &bpe).unwrap();
+        let loss_after = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
         assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
-    }
-
-    fn mean_qa_loss_bpe(model: &Chatbot, dataset: &DatasetQA, bpe: &BytePairEncoder) -> Result<f32> {
-        let vocab = model.shape.vocab_size;
-        let mut total = 0.0f32;
-        let mut count = 0usize;
-        for sample in &dataset.samples {
-            let mut tokens = tokenize_lm(&sample.input, vocab, Some(bpe));
-            let mut targets = tokenize_lm(&sample.output, vocab, Some(bpe));
-            align_qa_token_pairs(&mut tokens, &mut targets);
-            total += model.loss_on_batch(&tokens, &targets)?;
-            count += 1;
-        }
-        Ok(if count > 0 {
-            total / count as f32
-        } else {
-            0.0
-        })
     }
 }

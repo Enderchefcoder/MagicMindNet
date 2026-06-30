@@ -14,6 +14,13 @@ def test_benchmark_train_learned_pe_example_runs(run_example):
     assert "mean loss before" in proc.stdout
 
 
+def test_benchmark_train_bpe_example_runs(run_example):
+    proc = run_example("benchmark_train.py", "--bpe")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "bpe merges:" in proc.stdout
+    assert "mean loss before" in proc.stdout
+
+
 def test_quickstart_example_runs(run_example):
     proc = run_example("quickstart.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

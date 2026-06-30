@@ -9,13 +9,16 @@ FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
 
 def main() -> None:
-    learned_pe = "--learned-pe" in sys.argv[1:]
+    args = sys.argv[1:]
+    learned_pe = "--learned-pe" in args
+    use_bpe = "--bpe" in args
     path = FIXTURES / "qa_valid.json"
     ds = ai.DatasetQA(file=str(path), user_row="input", ai_row="output")
+    vocab_size = 512 if use_bpe else 256
     # Match tests/test_mean_qa_loss.py (regression-checked in pytest).
     if learned_pe:
         bot = ai.Chatbot(
-            vocab_size=256,
+            vocab_size=vocab_size,
             n_layer=2,
             d_model=32,
             seed=42,
@@ -24,15 +27,21 @@ def main() -> None:
         )
         print(f"use_learned_pos_embed: {bot.use_learned_pos_embed}")
     else:
-        bot = ai.Chatbot(vocab_size=256, n_layer=2, d_model=32, seed=42)
-    before = bot.compute_mean_loss(ds)
+        bot = ai.Chatbot(vocab_size=vocab_size, n_layer=2, d_model=32, seed=42)
+    bpe = None
+    if use_bpe:
+        texts = ["repeat repeat repeat token"] * 12
+        bpe = ai.BytePairEncoder.train(texts, vocab_size=vocab_size, num_merges=24)
+        print(f"bpe merges: {bpe.merge_count} (vocab_size={vocab_size})")
+    before = bot.compute_mean_loss(ds, bpe_encoder=bpe)
     cfg = ai.TrainConfig(epochs=5, batch_size=1, cuda=False, optimizer="adamw", learning_rate=0.05)
     print("Training Chatbot on", path.name, "…")
     print(f"  mean loss before: {before:.4f}")
-    ai.Train(bot, ds, cfg)
-    after = bot.compute_mean_loss(ds)
+    ai.Train(bot, ds, cfg, bpe_encoder=bpe)
+    after = bot.compute_mean_loss(ds, bpe_encoder=bpe)
     print(f"  mean loss after:  {after:.4f}")
     print("Done.")
+
 
 if __name__ == "__main__":
     main()

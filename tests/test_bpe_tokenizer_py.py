@@ -35,5 +35,7 @@ def test_train_with_bpe_encoder():
     enc = ai.BytePairEncoder.train(texts, vocab_size=512, num_merges=16)
     assert enc.merge_count > 0
     bot = ai.Chatbot(vocab_size=512, n_layer=1, d_model=64)
+    loss_bpe = bot.compute_mean_loss(ds, bpe_encoder=enc)
+    assert loss_bpe > 0
     cfg = ai.TrainConfig(epochs=2, batch_size=1, cuda=False, optimizer="adamw", learning_rate=0.05)
     ai.Train(bot, ds, cfg, bpe_encoder=enc)

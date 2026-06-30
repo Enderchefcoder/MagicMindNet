@@ -145,4 +145,4 @@
 [X] Pass 110 — quickstart flag docs in training/examples coverage
 [X] Git — 8 feature commits pushed to github.com/Enderchefcoder/MagicMindNet
 [X] Pass 111 — Python BytePairEncoder binding; Train() optional BPE tokenize; 210 Rust / 473 pytest
-[ ] Pass 112 — BPE training example + benchmark_train --bpe flag
+[X] Pass 112 — BPE-aware loss eval + benchmark_train --bpe; 210 Rust / 474 pytest

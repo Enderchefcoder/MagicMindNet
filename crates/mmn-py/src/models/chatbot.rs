@@ -1,11 +1,12 @@
 use mmn_models::Chatbot;
 use mmn_train::{
-    align_qa_token_pairs, mean_corpus_loss, mean_qa_loss, simple_tokenize,
+    align_qa_token_pairs, mean_corpus_loss_with_bpe, mean_qa_loss_with_bpe, tokenize_lm,
 };
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
 use crate::errors::{mmn_err_to_py, DataMismatchError};
+use crate::tokenizer::PyBytePairEncoder;
 
 #[pyclass(name = "Chatbot")]
 pub struct PyChatbot {
@@ -117,11 +118,18 @@ impl PyChatbot {
         }
     }
 
-    /// Mean cross-entropy for byte-tokenized `input` → `target` (same tokenization as `Train`).
-    fn compute_loss(&self, input: &str, target: &str) -> PyResult<f32> {
+    /// Mean cross-entropy for tokenized `input` → `target` (same tokenization as `Train`).
+    #[pyo3(signature = (input, target, bpe_encoder=None))]
+    fn compute_loss(
+        &self,
+        input: &str,
+        target: &str,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+    ) -> PyResult<f32> {
         let vocab = self.inner.shape.vocab_size;
-        let mut tokens = simple_tokenize(input, vocab);
-        let mut targets = simple_tokenize(target, vocab);
+        let bpe = bpe_encoder.map(|e| &e.inner);
+        let mut tokens = tokenize_lm(input, vocab, bpe);
+        let mut targets = tokenize_lm(target, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
         self.inner
             .loss_on_batch(&tokens, &targets)
@@ -129,12 +137,19 @@ impl PyChatbot {
     }
 
     /// Mean CE over all rows in a `DatasetQA` or `DatasetCorpus`.
-    fn compute_mean_loss(&self, dataset: &Bound<'_, PyAny>) -> PyResult<f32> {
+    #[pyo3(signature = (dataset, bpe_encoder=None))]
+    fn compute_mean_loss(
+        &self,
+        dataset: &Bound<'_, PyAny>,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+    ) -> PyResult<f32> {
+        let bpe = bpe_encoder.map(|e| &e.inner);
         if let Ok(ds) = dataset.downcast::<PyDatasetQA>() {
-            return mean_qa_loss(&self.inner, &ds.borrow().inner).map_err(mmn_err_to_py);
+            return mean_qa_loss_with_bpe(&self.inner, &ds.borrow().inner, bpe).map_err(mmn_err_to_py);
         }
         if let Ok(ds) = dataset.downcast::<PyDatasetCorpus>() {
-            return mean_corpus_loss(&self.inner, &ds.borrow().inner).map_err(mmn_err_to_py);
+            return mean_corpus_loss_with_bpe(&self.inner, &ds.borrow().inner, bpe)
+                .map_err(mmn_err_to_py);
         }
         Err(PyErr::new::<DataMismatchError, _>(
             "compute_mean_loss on Chatbot requires DatasetQA or DatasetCorpus.\nFix: Use DatasetQA or DatasetCorpus.\nExplanation: Classification datasets use Classifier.compute_mean_loss.".to_string(),

@@ -140,7 +140,8 @@ bot = ai.Chatbot(
 **Methods:**
 
 - `compute_loss(input_str, target_str) -> float`
-- `compute_mean_loss(dataset_qa | dataset_corpus) -> float`
+- `compute_mean_loss(dataset_qa | dataset_corpus, bpe_encoder=None) -> float`
+- `compute_loss(input, target, bpe_encoder=None) -> float` — same tokenization as `Train`
 
 ### Classifier
 
