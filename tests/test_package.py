@@ -25,3 +25,8 @@ def test_chatbot_has_loss_helpers():
 def test_classifier_has_mean_loss():
     clf = ai.Classifier.with_labels(["A", "B"], input_dim=16, seed=1)
     assert hasattr(clf, "compute_mean_loss")
+
+
+def test_diffusion_has_mean_denoise_loss():
+    d = ai.Diffusion()
+    assert hasattr(d, "compute_mean_denoise_loss")

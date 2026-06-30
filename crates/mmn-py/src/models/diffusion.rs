@@ -1,8 +1,10 @@
 use mmn_models::Diffusion;
+use mmn_train::{mean_denoise_loss, mean_denoise_loss_masked};
 use pyo3::prelude::*;
 use std::path::Path;
 
-use crate::errors::mmn_err_to_py;
+use crate::datasets::{PyDatasetImageEdit, PyDatasetImageGen};
+use crate::errors::{mmn_err_to_py, DataMismatchError};
 
 #[pyclass(name = "Diffusion")]
 pub struct PyDiffusion {
@@ -141,5 +143,20 @@ impl PyDiffusion {
             .sample_image_inpaint(&x, &mask, steps, seed)
             .map_err(mmn_err_to_py)?;
         mmn_data::write_rgb_nchw_tensor_to_png(&img, Path::new(&path)).map_err(mmn_err_to_py)
+    }
+
+    /// Mean denoise MSE over dataset rows at fixed timestep `t` (default 7).
+    #[pyo3(signature = (dataset, t=7))]
+    fn compute_mean_denoise_loss(&self, dataset: &Bound<'_, PyAny>, t: usize) -> PyResult<f32> {
+        if let Ok(ds) = dataset.downcast::<PyDatasetImageGen>() {
+            return mean_denoise_loss(&self.inner, &ds.borrow().inner, t).map_err(mmn_err_to_py);
+        }
+        if let Ok(ds) = dataset.downcast::<PyDatasetImageEdit>() {
+            return mean_denoise_loss_masked(&self.inner, &ds.borrow().inner, t)
+                .map_err(mmn_err_to_py);
+        }
+        Err(PyErr::new::<DataMismatchError, _>(
+            "compute_mean_denoise_loss requires DatasetImageGen or DatasetImageEdit.\nFix: Use an image manifest dataset.\nExplanation: QA/Corpus/Classification datasets are not diffusion image data.".to_string(),
+        ))
     }
 }

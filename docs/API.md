@@ -167,6 +167,9 @@ probs = clf.predict("some text")   # dict label -> probability
 ```python
 diff = ai.Diffusion()
 diff.latent_channels   # getter
+diff.compute_mean_denoise_loss(dataset_image_gen, t=7)
+diff.denoise_loss_on_image("photo.png", t=5)
+diff.sample_rgb_patch(steps=8, seed=42)
 ```
 
 Foundation VAE/UNet — see [limitations.md](limitations.md).
@@ -242,6 +245,7 @@ patch = d.sample_rgb_patch(steps=8, seed=42)  # 192 floats, 8×8×3 RGB
 inpaint = d.sample_inpaint_rgb_patch("photo.png", "mask.png", steps=8, seed=42)
 loss = d.denoise_loss_on_image("photo.png", t=5)
 loss_masked = d.denoise_loss_on_image_masked("photo.png", "mask.png", t=5)
+mean_loss = d.compute_mean_denoise_loss(dataset_image_gen, t=7)
 d.sample_rgb_patch_to_png("out.png", steps=8, seed=42)
 ai.export_diffusion(d, "safetensors", "diffusion.mmn")
 d2 = ai.import_diffusion("safetensors", ["diffusion.mmn"])

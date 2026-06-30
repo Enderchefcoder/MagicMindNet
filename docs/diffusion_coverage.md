@@ -19,6 +19,8 @@ Foundation VAE + UNet API (not production Stable Diffusion).
 | Inpaint sample preserves unmasked latent | `sample_latent_inpaint_preserves_unmasked_region` |
 | `sample_inpaint_rgb_patch` / PNG export | `test_diffusion_inpaint_py.py`, `examples/diffusion_inpaint_sample.py` |
 | `denoise_loss_on_image_masked` | `test_diffusion_inpaint_py.py` |
+| `compute_mean_denoise_loss` on ImageGen/ImageEdit | `test_diffusion_mean_loss_py.py`, `mean_denoise_loss_*` |
+| Diffusion IO missing/shape/merge/quantize matrix | `test_io_diffusion_matrix_py.py` |
 | Mask tensor from disk | `grayscale_mask_tensor_from_image_path_is_unit_interval` |
 | `write_rgb_nchw_tensor_to_png` | `write_rgb_nchw_tensor_to_png_roundtrip` |
 | `sample_rgb_patch(steps, seed)` finite + deterministic | `test_diffusion_sample_io_py.py`, `examples/diffusion_sample.py` |

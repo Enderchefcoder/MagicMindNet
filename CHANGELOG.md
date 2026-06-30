@@ -2,6 +2,13 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (diffusion mean denoise loss + IO matrix + edit roundtrip)
+- `mean_denoise_loss` / `mean_denoise_loss_masked`; Python `Diffusion.compute_mean_denoise_loss`
+- Parametric diffusion checkpoint IO matrix (`test_io_diffusion_matrix_py.py`)
+- `quantize_diffusion` export/import sample roundtrip test
+- Example `diffusion_edit_roundtrip.py`; masked train reduces loss at fixed `t` regression
+- **309** Rust tests / **625** pytest (`verify_gate`)
+
 ### Added (diffusion inpaint sampling + quantize + PNG export)
 - `sample_latent_inpaint` / `sample_image_inpaint` preserve unmasked latent from source image
 - `denoise_loss_masked` + Python `denoise_loss_on_image_masked`

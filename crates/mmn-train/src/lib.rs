@@ -601,6 +601,40 @@ pub fn train_diffusion_edit(
     Ok(())
 }
 
+/// Mean denoise MSE over all `DatasetImageGen` rows at a fixed timestep `t`.
+pub fn mean_denoise_loss(model: &Diffusion, dataset: &DatasetImageGen, t: usize) -> Result<f32> {
+    if dataset.samples.is_empty() {
+        return Ok(0.0);
+    }
+    let mut total = 0.0f32;
+    for sample in &dataset.samples {
+        let path = dataset.resolve_image_path(&sample.image_path);
+        let x = mmn_data::rgb_nchw_tensor_from_image_path(&path)?;
+        total += model.denoise_loss(&x, t)?;
+    }
+    Ok(total / dataset.samples.len() as f32)
+}
+
+/// Mean mask-weighted denoise MSE over all `DatasetImageEdit` rows at fixed `t`.
+pub fn mean_denoise_loss_masked(
+    model: &Diffusion,
+    dataset: &DatasetImageEdit,
+    t: usize,
+) -> Result<f32> {
+    if dataset.samples.is_empty() {
+        return Ok(0.0);
+    }
+    let mut total = 0.0f32;
+    for sample in &dataset.samples {
+        let image_path = dataset.resolve_image_path(&sample.image);
+        let mask_path = dataset.resolve_mask_path(&sample.mask_image);
+        let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path)?;
+        let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path)?;
+        total += model.denoise_loss_masked(&x, &mask, t)?;
+    }
+    Ok(total / dataset.samples.len() as f32)
+}
+
 pub fn rl(
     model: &mut Chatbot,
     dataset: &DatasetQA,
@@ -1040,6 +1074,34 @@ mod tests {
             ..Default::default()
         };
         train_diffusion_edit(&mut model, &ds, &cfg).unwrap();
+    }
+
+    #[test]
+    fn mean_denoise_loss_finite_on_image_gen_fixture() {
+        use mmn_data::DatasetImageGen;
+        use mmn_models::Diffusion;
+        let manifest = format!(
+            "{}/../../tests/fixtures/image_gen.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let ds = DatasetImageGen::load(&manifest).unwrap();
+        let model = Diffusion::new();
+        let loss = mean_denoise_loss(&model, &ds, 7).unwrap();
+        assert!(loss.is_finite() && loss >= 0.0);
+    }
+
+    #[test]
+    fn mean_denoise_loss_masked_finite_on_image_edit_fixture() {
+        use mmn_data::DatasetImageEdit;
+        use mmn_models::Diffusion;
+        let manifest = format!(
+            "{}/../../tests/fixtures/image_edit.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let ds = DatasetImageEdit::load(&manifest).unwrap();
+        let model = Diffusion::new();
+        let loss = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
+        assert!(loss.is_finite() && loss >= 0.0);
     }
 
     #[test]

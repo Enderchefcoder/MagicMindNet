@@ -2184,9 +2184,7 @@ impl Diffusion {
         let mut loss = 0.0f32;
         let mut grad_out = Vec::with_capacity(pred.data.len());
         for (i, (&p, &n_)) in pred.data.iter().zip(noise.data.iter()).enumerate() {
-            let sy = (i % spatial) / mask.shape[3];
-            let sx = (i % spatial) % mask.shape[3];
-            let w = mask.data[[0, 0, sy, sx]];
+            let w = latent_mask_weight(mask, i, spatial);
             let diff = p - n_;
             loss += w * diff * diff;
             grad_out.push(2.0 * w * diff);
@@ -2399,6 +2397,31 @@ mod diffusion_tests {
                 .unwrap();
         }
         assert_ne!(d.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+    }
+
+    #[test]
+    fn train_step_denoise_masked_reduces_masked_loss_at_fixed_t() {
+        let mut d = Diffusion::new();
+        let x = Tensor::randn(&[1, 3, 8, 8], false);
+        let mask = Tensor::from_array(
+            ndarray::ArrayD::from_elem(ndarray::IxDyn(&[1, 1, 8, 8]), 1.0f32),
+            false,
+        );
+        let before = d.denoise_loss_masked(&x, &mask, 7).unwrap();
+        let mut adamw = mmn_optim::AdamW::new(mmn_optim::AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        for _ in 0..12 {
+            d.train_step_denoise_masked(&x, &mask, 7, &mut adamw, &mut pid)
+                .unwrap();
+        }
+        let after = d.denoise_loss_masked(&x, &mask, 7).unwrap();
+        assert!(
+            after <= before,
+            "masked denoise loss should not increase at fixed t: before={before} after={after}"
+        );
     }
 
     #[test]
