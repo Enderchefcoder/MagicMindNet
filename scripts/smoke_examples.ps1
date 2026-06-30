@@ -73,6 +73,12 @@ Write-Host "== examples/gqa_rope_generate =="
 Write-Host "== examples/unigram_train_generate =="
 & $PY examples/unigram_train_generate.py
 
+Write-Host "== examples/unigram_roundtrip =="
+& $PY examples/unigram_roundtrip.py
+
+Write-Host "== examples/unigram_roundtrip train =="
+& $PY examples/unigram_roundtrip.py --train
+
 Write-Host "== examples/bpe_roundtrip =="
 & $PY examples/bpe_roundtrip.py
 

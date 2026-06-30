@@ -1,6 +1,7 @@
 use super::helpers::temp_file;
 use crate::{
     export_bin, export_safetensors, import_bin, import_safetensors, merge_models, quantize_model,
+    TokenizerSidecarRefs,
 };
 use mmn_core::{MmnError, Tensor};
 use mmn_models::Chatbot;
@@ -34,10 +35,41 @@ use std::fs;
     fn export_includes_bpe_checkpoint_meta() {
         let model = Chatbot::new(false, None, 128, Some(1), Some(16));
         let path = temp_file("bpe_meta.mmn");
-        export_safetensors(&model, path.to_str().unwrap(), Some("bot.bpe.mmn")).unwrap();
+        export_safetensors(
+            &model,
+            path.to_str().unwrap(),
+            TokenizerSidecarRefs {
+                bpe: Some("bot.bpe.mmn"),
+                unigram: None,
+            },
+        )
+        .unwrap();
         let text = fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["meta"]["bpe_checkpoint"].as_str(), Some("bot.bpe.mmn"));
+        let _ = fs::remove_file(&path);
+    }
+
+
+    #[test]
+    fn export_includes_unigram_checkpoint_meta() {
+        let model = Chatbot::new(false, None, 128, Some(1), Some(16));
+        let path = temp_file("unigram_meta.mmn");
+        export_safetensors(
+            &model,
+            path.to_str().unwrap(),
+            TokenizerSidecarRefs {
+                bpe: None,
+                unigram: Some("bot.unigram.mmn"),
+            },
+        )
+        .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            v["meta"]["unigram_checkpoint"].as_str(),
+            Some("bot.unigram.mmn")
+        );
         let _ = fs::remove_file(&path);
     }
 

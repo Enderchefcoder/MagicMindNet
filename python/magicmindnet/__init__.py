@@ -43,6 +43,7 @@ from magicmindnet._native import (
     quantize_classifier_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
+from magicmindnet.unigram_io import load_unigram_sidecar
 from magicmindnet.vision import (
     VISION_PATCH_DIM,
     VISION_RGB_CHANNELS,
@@ -90,6 +91,7 @@ __all__ = [
     "limit",
     "limit_percent",
     "load_bpe_sidecar",
+    "load_unigram_sidecar",
     "merge",
     "merge_classifier",
     "quantize",

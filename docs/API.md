@@ -240,7 +240,9 @@ Wrong dataset type → `DataMismatchError`. See [training_coverage.md](training_
 | `export(bot, "safetensors", path)` | `mmn-safetensors-v1` | Full weights + meta (JSON) |
 | `export(bot, "hf-safetensors", path)` | `mmn-hf-safetensors-v1` | Full weights + meta (binary HF safetensors) |
 | `export(bot, "safetensors", path, bpe_encoder=enc)` | `mmn-safetensors-v1` + `*.bpe.mmn` | Weights + `meta.bpe_checkpoint` sidecar |
+| `export(bot, "safetensors", path, unigram_encoder=enc)` | `mmn-safetensors-v1` + `*.unigram.mmn` | Weights + `meta.unigram_checkpoint` sidecar |
 | `load_bpe_sidecar(checkpoint_path)` | — | Load `mmn-bpe-v1` sibling referenced in meta |
+| `load_unigram_sidecar(checkpoint_path)` | — | Load `mmn-unigram-v1` sibling referenced in meta |
 | `export(bot, "bin", path)` | `mmn-bin-v1` | Architecture meta only |
 | `import_model("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary; strict tensor validation |
 | `import_model("hf-safetensors", [path])` | `mmn-hf-safetensors-v1` | Binary HF safetensors only |

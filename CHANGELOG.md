@@ -70,6 +70,11 @@
 - `GenerateConfig.frequency_penalty` / `presence_penalty` (OpenAI-style logit penalties); Python kwargs on `generate` / `generate_tokens`
 - Tests: `rope_kv_slide_matches_windowed_block_forward`, `rope_sliding_kv_generation_matches_full_forward`
 
+### Added (unigram tokenizer export sidecar)
+- `export(bot, "safetensors", path, unigram_encoder=)` writes `{stem}.unigram.mmn` + `meta.unigram_checkpoint`
+- `load_unigram_sidecar(checkpoint_path)` Python helper; Rust `export_includes_unigram_checkpoint_meta` test
+- `TokenizerSidecarRefs` for BPE + unigram meta on JSON and HF safetensors export
+
 ### Added (unigram tokenizer and nucleus sampling)
 - `UnigramEncoder`: Viterbi segmentation, EM training, `mmn-unigram-v1` JSON save/load; Python `train` / `train_from_qa` / `train_from_corpus`
 - `Train` / `RL` / `SPIN` / `compute_mean_loss` accept `unigram_encoder=` (mutually exclusive with `bpe_encoder`)

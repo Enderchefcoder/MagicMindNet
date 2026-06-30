@@ -2,6 +2,7 @@
 
 use crate::hf_adapt::{adapt_external_hf_tensors, fill_missing_block_layernorm_defaults};
 use crate::block_tensors::import_block_tensors;
+use crate::chatbot_io::TokenizerSidecarRefs;
 use crate::checkpoint_util::{
     expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry,
     write_file_create_parents,
@@ -16,7 +17,7 @@ use std::fs;
 
 pub const HF_FORMAT: &str = crate::hf_tensor_codec::HF_CHATBOT_FORMAT;
 
-fn chatbot_meta_json(model: &Chatbot, bpe_checkpoint: Option<&str>) -> serde_json::Value {
+fn chatbot_meta_json(model: &Chatbot, tokenizer_sidecars: TokenizerSidecarRefs<'_>) -> serde_json::Value {
     let mut meta = serde_json::json!({
         "vocab_size": model.shape.vocab_size,
         "n_layer": model.shape.n_layer,
@@ -50,8 +51,11 @@ fn chatbot_meta_json(model: &Chatbot, bpe_checkpoint: Option<&str>) -> serde_jso
         meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
         meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
     }
-    if let Some(bpe_path) = bpe_checkpoint {
+    if let Some(bpe_path) = tokenizer_sidecars.bpe {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
+    }
+    if let Some(uni_path) = tokenizer_sidecars.unigram {
+        meta["unigram_checkpoint"] = serde_json::json!(uni_path);
     }
     meta
 }
@@ -92,11 +96,12 @@ fn collect_named_tensors(model: &Chatbot) -> HashMap<String, Tensor> {
 }
 
 /// Write a Hugging Face binary safetensors checkpoint (F32 tensors, MMN key names).
-pub fn export_hf_safetensors(
+pub fn export_hf_safetensors<'a>(
     model: &Chatbot,
     path: &str,
-    bpe_checkpoint: Option<&str>,
+    tokenizer_sidecars: impl Into<TokenizerSidecarRefs<'a>>,
 ) -> Result<(), MmnError> {
+    let tokenizer_sidecars = tokenizer_sidecars.into();
     let named = collect_named_tensors(model);
     let mut storages: Vec<(String, Vec<usize>, Vec<u8>)> = Vec::new();
     for (k, t) in &named {
@@ -112,7 +117,7 @@ pub fn export_hf_safetensors(
             })?,
         );
     }
-    let meta = chatbot_meta_json(model, bpe_checkpoint);
+    let meta = chatbot_meta_json(model, tokenizer_sidecars);
     let mut metadata = HashMap::new();
     metadata.insert("format".to_string(), HF_FORMAT.to_string());
     metadata.insert("meta".to_string(), meta.to_string());

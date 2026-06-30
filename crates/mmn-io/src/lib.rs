@@ -10,6 +10,7 @@ mod tensor_merge;
 
 pub use chatbot_io::{
     export_bin, export_safetensors, import_bin, import_safetensors, merge_models, quantize_model,
+    TokenizerSidecarRefs,
 };
 pub use hf_classifier_safetensors::{
     export_hf_classifier_safetensors, hf_classifier_name_to_mmn, import_hf_classifier_safetensors,

@@ -98,7 +98,7 @@ assert bpe2.encode("hello") == bpe.encode("hello")
 
 **Meta:** `format` (`mmn-bpe-v1`), `vocab_size` (≥ 256), `merges` (list of `[left, right]` byte or merged token ids). BPE checkpoints are separate from Chatbot weights — pass the loaded encoder to `Train()` / `compute_mean_loss()`.
 
-Chatbot `mmn-safetensors-v1` may reference a sibling sidecar via `meta.bpe_checkpoint` (e.g. `bot.bpe.mmn`). Use `export(bot, "safetensors", path, bpe_encoder=enc)` to write both files, then `load_bpe_sidecar(path)` after import.
+Chatbot `mmn-safetensors-v1` may reference a sibling sidecar via `meta.bpe_checkpoint` (e.g. `bot.bpe.mmn`) or `meta.unigram_checkpoint` (e.g. `bot.unigram.mmn`). Use `export(bot, "safetensors", path, bpe_encoder=enc)` or `unigram_encoder=enc` to write both files, then `load_bpe_sidecar(path)` / `load_unigram_sidecar(path)` after import.
 
 ## UnigramEncoder — `mmn-unigram-v1`
 

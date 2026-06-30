@@ -9,11 +9,25 @@ use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
 use std::collections::HashMap;
 use std::fs;
 
-pub fn export_safetensors(
+/// Relative paths to tokenizer sidecars written beside a chatbot checkpoint.
+#[derive(Clone, Copy, Default)]
+pub struct TokenizerSidecarRefs<'a> {
+    pub bpe: Option<&'a str>,
+    pub unigram: Option<&'a str>,
+}
+
+impl<'a> From<Option<&'a str>> for TokenizerSidecarRefs<'a> {
+    fn from(bpe: Option<&'a str>) -> Self {
+        Self { bpe, unigram: None }
+    }
+}
+
+pub fn export_safetensors<'a>(
     model: &Chatbot,
     path: &str,
-    bpe_checkpoint: Option<&str>,
+    tokenizer_sidecars: impl Into<TokenizerSidecarRefs<'a>>,
 ) -> Result<(), MmnError> {
+    let tokenizer_sidecars = tokenizer_sidecars.into();
     let mut map = HashMap::new();
     map.insert("embed".to_string(), tensor_to_entry(&model.embed.weight));
     map.insert("lm_head".to_string(), tensor_to_entry(&model.lm_head.weight));
@@ -80,8 +94,11 @@ pub fn export_safetensors(
         meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
         meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
     }
-    if let Some(bpe_path) = bpe_checkpoint {
+    if let Some(bpe_path) = tokenizer_sidecars.bpe {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
+    }
+    if let Some(uni_path) = tokenizer_sidecars.unigram {
+        meta["unigram_checkpoint"] = serde_json::json!(uni_path);
     }
     let wrapper = serde_json::json!({
         "tensors": map,

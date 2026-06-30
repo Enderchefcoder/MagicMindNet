@@ -58,6 +58,12 @@ echo "== examples/gqa_rope_generate =="
 echo "== examples/unigram_train_generate =="
 "$PY" examples/unigram_train_generate.py
 
+echo "== examples/unigram_roundtrip =="
+"$PY" examples/unigram_roundtrip.py
+
+echo "== examples/unigram_roundtrip train =="
+"$PY" examples/unigram_roundtrip.py --train
+
 echo "== examples/rl_spin =="
 "$PY" examples/rl_spin.py
 
