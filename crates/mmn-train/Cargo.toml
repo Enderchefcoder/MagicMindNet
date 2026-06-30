@@ -1,0 +1,18 @@
+[package]
+name = "mmn-train"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mmn-core.workspace = true
+mmn-cuda.workspace = true
+mmn-ops.workspace = true
+mmn-optim.workspace = true
+mmn-models.workspace = true
+mmn-data.workspace = true
+ndarray.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+mmn-io.workspace = true
