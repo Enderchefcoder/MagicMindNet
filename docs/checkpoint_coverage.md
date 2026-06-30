@@ -121,6 +121,7 @@ Seven conv weight tensors: `vae_enc_conv1`, `vae_enc_conv2`, `vae_dec_conv1`, `v
 | Roundtrip preserves sample | `diffusion_export_import_roundtrip_preserves_sample` | `test_diffusion_export_import_roundtrip` |
 | Roundtrip preserves parameter count | `diffusion_export_import_preserves_parameter_count` | `test_diffusion_export_import_roundtrip` |
 | Reject chatbot checkpoint | `import_diffusion_rejects_chatbot_checkpoint` | `test_import_diffusion_rejects_chatbot_checkpoint` |
+| Reject classifier checkpoint | `import_diffusion_rejects_classifier_checkpoint` | — |
 | Quantize export/import sample | — | `test_quantize_diffusion_export_import_preserves_sample` |
 | Merge `latent_channels` mismatch | `merge_diffusion_rejects_latent_channel_mismatch` | — |
 

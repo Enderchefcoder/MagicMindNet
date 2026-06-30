@@ -17,6 +17,7 @@ Foundation VAE + UNet API (not production Stable Diffusion).
 | `TrainDiffusion` on `DatasetImageEdit` (masked inpainting) | `test_train_diffusion_edit.py`, `train_diffusion_edit_fixture_runs_masked_steps` |
 | `sample_rgb_patch` values in `[0, 1]` after decode clamp | `test_train_diffusion_edit.py`, `sample_image_rgb_is_clamped_to_unit_interval` |
 | `merge_diffusion` averages weights | `merge_diffusion_averages_unet_down_weight`, `test_train_diffusion_edit.py` |
+| `merge_diffusion` demo sample | `test_diffusion_merge_demo` |
 | `quantize_diffusion` int8/int4 | `quantize_diffusion_int8_changes_unet_weight`, `test_diffusion_inpaint_py.py` |
 | Inpaint sample preserves unmasked latent | `sample_latent_inpaint_preserves_unmasked_region` |
 | `sample_inpaint_rgb_patch` / PNG export | `test_diffusion_inpaint_py.py`, `examples/diffusion_inpaint_sample.py` |

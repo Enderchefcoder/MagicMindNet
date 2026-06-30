@@ -337,6 +337,12 @@ def test_diffusion_quantize_roundtrip_example_runs(run_example):
     assert "parameters=" in proc.stdout
 
 
+def test_diffusion_merge_demo_example_runs(run_example):
+    proc = run_example("diffusion_merge_demo.py", timeout=60)
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "merge_diffusion ok:" in proc.stdout
+
+
 def test_vision_chatbot_example_runs(run_example):
     proc = run_example("vision_chatbot.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

@@ -20,6 +20,7 @@ Runnable scripts under `examples/` and how they are regression-tested.
 | [diffusion_roundtrip.py](../examples/diffusion_roundtrip.py) | Train, export/import, sample parity | yes | yes |
 | [diffusion_edit_roundtrip.py](../examples/diffusion_edit_roundtrip.py) | Inpaint train + export/import inpaint sample parity | yes | yes |
 | [diffusion_quantize_roundtrip.py](../examples/diffusion_quantize_roundtrip.py) | int8 quantize + export/import sample parity | yes | yes |
+| [diffusion_merge_demo.py](../examples/diffusion_merge_demo.py) | `merge_diffusion` sample smoke | yes | yes |
 | [vision_chatbot.py](../examples/vision_chatbot.py) | Vision-flag train + export | yes | yes |
 
 ## Running

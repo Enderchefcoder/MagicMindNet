@@ -101,6 +101,10 @@ ds.unique_labels()            # sorted, deduplicated
 ```python
 gen = ai.DatasetImageGen("manifest.json")
 edit = ai.DatasetImageEdit("edit_manifest.json")
+gen.resolve_image_path("samples/cat.png")  # absolute path
+gen.image_path_at(0)                       # first row image
+gen.prompt_at(0)
+edit.mask_path_at(0)
 ```
 
 ---

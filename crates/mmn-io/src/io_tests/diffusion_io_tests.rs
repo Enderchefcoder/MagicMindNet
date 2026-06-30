@@ -31,6 +31,20 @@ fn import_diffusion_rejects_chatbot_checkpoint() {
 }
 
 #[test]
+fn import_diffusion_rejects_classifier_checkpoint() {
+    use crate::export_classifier;
+    use mmn_models::Classifier;
+    let dir = std::env::temp_dir();
+    let path = dir.join("mmn_diffusion_clf.mmn");
+    let clf = Classifier::new(3, 32);
+    export_classifier(&clf, path.to_str().unwrap()).unwrap();
+    match import_diffusion(path.to_str().unwrap()) {
+        Err(e) => assert!(e.to_string().contains("mmn-diffusion-v1")),
+        Ok(_) => panic!("expected import_diffusion to reject classifier checkpoint"),
+    }
+}
+
+#[test]
 fn import_diffusion_rejects_missing_unet_tensor() {
     use crate::checkpoint_util::write_file_create_parents;
     let dir = std::env::temp_dir();

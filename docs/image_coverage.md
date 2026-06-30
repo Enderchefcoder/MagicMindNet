@@ -10,6 +10,7 @@ Regression coverage for `DatasetImageGen` and `DatasetImageEdit` loaders.
 | Fixture manifest | — | `test_image_fixtures_py.py` |
 | `format` / `type_` getters | — | `test_dataset_image_format.py` |
 | `repr` | — | `test_dataset_image_gen_repr.py` |
+| `resolve_image_path` / `image_path_at` / `prompt_at` | `image_gen_resolve_image_path_relative_to_manifest` | `test_dataset_image_paths_py.py` |
 
 ## DatasetImageEdit
 
@@ -18,6 +19,7 @@ Regression coverage for `DatasetImageGen` and `DatasetImageEdit` loaders.
 | Load mask + negative_prompt | `image_edit_loads_mask_and_negative_prompt` | `test_dataset_matrix_py.py` |
 | Fixture manifest | — | `test_image_fixtures_py.py` |
 | `format` / `type_` getters | — | `test_dataset_image_format.py` |
+| `resolve_*` / `image_path_at` / `mask_path_at` | `image_edit_resolve_paths_relative_to_manifest` | `test_dataset_image_paths_py.py` |
 
 ## Diffusion validation
 

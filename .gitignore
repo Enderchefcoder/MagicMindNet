@@ -14,6 +14,8 @@ __pycache__/
 .DS_Store
 examples/_roundtrip_*.mmn
 examples/_roundtrip_*.safetensors
+examples/_inpaint_sample.png
+examples/_roundtrip_diffusion_quant.mmn
 examples/*.bpe.mmn
 examples/_tmp_labels.json
 user_saved/

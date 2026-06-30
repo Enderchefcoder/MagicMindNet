@@ -139,6 +139,9 @@ Write-Host "== examples/diffusion_edit_roundtrip =="
 Write-Host "== examples/diffusion_quantize_roundtrip =="
 & $PY examples/diffusion_quantize_roundtrip.py
 
+Write-Host "== examples/diffusion_merge_demo =="
+& $PY examples/diffusion_merge_demo.py
+
 Write-Host "== examples/vision_chatbot =="
 & $PY examples/vision_chatbot.py
 

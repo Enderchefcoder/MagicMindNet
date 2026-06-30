@@ -2,6 +2,12 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (image dataset path resolvers + diffusion merge demo)
+- Python `resolve_image_path`, `image_path_at`, `prompt_at` on `DatasetImageGen`
+- Python `resolve_mask_path`, `mask_path_at` on `DatasetImageEdit`; inpaint sample uses manifest paths
+- `examples/diffusion_merge_demo.py`; `import_diffusion_rejects_classifier_checkpoint`
+- Gitignore example PNG artifacts; untrack `_inpaint_sample.png`
+
 ### Added (Diffusion parameters getter + quantize roundtrip example)
 - `Diffusion.parameters()` counts VAE + UNet conv weights (Rust + Python getter/repr)
 - `examples/diffusion_quantize_roundtrip.py`; pytest for diffusion roundtrip examples
