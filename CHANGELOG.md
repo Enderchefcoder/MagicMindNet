@@ -53,8 +53,14 @@
 - Fuse Llama SwiGLU `gate_proj`×`up_proj` into MMN `ffn`; `down_proj`→`ffn2`; custom `ffn_dim` in meta
 - Tie missing `lm_head` to `embed`; default RMSNorm-only γ=1 / β=0 for missing layernorm tensors
 
+### Added (native grouped-query attention)
+- `ModelShape.n_kv_heads` (defaults to `n_heads`); `MultiHeadAttention` uses `[n_kv_heads * head_dim, d_model]` for `k_proj`/`v_proj`
+- GQA-aware `scaled_dot_product_attention` forward/backward maps query heads to shared KV heads; RoPE rotates K over `n_kv_heads`
+- HF import keeps native KV tensor shapes (`ensure_gqa_meta`); export writes `n_kv_heads` in meta when `!= n_heads`
+- Rust tests: GQA forward vs expanded MHA parity, backward finite-diff, KV grad shapes through `TransformerBlock`
+
 ### Added (GQA expansion and BF16/F16 dtype import)
-- Expand grouped-query `k_proj`/`v_proj` to full `[d_model, d_model]` using `num_attention_heads` / `num_key_value_heads` meta
+- ~~Expand grouped-query `k_proj`/`v_proj` to full `[d_model, d_model]`~~ superseded by native GQA above
 - HF safetensors import decodes **F16** and **BF16** tensors to F32 via `half` crate
 
 ### Added (Classifier Hugging Face binary safetensors)

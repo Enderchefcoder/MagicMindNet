@@ -158,11 +158,17 @@ fn rope_cos_sin(seq_len: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Vec<f
     (cos, sin)
 }
 
-/// Apply RoPE to Q and K tensors `[seq_len, d_model]` (rotates within each head).
-pub fn apply_rope(q: &Tensor, k: &Tensor, n_heads: usize, theta: f32) -> Result<(Tensor, Tensor)> {
-    if q.shape != k.shape || q.shape.len() != 2 {
+/// Apply RoPE to Q `[seq, d_model]` and K `[seq, n_kv_heads * head_dim]`.
+pub fn apply_rope(
+    q: &Tensor,
+    k: &Tensor,
+    n_heads: usize,
+    n_kv_heads: usize,
+    theta: f32,
+) -> Result<(Tensor, Tensor)> {
+    if q.shape.len() != 2 || k.shape.len() != 2 || q.shape[0] != k.shape[0] {
         return Err(MmnError::Shape {
-            message: "apply_rope expects q,k shape [seq_len, d_model]".into(),
+            message: "apply_rope expects q,k shape [seq_len, features] with matching seq".into(),
         });
     }
     let seq = q.shape[0];
@@ -173,6 +179,12 @@ pub fn apply_rope(q: &Tensor, k: &Tensor, n_heads: usize, theta: f32) -> Result<
         });
     }
     let head_dim = d_model / n_heads;
+    let kv_dim = n_kv_heads * head_dim;
+    if k.shape[1] != kv_dim {
+        return Err(MmnError::Shape {
+            message: format!("apply_rope k width {kv_dim} expected, got {}", k.shape[1]),
+        });
+    }
     if head_dim % 2 != 0 {
         return Err(MmnError::Shape {
             message: format!("head_dim {head_dim} must be even for RoPE"),
@@ -190,12 +202,25 @@ pub fn apply_rope(q: &Tensor, k: &Tensor, n_heads: usize, theta: f32) -> Result<
                 let idx1 = base + 2 * i + 1;
                 let c = cos[s * half + i];
                 let sn = sin[s * half + i];
-                for (src, dst) in [(&q.data, &mut q_out), (&k.data, &mut k_out)] {
-                    let x0 = src[[s, idx0]];
-                    let x1 = src[[s, idx1]];
-                    dst[[s, idx0]] = x0 * c - x1 * sn;
-                    dst[[s, idx1]] = x0 * sn + x1 * c;
-                }
+                let x0 = q.data[[s, idx0]];
+                let x1 = q.data[[s, idx1]];
+                q_out[[s, idx0]] = x0 * c - x1 * sn;
+                q_out[[s, idx1]] = x0 * sn + x1 * c;
+            }
+        }
+    }
+    for h in 0..n_kv_heads {
+        let base = h * head_dim;
+        for s in 0..seq {
+            for i in 0..half {
+                let idx0 = base + 2 * i;
+                let idx1 = base + 2 * i + 1;
+                let c = cos[s * half + i];
+                let sn = sin[s * half + i];
+                let x0 = k.data[[s, idx0]];
+                let x1 = k.data[[s, idx1]];
+                k_out[[s, idx0]] = x0 * c - x1 * sn;
+                k_out[[s, idx1]] = x0 * sn + x1 * c;
             }
         }
     }
@@ -210,11 +235,18 @@ pub fn apply_rope_backward(
     grad_q: &ArrayD<f32>,
     grad_k: &ArrayD<f32>,
     n_heads: usize,
+    n_kv_heads: usize,
     theta: f32,
     seq_len: usize,
 ) -> Result<(ArrayD<f32>, ArrayD<f32>)> {
     let d_model = grad_q.shape()[1];
     let head_dim = d_model / n_heads;
+    let kv_dim = n_kv_heads * head_dim;
+    if grad_k.shape()[1] != kv_dim {
+        return Err(MmnError::Shape {
+            message: format!("apply_rope_backward k grad width {kv_dim} expected, got {}", grad_k.shape()[1]),
+        });
+    }
     let half = head_dim / 2;
     let (cos, sin) = rope_cos_sin(seq_len, head_dim, theta);
     let mut gq = grad_q.clone();
@@ -227,12 +259,25 @@ pub fn apply_rope_backward(
                 let idx1 = base + 2 * i + 1;
                 let c = cos[s * half + i];
                 let sn = sin[s * half + i];
-                for grad in [&mut gq, &mut gk] {
-                    let gy0 = grad[[s, idx0]];
-                    let gy1 = grad[[s, idx1]];
-                    grad[[s, idx0]] = gy0 * c + gy1 * sn;
-                    grad[[s, idx1]] = -gy0 * sn + gy1 * c;
-                }
+                let gy0 = gq[[s, idx0]];
+                let gy1 = gq[[s, idx1]];
+                gq[[s, idx0]] = gy0 * c + gy1 * sn;
+                gq[[s, idx1]] = -gy0 * sn + gy1 * c;
+            }
+        }
+    }
+    for h in 0..n_kv_heads {
+        let base = h * head_dim;
+        for s in 0..seq_len {
+            for i in 0..half {
+                let idx0 = base + 2 * i;
+                let idx1 = base + 2 * i + 1;
+                let c = cos[s * half + i];
+                let sn = sin[s * half + i];
+                let gy0 = gk[[s, idx0]];
+                let gy1 = gk[[s, idx1]];
+                gk[[s, idx0]] = gy0 * c + gy1 * sn;
+                gk[[s, idx1]] = -gy0 * sn + gy1 * c;
             }
         }
     }
@@ -602,7 +647,7 @@ mod position_encoding_tests {
             true,
         );
         let k = q.clone();
-        let (qr, _kr) = apply_rope(&q, &k, 2, DEFAULT_ROPE_THETA).unwrap();
+        let (qr, _kr) = apply_rope(&q, &k, 2, 2, DEFAULT_ROPE_THETA).unwrap();
         assert_ne!(qr.data[[1, 0]], q.data[[1, 0]]);
         assert_eq!(qr.data[[0, 0]], q.data[[0, 0]]);
     }
@@ -619,20 +664,20 @@ mod position_encoding_tests {
         );
         let k = q.clone();
         let eps = 1e-3f32;
-        let (_qr, _) = apply_rope(&q, &k, n_heads, theta).unwrap();
+        let (_qr, _) = apply_rope(&q, &k, n_heads, n_heads, theta).unwrap();
         let grad_out_q = ndarray::arr2(&[[0.2, -0.1, 0.4, 0.3], [0.1, 0.2, -0.2, 0.5]]).into_dyn();
         let grad_out_k = grad_out_q.clone();
         let (gq, _) =
-            apply_rope_backward(&grad_out_q, &grad_out_k, n_heads, theta, seq).unwrap();
+            apply_rope_backward(&grad_out_q, &grad_out_k, n_heads, n_heads, theta, seq).unwrap();
         for j in 0..d_model {
             let mut q_plus = q.data.as_ref().clone();
             q_plus[[0, j]] += eps;
             let qp = Tensor::from_array(q_plus.clone(), true);
-            let (qr_plus, _) = apply_rope(&qp, &k, n_heads, theta).unwrap();
+            let (qr_plus, _) = apply_rope(&qp, &k, n_heads, n_heads, theta).unwrap();
             let mut q_minus = q.data.as_ref().clone();
             q_minus[[0, j]] -= eps;
             let qm = Tensor::from_array(q_minus, true);
-            let (qr_minus, _) = apply_rope(&qm, &k, n_heads, theta).unwrap();
+            let (qr_minus, _) = apply_rope(&qm, &k, n_heads, n_heads, theta).unwrap();
             let numeric = (grad_out_q[[0, 0]] * (qr_plus.data[[0, 0]] - qr_minus.data[[0, 0]])
                 + grad_out_q[[0, 1]] * (qr_plus.data[[0, 1]] - qr_minus.data[[0, 1]])
                 + grad_out_q[[0, 2]] * (qr_plus.data[[0, 2]] - qr_minus.data[[0, 2]])
@@ -651,6 +696,7 @@ mod position_encoding_tests {
 pub struct MultiHeadAttention {
     pub d_model: usize,
     pub n_heads: usize,
+    pub n_kv_heads: usize,
     pub causal: bool,
     /// When set, apply rotary position embedding to Q/K after projection.
     pub rope_theta: Option<f32>,
@@ -658,6 +704,10 @@ pub struct MultiHeadAttention {
     pub k_proj: Linear,
     pub v_proj: Linear,
     pub out_proj: Linear,
+}
+
+fn gqa_kv_dim(d_model: usize, n_heads: usize, n_kv_heads: usize) -> usize {
+    n_kv_heads * (d_model / n_heads)
 }
 
 impl MultiHeadAttention {
@@ -685,15 +735,29 @@ impl MultiHeadAttention {
         rope_theta: Option<f32>,
         rng: &mut impl Rng,
     ) -> Self {
+        Self::new_rng_causal_rope_gqa(d_model, n_heads, n_heads, causal, rope_theta, rng)
+    }
+
+    pub fn new_rng_causal_rope_gqa(
+        d_model: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        causal: bool,
+        rope_theta: Option<f32>,
+        rng: &mut impl Rng,
+    ) -> Self {
         assert_eq!(d_model % n_heads, 0);
+        assert!(n_heads >= n_kv_heads && n_heads % n_kv_heads == 0);
+        let kv_dim = gqa_kv_dim(d_model, n_heads, n_kv_heads);
         Self {
             d_model,
             n_heads,
+            n_kv_heads,
             causal,
             rope_theta,
             q_proj: Linear::new_rng(d_model, d_model, rng),
-            k_proj: Linear::new_rng(d_model, d_model, rng),
-            v_proj: Linear::new_rng(d_model, d_model, rng),
+            k_proj: Linear::new_rng(d_model, kv_dim, rng),
+            v_proj: Linear::new_rng(d_model, kv_dim, rng),
             out_proj: Linear::new_rng(d_model, d_model, rng),
         }
     }
@@ -703,7 +767,7 @@ impl MultiHeadAttention {
         let k_lin = self.k_proj.forward(x)?;
         let v = self.v_proj.forward(x)?;
         if let Some(theta) = self.rope_theta {
-            let (q, k) = apply_rope(&q_lin, &k_lin, self.n_heads, theta)?;
+            let (q, k) = apply_rope(&q_lin, &k_lin, self.n_heads, self.n_kv_heads, theta)?;
             Ok((q, k, v, Some(q_lin), Some(k_lin)))
         } else {
             Ok((q_lin.clone(), k_lin.clone(), v, None, None))
@@ -712,8 +776,14 @@ impl MultiHeadAttention {
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (q, k, v, _, _) = self.project_qkv(x)?;
-        let (merged, _) =
-            scaled_dot_product_attention_with_cache(&q, &k, &v, self.n_heads, self.causal)?;
+        let (merged, _) = scaled_dot_product_attention_with_cache(
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
+            self.causal,
+        )?;
         self.out_proj.forward(&merged)
     }
 
@@ -731,8 +801,14 @@ impl MultiHeadAttention {
         SdpAttentionCache,
     )> {
         let (q, k, v, q_lin, k_lin) = self.project_qkv(x)?;
-        let (merged, sdp) =
-            scaled_dot_product_attention_with_cache(&q, &k, &v, self.n_heads, self.causal)?;
+        let (merged, sdp) = scaled_dot_product_attention_with_cache(
+            &q,
+            &k,
+            &v,
+            self.n_heads,
+            self.n_kv_heads,
+            self.causal,
+        )?;
         let out = self.out_proj.forward(&merged)?;
         Ok((out, q, k, v, merged, q_lin, k_lin, sdp))
     }
@@ -1041,15 +1117,17 @@ pub struct SdpAttentionCache {
     pub weights: Vec<Vec<Vec<f32>>>,
 }
 
-/// Self-attention over sequence rows of `q`, `k`, `v` each `[seq_len, d_model]`.
+/// Self-attention over sequence rows of `q` `[seq_len, d_model]`, `k`/`v` `[seq_len, kv_dim]`.
 pub fn scaled_dot_product_attention(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
     n_heads: usize,
+    n_kv_heads: usize,
     causal: bool,
 ) -> Result<Tensor> {
-    let (out, _) = scaled_dot_product_attention_with_cache(q, k, v, n_heads, causal)?;
+    let (out, _) =
+        scaled_dot_product_attention_with_cache(q, k, v, n_heads, n_kv_heads, causal)?;
     Ok(out)
 }
 
@@ -1058,14 +1136,20 @@ pub fn scaled_dot_product_attention_with_cache(
     k: &Tensor,
     v: &Tensor,
     n_heads: usize,
+    n_kv_heads: usize,
     causal: bool,
 ) -> Result<(Tensor, SdpAttentionCache)> {
-    if q.shape.len() != 2 || k.shape != q.shape || v.shape != q.shape {
+    if q.shape.len() != 2 || k.shape.len() != 2 || v.shape.len() != 2 {
         return Err(MmnError::Shape {
-            message: "attention expects q,k,v with shape [seq_len, d_model]".into(),
+            message: "attention expects q,k,v with shape [seq_len, features]".into(),
         });
     }
     let seq = q.shape[0];
+    if k.shape[0] != seq || v.shape[0] != seq {
+        return Err(MmnError::Shape {
+            message: "attention q,k,v seq_len mismatch".into(),
+        });
+    }
     let d_model = q.shape[1];
     if d_model % n_heads != 0 {
         return Err(MmnError::Shape {
@@ -1073,12 +1157,25 @@ pub fn scaled_dot_product_attention_with_cache(
         });
     }
     let head_dim = d_model / n_heads;
+    let kv_dim = n_kv_heads * head_dim;
+    if k.shape[1] != kv_dim || v.shape[1] != kv_dim {
+        return Err(MmnError::Shape {
+            message: format!("attention k,v width {kv_dim} expected, got k={} v={}", k.shape[1], v.shape[1]),
+        });
+    }
+    if n_heads % n_kv_heads != 0 {
+        return Err(MmnError::Shape {
+            message: format!("n_heads {n_heads} must be divisible by n_kv_heads {n_kv_heads}"),
+        });
+    }
     let scale = (head_dim as f32).sqrt().recip();
     let mut out = vec![0.0f32; seq * d_model];
     let mut weights = vec![vec![vec![0.0f32; seq]; seq]; n_heads];
 
     for h in 0..n_heads {
-        let base = h * head_dim;
+        let q_base = h * head_dim;
+        let kv_h = h * n_kv_heads / n_heads;
+        let k_base = kv_h * head_dim;
         for s in 0..seq {
             let mut scores = vec![0.0f32; seq];
             for t in 0..seq {
@@ -1088,7 +1185,7 @@ pub fn scaled_dot_product_attention_with_cache(
                 }
                 let mut dot = 0.0f32;
                 for d in 0..head_dim {
-                    dot += q.data[[s, base + d]] * k.data[[t, base + d]];
+                    dot += q.data[[s, q_base + d]] * k.data[[t, k_base + d]];
                 }
                 scores[t] = dot * scale;
             }
@@ -1107,9 +1204,9 @@ pub fn scaled_dot_product_attention_with_cache(
             for d in 0..head_dim {
                 let mut ctx = 0.0f32;
                 for t in 0..seq {
-                    ctx += row_weights[t] * v.data[[t, base + d]];
+                    ctx += row_weights[t] * v.data[[t, k_base + d]];
                 }
-                out[s * d_model + base + d] = ctx;
+                out[s * d_model + q_base + d] = ctx;
             }
         }
     }
@@ -1131,6 +1228,7 @@ pub fn scaled_dot_product_attention_backward(
     cache: &SdpAttentionCache,
     grad_out: &ArrayD<f32>,
     n_heads: usize,
+    n_kv_heads: usize,
 ) -> Result<(ArrayD<f32>, ArrayD<f32>, ArrayD<f32>)> {
     let seq = q.shape[0];
     let d_model = q.shape[1];
@@ -1141,14 +1239,16 @@ pub fn scaled_dot_product_attention_backward(
     let mut grad_v = ArrayD::zeros(v.data.raw_dim());
 
     for h in 0..n_heads {
-        let base = h * head_dim;
+        let q_base = h * head_dim;
+        let kv_h = h * n_kv_heads / n_heads;
+        let k_base = kv_h * head_dim;
         for s in 0..seq {
             let w_row = &cache.weights[h][s];
             let mut grad_scores = vec![0.0f32; seq];
             for t in 0..seq {
                 let mut grad_w = 0.0f32;
                 for d in 0..head_dim {
-                    grad_w += grad_out[[s, base + d]] * v.data[[t, base + d]];
+                    grad_w += grad_out[[s, q_base + d]] * v.data[[t, k_base + d]];
                 }
                 grad_scores[t] = grad_w;
             }
@@ -1160,13 +1260,13 @@ pub fn scaled_dot_product_attention_backward(
             for t in 0..seq {
                 let grad_s = w_row[t] * (grad_scores[t] - dot);
                 for d in 0..head_dim {
-                    grad_q[[s, base + d]] += grad_s * scale * k.data[[t, base + d]];
-                    grad_k[[t, base + d]] += grad_s * scale * q.data[[s, base + d]];
+                    grad_q[[s, q_base + d]] += grad_s * scale * k.data[[t, k_base + d]];
+                    grad_k[[t, k_base + d]] += grad_s * scale * q.data[[s, q_base + d]];
                 }
             }
             for t in 0..seq {
                 for d in 0..head_dim {
-                    grad_v[[t, base + d]] += w_row[t] * grad_out[[s, base + d]];
+                    grad_v[[t, k_base + d]] += w_row[t] * grad_out[[s, q_base + d]];
                 }
             }
         }
@@ -1208,6 +1308,16 @@ impl TransformerBlock {
         Self::new_rng_rope(d_model, n_heads, ffn_dim, None, rng)
     }
 
+    pub fn new_rng_gqa(
+        d_model: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        ffn_dim: usize,
+        rng: &mut impl Rng,
+    ) -> Self {
+        Self::new_rng_rope_gqa(d_model, n_heads, n_kv_heads, ffn_dim, None, rng)
+    }
+
     pub fn new_rng_rope(
         d_model: usize,
         n_heads: usize,
@@ -1215,8 +1325,26 @@ impl TransformerBlock {
         rope_theta: Option<f32>,
         rng: &mut impl Rng,
     ) -> Self {
+        Self::new_rng_rope_gqa(d_model, n_heads, n_heads, ffn_dim, rope_theta, rng)
+    }
+
+    pub fn new_rng_rope_gqa(
+        d_model: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        ffn_dim: usize,
+        rope_theta: Option<f32>,
+        rng: &mut impl Rng,
+    ) -> Self {
         Self {
-            attn: MultiHeadAttention::new_rng_causal_rope(d_model, n_heads, true, rope_theta, rng),
+            attn: MultiHeadAttention::new_rng_causal_rope_gqa(
+                d_model,
+                n_heads,
+                n_kv_heads,
+                true,
+                rope_theta,
+                rng,
+            ),
             ln1: LayerNorm::new(d_model),
             ln2: LayerNorm::new(d_model),
             ffn: Linear::new_rng(d_model, ffn_dim, rng),
@@ -1296,12 +1424,14 @@ impl TransformerBlock {
             &cache.sdp,
             &grad_merged,
             self.attn.n_heads,
+            self.attn.n_kv_heads,
         )?;
         let (grad_q, grad_k) = if let Some(theta) = self.attn.rope_theta {
             apply_rope_backward(
                 &grad_q,
                 &grad_k,
                 self.attn.n_heads,
+                self.attn.n_kv_heads,
                 theta,
                 cache.h_ln1.shape[0],
             )?
@@ -1415,7 +1545,7 @@ mod attention_tests {
         let q = attn.q_proj.forward(&x).unwrap();
         let k = attn.k_proj.forward(&x).unwrap();
         let v = attn.v_proj.forward(&x).unwrap();
-        let y = scaled_dot_product_attention(&q, &k, &v, 2, true).unwrap();
+        let y = scaled_dot_product_attention(&q, &k, &v, 2, 2, true).unwrap();
         assert_eq!(y.shape, vec![1, 8]);
         // seq=1 → softmax weight is 1 → merged head slice matches V before out_proj
         for d in 0..8 {
@@ -1428,7 +1558,7 @@ mod attention_tests {
         let q = Tensor::from_array(arr2(&[[1.0, 0.0], [1.0, 0.0]]).into_dyn(), false);
         let k = q.clone();
         let v = Tensor::from_array(arr2(&[[4.0, 0.0], [0.0, 8.0]]).into_dyn(), false);
-        let y = scaled_dot_product_attention(&q, &k, &v, 1, false).unwrap();
+        let y = scaled_dot_product_attention(&q, &k, &v, 1, 1, false).unwrap();
         assert!((y.data[[0, 0]] - 2.0).abs() < 1e-4);
         assert!((y.data[[1, 0]] - 2.0).abs() < 1e-4);
     }
@@ -1438,8 +1568,8 @@ mod attention_tests {
         let q = Tensor::from_array(arr2(&[[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]]).into_dyn(), false);
         let k = q.clone();
         let v = Tensor::from_array(arr2(&[[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]).into_dyn(), false);
-        let y_causal = scaled_dot_product_attention(&q, &k, &v, 1, true).unwrap();
-        let y_full = scaled_dot_product_attention(&q, &k, &v, 1, false).unwrap();
+        let y_causal = scaled_dot_product_attention(&q, &k, &v, 1, 1, true).unwrap();
+        let y_full = scaled_dot_product_attention(&q, &k, &v, 1, 1, false).unwrap();
         assert!((y_causal.data[[0, 0]] - 1.0).abs() < 1e-4);
         assert!((y_full.data[[0, 0]] - 2.0).abs() < 1e-4);
         assert!((y_causal.data[[1, 0]] - 1.5).abs() < 1e-4);
@@ -1452,10 +1582,10 @@ mod attention_tests {
         let k = Tensor::from_array(arr2(&[[0.2, 0.5], [-0.1, 0.3]]).into_dyn(), false);
         let v = Tensor::from_array(arr2(&[[1.0, 0.0], [0.0, 1.0]]).into_dyn(), false);
         let (y, cache) =
-            scaled_dot_product_attention_with_cache(&q, &k, &v, 1, false).unwrap();
+            scaled_dot_product_attention_with_cache(&q, &k, &v, 1, 1, false).unwrap();
         let grad_out = arr2(&[[1.0, 0.5], [0.25, -0.5]]).into_dyn();
         let (grad_q, _, _) =
-            scaled_dot_product_attention_backward(&q, &k, &v, &cache, &grad_out, 1).unwrap();
+            scaled_dot_product_attention_backward(&q, &k, &v, &cache, &grad_out, 1, 1).unwrap();
         let eps = 1e-3f32;
         for s in 0..2 {
             for d in 0..2 {
@@ -1466,6 +1596,7 @@ mod attention_tests {
                     &k,
                     &v,
                     1,
+                    1,
                     false,
                 )
                 .unwrap();
@@ -1475,6 +1606,7 @@ mod attention_tests {
                     &Tensor::from_array(q_minus, false),
                     &k,
                     &v,
+                    1,
                     1,
                     false,
                 )
@@ -1497,10 +1629,10 @@ mod attention_tests {
         let k = Tensor::from_array(arr2(&[[0.2, 0.5], [-0.1, 0.3]]).into_dyn(), false);
         let v = Tensor::from_array(arr2(&[[1.0, 0.0], [0.0, 1.0]]).into_dyn(), false);
         let (y, cache) =
-            scaled_dot_product_attention_with_cache(&q, &k, &v, 1, true).unwrap();
+            scaled_dot_product_attention_with_cache(&q, &k, &v, 1, 1, true).unwrap();
         let grad_out = arr2(&[[1.0, 0.5], [0.25, -0.5]]).into_dyn();
         let (grad_q, _, _) =
-            scaled_dot_product_attention_backward(&q, &k, &v, &cache, &grad_out, 1).unwrap();
+            scaled_dot_product_attention_backward(&q, &k, &v, &cache, &grad_out, 1, 1).unwrap();
         let eps = 1e-3f32;
         for s in 0..2 {
             for d in 0..2 {
@@ -1511,6 +1643,7 @@ mod attention_tests {
                     &k,
                     &v,
                     1,
+                    1,
                     true,
                 )
                 .unwrap();
@@ -1520,6 +1653,7 @@ mod attention_tests {
                     &Tensor::from_array(q_minus, false),
                     &k,
                     &v,
+                    1,
                     1,
                     true,
                 )
@@ -1534,6 +1668,172 @@ mod attention_tests {
             }
         }
         let _ = y;
+    }
+
+    fn expand_kv_seq(
+        t: &Tensor,
+        d_model: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+    ) -> Tensor {
+        let seq = t.shape[0];
+        let head_dim = d_model / n_heads;
+        let mut data = vec![0.0f32; seq * d_model];
+        for h in 0..n_heads {
+            let kv_h = h * n_kv_heads / n_heads;
+            for s in 0..seq {
+                for d in 0..head_dim {
+                    data[s * d_model + h * head_dim + d] = t.data[[s, kv_h * head_dim + d]];
+                }
+            }
+        }
+        Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[seq, d_model]), data).unwrap(),
+            false,
+        )
+    }
+
+    #[test]
+    fn gqa_forward_matches_expanded_mha() {
+        let d_model = 8usize;
+        let n_heads = 4usize;
+        let n_kv_heads = 2usize;
+        let mut rng = rng_from_seed(Some(901));
+        let attn_gqa =
+            MultiHeadAttention::new_rng_causal_rope_gqa(d_model, n_heads, n_kv_heads, false, None, &mut rng);
+        let x = Tensor::randn_rng(&mut rng, &[3, d_model], false);
+        let q = attn_gqa.q_proj.forward(&x).unwrap();
+        let k = attn_gqa.k_proj.forward(&x).unwrap();
+        let v = attn_gqa.v_proj.forward(&x).unwrap();
+        let y_gqa = scaled_dot_product_attention(&q, &k, &v, n_heads, n_kv_heads, false).unwrap();
+        let k_exp = expand_kv_seq(&k, d_model, n_heads, n_kv_heads);
+        let v_exp = expand_kv_seq(&v, d_model, n_heads, n_kv_heads);
+        let y_mha = scaled_dot_product_attention(&q, &k_exp, &v_exp, n_heads, n_heads, false).unwrap();
+        for i in 0..y_gqa.data.len() {
+            assert!(
+                (y_gqa.data.as_slice().unwrap()[i] - y_mha.data.as_slice().unwrap()[i]).abs() < 1e-4,
+                "i={i}"
+            );
+        }
+    }
+
+    #[test]
+    fn gqa_backward_finite_diff() {
+        let d_model = 8usize;
+        let n_heads = 4usize;
+        let n_kv_heads = 2usize;
+        let q = Tensor::from_array(
+            arr2(&[
+                [0.3, -0.2, 0.1, 0.4, 0.5, -0.1, 0.2, 0.0],
+                [0.1, 0.2, -0.3, 0.4, 0.0, 0.3, -0.2, 0.1],
+            ])
+            .into_dyn(),
+            false,
+        );
+        let k = Tensor::from_array(
+            arr2(&[
+                [0.2, 0.5, -0.1, 0.3],
+                [0.4, -0.2, 0.1, 0.0],
+            ])
+            .into_dyn(),
+            false,
+        );
+        let v = Tensor::from_array(
+            arr2(&[
+                [1.0, 0.0, 0.5, -0.5],
+                [0.0, 1.0, 0.2, 0.3],
+            ])
+            .into_dyn(),
+            false,
+        );
+        let (y, cache) =
+            scaled_dot_product_attention_with_cache(&q, &k, &v, n_heads, n_kv_heads, false).unwrap();
+        let grad_out = arr2(&[
+            [1.0, 0.5, -0.25, 0.75, 0.2, 0.3, -0.1, 0.4],
+            [0.3, -0.2, 0.1, 0.6, -0.4, 0.2, 0.5, -0.3],
+        ])
+        .into_dyn();
+        let (grad_q, grad_k, _) = scaled_dot_product_attention_backward(
+            &q, &k, &v, &cache, &grad_out, n_heads, n_kv_heads,
+        )
+        .unwrap();
+        let eps = 1e-3f32;
+        for s in 0..2 {
+            for d in 0..4 {
+                let mut k_plus = k.data.as_ref().clone();
+                k_plus[[s, d]] += eps;
+                let y_plus = scaled_dot_product_attention(
+                    &q,
+                    &Tensor::from_array(k_plus.clone(), false),
+                    &v,
+                    n_heads,
+                    n_kv_heads,
+                    false,
+                )
+                .unwrap();
+                let mut k_minus = k.data.as_ref().clone();
+                k_minus[[s, d]] -= eps;
+                let y_minus = scaled_dot_product_attention(
+                    &q,
+                    &Tensor::from_array(k_minus, false),
+                    &v,
+                    n_heads,
+                    n_kv_heads,
+                    false,
+                )
+                .unwrap();
+                let numeric = (grad_out[[s, 0]] * (y_plus.data[[s, 0]] - y_minus.data[[s, 0]])
+                    + grad_out[[s, 1]] * (y_plus.data[[s, 1]] - y_minus.data[[s, 1]])
+                    + grad_out[[s, 2]] * (y_plus.data[[s, 2]] - y_minus.data[[s, 2]])
+                    + grad_out[[s, 3]] * (y_plus.data[[s, 3]] - y_minus.data[[s, 3]])
+                    + grad_out[[s, 4]] * (y_plus.data[[s, 4]] - y_minus.data[[s, 4]])
+                    + grad_out[[s, 5]] * (y_plus.data[[s, 5]] - y_minus.data[[s, 5]])
+                    + grad_out[[s, 6]] * (y_plus.data[[s, 6]] - y_minus.data[[s, 6]])
+                    + grad_out[[s, 7]] * (y_plus.data[[s, 7]] - y_minus.data[[s, 7]]))
+                    / (2.0 * eps);
+                let kv_h = 0 * n_kv_heads / n_heads;
+                let k_base = kv_h * (d_model / n_heads);
+                if d < d_model / n_heads {
+                    assert!(
+                        (grad_k[[s, k_base + d]] - numeric).abs() < 0.2,
+                        "s={s} d={d} analytic={} numeric={}",
+                        grad_k[[s, k_base + d]],
+                        numeric
+                    );
+                }
+            }
+        }
+        let _ = (y, grad_q);
+    }
+
+    #[test]
+    fn gqa_train_step_updates_kv_weights() {
+        let d_model = 8usize;
+        let n_heads = 4usize;
+        let n_kv_heads = 2usize;
+        let kv_dim = n_kv_heads * (d_model / n_heads);
+        let mut rng = rng_from_seed(Some(902));
+        let block = TransformerBlock::new_rng_gqa(d_model, n_heads, n_kv_heads, 16, &mut rng);
+        let x = Tensor::from_array(
+            arr2(&[
+                [0.2, 0.1, -0.3, 0.4, 0.0, 0.5, -0.2, 0.3],
+                [0.1, -0.2, 0.3, 0.0, 0.4, -0.1, 0.2, 0.5],
+            ])
+            .into_dyn(),
+            false,
+        );
+        let (_, cache) = block.forward_with_cache(&x).unwrap();
+        let grad_out = arr2(&[
+            [1.0, 0.5, -0.25, 0.75, 0.2, 0.3, -0.1, 0.4],
+            [0.3, -0.2, 0.1, 0.6, -0.4, 0.2, 0.5, -0.3],
+        ])
+        .into_dyn();
+        let (_, grads) = block.backward_attn_ffn(&cache, &grad_out).unwrap();
+        assert_eq!(grads[4].shape(), block.attn.k_proj.weight.data.shape());
+        assert_eq!(grads[5].shape(), block.attn.v_proj.weight.data.shape());
+        assert!(grads[4].iter().any(|g| g.abs() > 0.0));
+        assert!(grads[5].iter().any(|g| g.abs() > 0.0));
+        assert_eq!(block.attn.k_proj.weight.shape, vec![kv_dim, d_model]);
     }
 
     #[test]

@@ -45,6 +45,11 @@ fn chatbot_meta_json(model: &Chatbot, bpe_checkpoint: Option<&str>) -> serde_jso
         meta["use_rope"] = serde_json::json!(true);
         meta["rope_theta"] = serde_json::json!(model.rope_theta);
     }
+    if model.shape.n_kv_heads != model.shape.n_heads {
+        meta["n_kv_heads"] = serde_json::json!(model.shape.n_kv_heads);
+        meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
+        meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
+    }
     if let Some(bpe_path) = bpe_checkpoint {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
     }
@@ -191,6 +196,18 @@ fn load_chatbot_from_mmn_tensors(
         .as_u64()
         .map(|v| v as usize)
         .unwrap_or(d_model * 4);
+    let n_heads = meta
+        .get("n_heads")
+        .or_else(|| meta.get("num_attention_heads"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(4);
+    let n_kv_heads = meta
+        .get("n_kv_heads")
+        .or_else(|| meta.get("num_key_value_heads"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(n_heads);
     let vision = meta["vision"].as_bool().unwrap_or(false);
     let init_seed = meta["seed"].as_u64();
     let use_learned_pos_embed = meta["use_learned_pos_embed"].as_bool().unwrap_or(false);
@@ -211,6 +228,8 @@ fn load_chatbot_from_mmn_tensors(
         Some(n_layer),
         Some(d_model),
         Some(ffn_dim),
+        Some(n_heads),
+        Some(n_kv_heads),
         init_seed,
         use_learned_pos_embed,
         max_seq_len,
@@ -502,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn import_external_gqa_checkpoint_expands_kv() {
+    fn import_external_gqa_checkpoint_keeps_native_kv() {
         let d_model = 8usize;
         let head_dim = 2usize;
         let n_heads = 4usize;
@@ -548,10 +567,12 @@ mod tests {
         metadata.insert("meta".to_string(), meta.to_string());
         let bytes = serialize(views, Some(metadata)).unwrap();
         let loaded = import_hf_safetensors_bytes(&bytes).unwrap();
-        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data.shape(), &[d_model, d_model]);
+        assert_eq!(loaded.shape.n_heads, n_heads);
+        assert_eq!(loaded.shape.n_kv_heads, n_kv_heads);
+        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data.shape(), &[kv_dim, d_model]);
+        assert_eq!(loaded.blocks[0].attn.v_proj.weight.data.shape(), &[kv_dim, d_model]);
         assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[0, 0]], 0.3);
-        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[2, 0]], 0.3);
-        assert_eq!(loaded.blocks[0].attn.k_proj.weight.data[[4, 0]], 0.3);
+        assert_eq!(loaded.blocks[0].attn.n_kv_heads, n_kv_heads);
     }
 
     #[test]

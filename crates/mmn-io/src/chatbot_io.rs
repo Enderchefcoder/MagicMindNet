@@ -75,6 +75,11 @@ pub fn export_safetensors(
         meta["use_rope"] = serde_json::json!(true);
         meta["rope_theta"] = serde_json::json!(model.rope_theta);
     }
+    if model.shape.n_kv_heads != model.shape.n_heads {
+        meta["n_kv_heads"] = serde_json::json!(model.shape.n_kv_heads);
+        meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
+        meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
+    }
     if let Some(bpe_path) = bpe_checkpoint {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
     }
@@ -130,12 +135,25 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
     let max_seq_len = meta["max_seq_len"]
         .as_u64()
         .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize;
-    let mut model = Chatbot::new_with_position_options(
+    let n_heads = meta
+        .get("n_heads")
+        .or_else(|| meta.get("num_attention_heads"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let n_kv_heads = meta
+        .get("n_kv_heads")
+        .or_else(|| meta.get("num_key_value_heads"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let mut model = Chatbot::new_with_position_and_ffn(
         vision,
         None,
         vocab_size,
         Some(n_layer),
         Some(d_model),
+        None,
+        n_heads,
+        n_kv_heads,
         init_seed,
         use_learned_pos_embed,
         max_seq_len,
@@ -225,6 +243,8 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
     if a.shape.vocab_size != b.shape.vocab_size
         || a.shape.d_model != b.shape.d_model
         || a.shape.n_layer != b.shape.n_layer
+        || a.shape.n_heads != b.shape.n_heads
+        || a.shape.n_kv_heads != b.shape.n_kv_heads
     {
         return Err(MmnError::ModelMismatch {
             message: "Cannot merge models of different sizes".into(),
@@ -244,12 +264,15 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
             explanation: "merge() requires matching position embedding configuration.".into(),
         });
     }
-    let mut out = Chatbot::new_with_position_options(
+    let mut out = Chatbot::new_with_position_and_ffn(
         a.vision || b.vision,
         None,
         a.shape.vocab_size,
         Some(a.shape.n_layer),
         Some(a.shape.d_model),
+        Some(a.shape.ffn_dim),
+        Some(a.shape.n_heads),
+        Some(a.shape.n_kv_heads),
         a.init_seed.or(b.init_seed),
         a.use_learned_pos_embed,
         a.max_seq_len,

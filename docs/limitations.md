@@ -17,7 +17,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 ## IO
 
 - `mmn-safetensors-v1` (Chatbot) and `mmn-classifier-v1` (Classifier) are JSON checkpoints with tensor blobs.
-- **`hf-safetensors`** / **`mmn-hf-safetensors-v1`**: Chatbot binary interchange (F32/F16/BF16→F32, GQA expansion). **`mmn-hf-classifier-v1`** for Classifier. `import_*("safetensors", …)` auto-detects binary vs JSON.
+- **`hf-safetensors`** / **`mmn-hf-safetensors-v1`**: Chatbot binary interchange (F32/F16/BF16→F32, **native GQA**). **`mmn-hf-classifier-v1`** for Classifier. `import_*("safetensors", …)` auto-detects binary vs JSON.
 - `bin` / `mmn-bin-v1` stores architecture meta only (no weights), including optional `use_learned_pos_embed` / `max_seq_len`. Use `safetensors` or `hf-safetensors` for weight roundtrips.
 - LayerNorm γ/β are included in `mmn-safetensors-v1` checkpoints per transformer block.
 
@@ -43,6 +43,6 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 | LayerNorm γ/β training | [layernorm_coverage.md](layernorm_coverage.md) | ~~done pass 82~~ |
 | Production tokenizer | this doc § Training | ~~BPE trainer + Python binding + Train(bpe_encoder=) + `mmn-bpe-v1` save/load~~; SentencePiece-scale vocab next |
 | Vision encoder | [vision_coverage.md](vision_coverage.md) | ~~DatasetQA image file loading~~; multi-patch tiles done |
-| HF binary safetensors | this doc § IO | ~~Chatbot + Classifier export/import~~; native GQA forward next |
+| HF binary safetensors | this doc § IO | ~~Chatbot + Classifier export/import~~; ~~native GQA forward~~ done |
 
 See also [optimizers_coverage.md](optimizers_coverage.md) (Muon matrix routing) and [training_coverage.md](training_coverage.md).

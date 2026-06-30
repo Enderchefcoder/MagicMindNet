@@ -328,6 +328,8 @@ impl Chatbot {
             n_layer,
             d_model,
             None,
+            None,
+            None,
             seed,
             use_learned_pos_embed,
             max_seq_len,
@@ -343,6 +345,8 @@ impl Chatbot {
         n_layer: Option<usize>,
         d_model: Option<usize>,
         ffn_dim: Option<usize>,
+        n_heads: Option<usize>,
+        n_kv_heads: Option<usize>,
         seed: Option<u64>,
         use_learned_pos_embed: bool,
         max_seq_len: usize,
@@ -357,10 +361,13 @@ impl Chatbot {
             autoset(b, vocab_size)
         } else {
             let dm = d_model.unwrap_or(128);
+            let nh = n_heads.unwrap_or(4);
+            let nkv = n_kv_heads.unwrap_or(nh);
             ModelShape {
                 n_layer: n_layer.unwrap_or(4),
                 d_model: dm,
-                n_heads: 4,
+                n_heads: nh,
+                n_kv_heads: nkv,
                 ffn_dim: ffn_dim.unwrap_or(dm * 4),
                 vocab_size,
                 estimated_params: 0,
@@ -369,9 +376,10 @@ impl Chatbot {
         let mut blocks = Vec::new();
         let rope = if use_rope { Some(rope_theta) } else { None };
         for _ in 0..shape.n_layer {
-            blocks.push(TransformerBlock::new_rng_rope(
+            blocks.push(TransformerBlock::new_rng_rope_gqa(
                 shape.d_model,
                 shape.n_heads,
+                shape.n_kv_heads,
                 shape.ffn_dim,
                 rope,
                 &mut rng,

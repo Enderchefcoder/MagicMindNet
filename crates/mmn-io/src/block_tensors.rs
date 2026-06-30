@@ -36,6 +36,7 @@ pub(crate) fn export_block_tensors(model: &Chatbot, map: &mut HashMap<String, se
 pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &serde_json::Value) -> Result<(), MmnError> {
     let d_model = model.shape.d_model;
     let ffn_dim = model.shape.ffn_dim;
+    let kv_dim = model.shape.n_kv_heads * (d_model / model.shape.n_heads);
     for (i, block) in model.blocks.iter_mut().enumerate() {
         let p = format!("blocks.{i}");
         let prefix = p.clone();
@@ -62,12 +63,12 @@ pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &serde_json::Va
         )?;
         expect_tensor_shape(
             &block.attn.k_proj.weight,
-            &[d_model, d_model],
+            &[kv_dim, d_model],
             &format!("{prefix}.attn.k"),
         )?;
         expect_tensor_shape(
             &block.attn.v_proj.weight,
-            &[d_model, d_model],
+            &[kv_dim, d_model],
             &format!("{prefix}.attn.v"),
         )?;
         expect_tensor_shape(

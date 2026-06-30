@@ -11,7 +11,7 @@ pub fn adapt_external_hf_tensors(
 ) -> Result<(), MmnError> {
     split_fused_qkv_tensors(tensors)?;
     fuse_swiglu_gate_up_tensors(tensors);
-    expand_gqa_kv_tensors(tensors, meta)?;
+    ensure_gqa_meta(tensors, meta)?;
     tie_missing_lm_head(tensors);
     infer_ffn_dim_meta(tensors, meta);
     Ok(())
@@ -191,57 +191,40 @@ fn infer_ffn_dim_meta(tensors: &HashMap<String, Tensor>, meta: &mut serde_json::
     }
 }
 
-/// Expand grouped-query K/V projections `[n_kv_heads * head_dim, d_model]` to MMN MHA shape.
-fn expand_gqa_kv_tensors(
-    tensors: &mut HashMap<String, Tensor>,
+/// Record grouped-query head counts in meta from checkpoint tensor shapes (no KV expansion).
+fn ensure_gqa_meta(
+    tensors: &HashMap<String, Tensor>,
     meta: &mut serde_json::Value,
 ) -> Result<(), MmnError> {
-    let indices: HashSet<usize> = tensors
-        .keys()
-        .filter_map(|k| {
-            k.strip_prefix("blocks.")?
-                .split('.')
-                .next()?
-                .parse()
-                .ok()
-        })
-        .collect();
-    for i in indices {
-        let q_key = format!("blocks.{i}.attn.q");
-        let k_key = format!("blocks.{i}.attn.k");
-        let v_key = format!("blocks.{i}.attn.v");
-        let (Some(q), Some(k), Some(v)) = (
-            tensors.get(&q_key),
-            tensors.get(&k_key),
-            tensors.get(&v_key),
-        ) else {
-            continue;
-        };
-        let q_shape: Vec<usize> = q.data.shape().iter().copied().collect();
-        let k_shape: Vec<usize> = k.data.shape().iter().copied().collect();
-        let v_shape: Vec<usize> = v.data.shape().iter().copied().collect();
-        if q_shape.len() != 2 || k_shape.len() != 2 || k_shape != v_shape {
-            continue;
-        }
-        let d_model = q_shape[0];
-        if q_shape[1] != d_model || k_shape[1] != d_model {
-            continue;
-        }
-        let kv_dim = k_shape[0];
-        if kv_dim >= d_model || d_model % kv_dim != 0 {
-            continue;
-        }
-        let Some((head_dim, n_heads, n_kv_heads)) = gqa_dims_from_meta_or_guess(meta, d_model, kv_dim)
-        else {
-            continue;
-        };
-        if n_kv_heads == n_heads {
-            continue;
-        }
-        let k_exp = expand_gqa_proj(k, d_model, head_dim, n_heads, n_kv_heads, &k_key)?;
-        let v_exp = expand_gqa_proj(v, d_model, head_dim, n_heads, n_kv_heads, &v_key)?;
-        tensors.insert(k_key, k_exp);
-        tensors.insert(v_key, v_exp);
+    if meta.get("num_attention_heads").is_some() && meta.get("num_key_value_heads").is_some() {
+        return Ok(());
+    }
+    let q = tensors.get("blocks.0.attn.q");
+    let k = tensors.get("blocks.0.attn.k");
+    let Some((q, k)) = q.zip(k) else {
+        return Ok(());
+    };
+    let q_shape: Vec<usize> = q.data.shape().iter().copied().collect();
+    let k_shape: Vec<usize> = k.data.shape().iter().copied().collect();
+    if q_shape.len() != 2 || k_shape.len() != 2 || q_shape[0] != q_shape[1] {
+        return Ok(());
+    }
+    let d_model = q_shape[0];
+    if k_shape[1] != d_model {
+        return Ok(());
+    }
+    let kv_dim = k_shape[0];
+    if kv_dim >= d_model {
+        return Ok(());
+    }
+    let Some((_, n_heads, n_kv_heads)) = gqa_dims_from_meta_or_guess(meta, d_model, kv_dim) else {
+        return Ok(());
+    };
+    if meta.get("num_attention_heads").is_none() {
+        meta["num_attention_heads"] = serde_json::json!(n_heads);
+    }
+    if meta.get("num_key_value_heads").is_none() {
+        meta["num_key_value_heads"] = serde_json::json!(n_kv_heads);
     }
     Ok(())
 }
@@ -252,8 +235,12 @@ fn gqa_dims_from_meta_or_guess(
     kv_dim: usize,
 ) -> Option<(usize, usize, usize)> {
     if let (Some(n_heads), Some(n_kv)) = (
-        meta.get("num_attention_heads").and_then(|v| v.as_u64()),
-        meta.get("num_key_value_heads").and_then(|v| v.as_u64()),
+        meta.get("num_attention_heads")
+            .or_else(|| meta.get("n_heads"))
+            .and_then(|v| v.as_u64()),
+        meta.get("num_key_value_heads")
+            .or_else(|| meta.get("n_kv_heads"))
+            .and_then(|v| v.as_u64()),
     ) {
         let n_heads = n_heads as usize;
         let n_kv_heads = n_kv as usize;
@@ -264,56 +251,40 @@ fn gqa_dims_from_meta_or_guess(
             }
         }
     }
+    if let Some(n_heads) = meta
+        .get("num_attention_heads")
+        .or_else(|| meta.get("n_heads"))
+        .and_then(|v| v.as_u64())
+    {
+        let n_heads = n_heads as usize;
+        if n_heads > 0 && d_model % n_heads == 0 {
+            let head_dim = d_model / n_heads;
+            if kv_dim % head_dim == 0 {
+                let n_kv_heads = kv_dim / head_dim;
+                if n_heads % n_kv_heads == 0 && n_heads >= n_kv_heads {
+                    return Some((head_dim, n_heads, n_kv_heads));
+                }
+            }
+        }
+    }
     guess_gqa_dims(d_model, kv_dim)
 }
 
 fn guess_gqa_dims(d_model: usize, kv_dim: usize) -> Option<(usize, usize, usize)> {
-    if kv_dim >= d_model || d_model % kv_dim != 0 {
-        return None;
-    }
-    const CANDIDATES: [usize; 9] = [128, 64, 256, 32, 96, 48, 80, 72, 112];
-    for &head_dim in &CANDIDATES {
+    let mut best: Option<(usize, usize, usize)> = None;
+    for head_dim in 1..=d_model.min(kv_dim) {
         if d_model % head_dim != 0 || kv_dim % head_dim != 0 {
             continue;
         }
         let n_heads = d_model / head_dim;
         let n_kv_heads = kv_dim / head_dim;
         if n_heads % n_kv_heads == 0 && n_heads >= n_kv_heads {
-            return Some((head_dim, n_heads, n_kv_heads));
+            if best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true) {
+                best = Some((head_dim, n_heads, n_kv_heads));
+            }
         }
     }
-    Some((kv_dim, d_model / kv_dim, 1))
-}
-
-fn expand_gqa_proj(
-    kv: &Tensor,
-    d_model: usize,
-    head_dim: usize,
-    n_heads: usize,
-    n_kv_heads: usize,
-    name: &str,
-) -> Result<Tensor, MmnError> {
-    let kv_dim = n_kv_heads * head_dim;
-    let shape: Vec<usize> = kv.data.shape().iter().copied().collect();
-    if shape != [kv_dim, d_model] {
-        return Err(MmnError::Other {
-            message: format!("tensor {name}: expected GQA shape [{kv_dim}, {d_model}], got {shape:?}"),
-        });
-    }
-    let view = kv
-        .data
-        .view()
-        .into_dimensionality::<Ix2>()
-        .map_err(|e| MmnError::Other {
-            message: format!("tensor {name}: {e}"),
-        })?;
-    let mut out = ndarray::Array2::<f32>::zeros((d_model, d_model));
-    for h in 0..n_heads {
-        let kv_h = h * n_kv_heads / n_heads;
-        out.slice_mut(s![h * head_dim..(h + 1) * head_dim, ..])
-            .assign(&view.slice(s![kv_h * head_dim..(kv_h + 1) * head_dim, ..]));
-    }
-    Ok(Tensor::from_array(out.into_dyn(), true))
+    best
 }
 
 #[cfg(test)]
@@ -369,24 +340,26 @@ mod tests {
     }
 
     #[test]
-    fn expand_gqa_repeats_kv_heads_across_query_heads() {
+    fn ensure_gqa_meta_records_head_counts() {
         let d_model = 8usize;
         let head_dim = 2usize;
         let n_heads = 4usize;
         let n_kv_heads = 2usize;
         let mut k_data = ndarray::Array2::<f32>::zeros((n_kv_heads * head_dim, d_model));
         k_data[[0, 0]] = 1.0;
-        k_data[[1, 0]] = 2.0;
-        k_data[[2, 0]] = 3.0;
-        k_data[[3, 0]] = 4.0;
-        let k = Tensor::from_array(k_data.into_dyn(), true);
-        let expanded = expand_gqa_proj(&k, d_model, head_dim, n_heads, n_kv_heads, "blocks.0.attn.k")
-            .unwrap();
-        assert_eq!(expanded.data.shape(), &[d_model, d_model]);
-        assert_eq!(expanded.data[[0, 0]], 1.0);
-        assert_eq!(expanded.data[[2, 0]], 1.0);
-        assert_eq!(expanded.data[[4, 0]], 3.0);
-        assert_eq!(expanded.data[[6, 0]], 3.0);
+        let mut tensors = HashMap::new();
+        tensors.insert(
+            "blocks.0.attn.q".into(),
+            Tensor::from_array(ndarray::Array2::<f32>::zeros((d_model, d_model)).into_dyn(), true),
+        );
+        tensors.insert(
+            "blocks.0.attn.k".into(),
+            Tensor::from_array(k_data.into_dyn(), true),
+        );
+        let mut meta = serde_json::json!({ "num_attention_heads": n_heads });
+        ensure_gqa_meta(&tensors, &mut meta).unwrap();
+        assert_eq!(meta["num_attention_heads"], n_heads);
+        assert_eq!(meta["num_key_value_heads"], n_kv_heads);
     }
 
     #[test]
