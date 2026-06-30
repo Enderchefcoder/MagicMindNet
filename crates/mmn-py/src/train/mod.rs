@@ -1,4 +1,4 @@
-use mmn_train::{rl, spin, train_classifier, train_corpus_with_bpe, train_with_bpe};
+use mmn_train::{rl_with_bpe, spin_with_bpe, train_classifier, train_corpus_with_bpe, train_with_bpe};
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetClassification, PyDatasetCorpus, PyDatasetQA};
@@ -56,7 +56,7 @@ pub fn TrainClassifier(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, dataset, train_config, reward_amount, punishment_amount, rl_type="policy"))]
+#[pyo3(signature = (model, dataset, train_config, reward_amount, punishment_amount, rl_type="policy", bpe_encoder=None))]
 pub fn RL(
     model: &mut PyChatbot,
     dataset: &Bound<'_, PyAny>,
@@ -64,15 +64,18 @@ pub fn RL(
     reward_amount: f32,
     punishment_amount: f32,
     rl_type: &str,
+    bpe_encoder: Option<&PyBytePairEncoder>,
 ) -> PyResult<()> {
+    let bpe = bpe_encoder.map(|e| &e.inner);
     if let Ok(ds) = dataset.downcast::<PyDatasetQA>() {
-        rl(
+        rl_with_bpe(
             &mut model.inner,
             &ds.borrow().inner,
             &train_config.to_train_config(),
             reward_amount,
             punishment_amount,
             rl_type,
+            bpe,
         )
         .map_err(mmn_err_to_py)
     } else {
@@ -83,16 +86,20 @@ pub fn RL(
 }
 
 #[pyfunction]
+#[pyo3(signature = (model, selfplay_epochs, dataset, bpe_encoder=None))]
 pub fn SPIN(
     model: &mut PyChatbot,
     selfplay_epochs: usize,
     dataset: &Bound<'_, PyAny>,
+    bpe_encoder: Option<&PyBytePairEncoder>,
 ) -> PyResult<()> {
+    let bpe = bpe_encoder.map(|e| &e.inner);
     if let Ok(ds) = dataset.downcast::<PyDatasetQA>() {
-        spin(
+        spin_with_bpe(
             &mut model.inner,
             selfplay_epochs,
             &ds.borrow().inner,
+            bpe,
         )
         .map_err(mmn_err_to_py)
     } else {

@@ -33,6 +33,10 @@
 - ffn2 shape import test; classifier int8 head quantize; Rust int4 block ffn quantize
 - Subagent `magicmindnet-checkpoint-strict` for IO regression gap scans
 
+### Added (pass 116)
+- `RL(..., bpe_encoder=)` and `SPIN(..., bpe_encoder=)` via `rl_with_bpe` / `spin_with_bpe`
+- `examples/rl_spin.py --bpe`; pytest `test_rl_and_spin_with_bpe_encoder_smoke`
+
 ### Added (pass 115)
 - `eval_mean_loss.py` `--bpe` and `--bpe-file PATH` for QA/corpus modes
 - `quickstart.py --bpe` trains BPE, saves `tokenizer.mmn`, trains with `bpe_encoder`

@@ -395,13 +395,33 @@ pub fn rl(
     punishment_amount: f32,
     rl_type: &str,
 ) -> Result<()> {
+    rl_with_bpe(
+        model,
+        dataset,
+        config,
+        reward_amount,
+        punishment_amount,
+        rl_type,
+        None,
+    )
+}
+
+pub fn rl_with_bpe(
+    model: &mut Chatbot,
+    dataset: &DatasetQA,
+    config: &TrainConfig,
+    reward_amount: f32,
+    punishment_amount: f32,
+    rl_type: &str,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
     Device::require_cuda_available_checked(config.cuda, mmn_cuda::is_available())?;
     let policy = rl_type.to_lowercase();
     enable_grad(true);
     let vocab = model.shape.vocab_size;
     for sample in &dataset.samples {
-        let mut tokens = simple_tokenize(&sample.input, vocab);
-        let mut targets = simple_tokenize(&sample.output, vocab);
+        let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
+        let mut targets = tokenize_lm(&sample.output, vocab, bpe);
         align_qa_token_pairs(&mut tokens, &mut targets);
         let logits = model.forward_logits(&tokens)?;
         let score = if sample.output.contains(' ') {
@@ -449,14 +469,23 @@ pub fn spin(
     selfplay_epochs: usize,
     dataset: &DatasetQA,
 ) -> Result<()> {
+    spin_with_bpe(model, selfplay_epochs, dataset, None)
+}
+
+pub fn spin_with_bpe(
+    model: &mut Chatbot,
+    selfplay_epochs: usize,
+    dataset: &DatasetQA,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
     for _ in 0..selfplay_epochs {
         let cfg = TrainConfig {
             epochs: 1,
             batch_size: 4,
             ..Default::default()
         };
-        train(model, dataset, &cfg)?;
-        rl(model, dataset, &cfg, 1.0, 0.5, "selfplay")?;
+        train_with_bpe(model, dataset, &cfg, bpe)?;
+        rl_with_bpe(model, dataset, &cfg, 1.0, 0.5, "selfplay", bpe)?;
     }
     Ok(())
 }

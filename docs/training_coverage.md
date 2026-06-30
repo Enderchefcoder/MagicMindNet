@@ -52,6 +52,7 @@ Regression coverage for `mmn-train` and Python `Train` / `TrainClassifier` / `RL
 | Attn updates under SPIN (Train phase) | — | `test_train_rl_spin_py.py` (`test_spin_changes_attn_q_weights`) |
 | LN γ updates under SPIN (Train phase) | — | `test_train_rl_spin_py.py` (`test_spin_changes_ln1_gamma`) |
 | `selfplay` uses reward-only scale | yes (in `rl`) | `examples/rl_spin.py` |
+| BPE tokenization in `RL` / `SPIN` | `rl_with_bpe`, `spin_with_bpe` | `test_train_rl_spin_py.py` (`test_rl_and_spin_with_bpe_encoder_smoke`) |
 | SPIN completes, finite mean loss | `spin_completes_on_fixture` | `test_train_rl_spin_py.py` |
 | Rejects classification dataset | — | `test_data_mismatch.py` |
 | Smoke callable | — | `test_rl_callable.py`, `test_spin_callable.py` |

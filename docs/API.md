@@ -185,8 +185,8 @@ All fields are readable/writable on `cfg`. `repr(cfg)` summarizes settings.
 ai.Train(chatbot, dataset_qa, cfg)
 ai.Train(chatbot, dataset_qa, cfg, bpe_encoder=bpe)  # optional BytePairEncoder
 ai.TrainClassifier(classifier, dataset_cls, cfg)
-ai.RL(chatbot, dataset_qa, cfg, reward_amount=1.0, punishment_amount=0.5, rl_type="policy")
-ai.SPIN(chatbot, selfplay_epochs=2, dataset=dataset_qa)
+ai.RL(chatbot, dataset_qa, cfg, reward_amount=1.0, punishment_amount=0.5, rl_type="policy", bpe_encoder=bpe)
+ai.SPIN(chatbot, selfplay_epochs=2, dataset=dataset_qa, bpe_encoder=bpe)
 ```
 
 ### BytePairEncoder

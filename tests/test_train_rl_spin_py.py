@@ -192,3 +192,22 @@ def test_spin_completes_with_finite_mean_loss():
     loss = bot.compute_mean_loss(ds)
     assert loss > 0.0
     assert loss == loss  # finite (not NaN)
+
+
+def test_rl_and_spin_with_bpe_encoder_smoke():
+    ds = ai.DatasetQA(
+        file=str(FIXTURES / "qa_valid.json"),
+        user_row="input",
+        ai_row="output",
+    )
+    enc = ai.BytePairEncoder.train(
+        ["repeat repeat token"] * 12,
+        vocab_size=512,
+        num_merges=16,
+    )
+    bot = ai.Chatbot(vocab_size=512, n_layer=1, d_model=32, seed=5)
+    cfg = ai.TrainConfig(epochs=1, batch_size=1, learning_rate=0.05)
+    ai.RL(bot, ds, cfg, reward_amount=1.0, punishment_amount=0.5, rl_type="policy", bpe_encoder=enc)
+    ai.SPIN(bot, 1, ds, bpe_encoder=enc)
+    loss = bot.compute_mean_loss(ds, bpe_encoder=enc)
+    assert loss > 0.0
