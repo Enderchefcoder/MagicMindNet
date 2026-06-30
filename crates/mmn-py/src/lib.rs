@@ -5,6 +5,7 @@ mod errors;
 mod io;
 mod models;
 mod resource;
+mod tokenizer;
 mod train;
 mod train_config;
 
@@ -20,6 +21,7 @@ use io::{
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
+use tokenizer::PyBytePairEncoder;
 use train::{RL, SPIN, Train, TrainClassifier};
 use train_config::PyTrainConfig;
 
@@ -31,6 +33,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDatasetClassification>()?;
     m.add_class::<PyDatasetImageGen>()?;
     m.add_class::<PyDatasetImageEdit>()?;
+    m.add_class::<PyBytePairEncoder>()?;
     m.add_class::<PyChatbot>()?;
     m.add_class::<PyClassifier>()?;
     m.add_class::<PyDiffusion>()?;

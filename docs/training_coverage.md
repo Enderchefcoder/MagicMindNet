@@ -20,6 +20,7 @@ Regression coverage for `mmn-train` and Python `Train` / `TrainClassifier` / `RL
 | `max_seq_len` overflow error | `learned_pos_embed_rejects_long_sequence` | `test_learned_pos_embed_limits_py.py` |
 | Rejects `DatasetClassification` | `validate_dataset_for_chatbot` | `test_data_mismatch.py` |
 | Corpus LM (`train_corpus`) | `train_corpus_reduces_mean_loss` | `test_train_corpus_py.py` |
+| BPE tokenization in `Train()` | `train_with_bpe_reduces_loss`, `tokenize_lm` | `test_bpe_tokenizer_py.py` |
 | `compute_mean_loss` on corpus | `mean_corpus_loss` | `test_train_corpus_py.py` |
 | Attn weights update in `train_step_lm` | `train_step_updates_attn_q_weights` | `test_train_block_params_py.py` (`test_train_changes_attn_q_weights`) |
 | LN γ/β update in `train_step_lm` | `train_step_updates_layernorm_gamma` | `test_train_block_params_py.py` (`test_train_changes_ln1_gamma`) |

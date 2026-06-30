@@ -13,6 +13,7 @@ Usage::
 from magicmindnet._native import (
     RL,
     SPIN,
+    BytePairEncoder,
     Chatbot,
     Classifier,
     CPUError,
@@ -50,6 +51,7 @@ __all__ = [
     "__version__",
     "CPUError",
     "CUDAError",
+    "BytePairEncoder",
     "Chatbot",
     "Classifier",
     "DataMismatchError",

@@ -1,0 +1,60 @@
+use mmn_data::BytePairEncoder;
+use pyo3::prelude::*;
+
+use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
+
+#[pyclass(name = "BytePairEncoder")]
+pub struct PyBytePairEncoder {
+    pub inner: BytePairEncoder,
+}
+
+#[pymethods]
+impl PyBytePairEncoder {
+    #[staticmethod]
+    #[pyo3(signature = (texts, vocab_size=512, num_merges=32))]
+    fn train(texts: Vec<String>, vocab_size: usize, num_merges: usize) -> Self {
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        Self {
+            inner: BytePairEncoder::train(&refs, vocab_size, num_merges),
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (dataset, vocab_size=512, num_merges=32))]
+    fn train_from_qa(dataset: &PyDatasetQA, vocab_size: usize, num_merges: usize) -> Self {
+        let texts: Vec<String> = dataset
+            .inner
+            .samples
+            .iter()
+            .flat_map(|s| vec![s.input.clone(), s.output.clone()])
+            .collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        Self {
+            inner: BytePairEncoder::train(&refs, vocab_size, num_merges),
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (dataset, vocab_size=512, num_merges=32))]
+    fn train_from_corpus(dataset: &PyDatasetCorpus, vocab_size: usize, num_merges: usize) -> Self {
+        let texts: Vec<String> = dataset.inner.rows.iter().map(|r| r.text.clone()).collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        Self {
+            inner: BytePairEncoder::train(&refs, vocab_size, num_merges),
+        }
+    }
+
+    fn encode(&self, text: &str) -> Vec<usize> {
+        self.inner.encode(text)
+    }
+
+    #[getter]
+    fn merge_count(&self) -> usize {
+        self.inner.merge_count()
+    }
+
+    #[getter]
+    fn vocab_size(&self) -> usize {
+        self.inner.vocab_size()
+    }
+}

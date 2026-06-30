@@ -33,6 +33,11 @@
 - ffn2 shape import test; classifier int8 head quantize; Rust int4 block ffn quantize
 - Subagent `magicmindnet-checkpoint-strict` for IO regression gap scans
 
+### Added (pass 111)
+- Python `BytePairEncoder` (`train`, `train_from_qa`, `train_from_corpus`, `encode`)
+- `Train(..., bpe_encoder=)` for QA and corpus LM via `train_with_bpe` / `train_corpus_with_bpe`
+- Rust `train_with_bpe_reduces_loss`; `tests/test_bpe_tokenizer_py.py`; API.md + training_coverage
+
 ### Added (pass 108)
 - int4 quantize-after-train learned PE; `test_merge_trained_learned_pos_embed_averages_weights`
 

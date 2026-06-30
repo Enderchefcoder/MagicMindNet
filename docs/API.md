@@ -182,10 +182,22 @@ All fields are readable/writable on `cfg`. `repr(cfg)` summarizes settings.
 
 ```python
 ai.Train(chatbot, dataset_qa, cfg)
+ai.Train(chatbot, dataset_qa, cfg, bpe_encoder=bpe)  # optional BytePairEncoder
 ai.TrainClassifier(classifier, dataset_cls, cfg)
 ai.RL(chatbot, dataset_qa, cfg, reward_amount=1.0, punishment_amount=0.5, rl_type="policy")
 ai.SPIN(chatbot, selfplay_epochs=2, dataset=dataset_qa)
 ```
+
+### BytePairEncoder
+
+```python
+bpe = ai.BytePairEncoder.train(["hello world", "hello there"], vocab_size=512, num_merges=32)
+bpe = ai.BytePairEncoder.train_from_qa(dataset_qa, vocab_size=512, num_merges=32)
+bpe = ai.BytePairEncoder.train_from_corpus(dataset_corpus, vocab_size=512, num_merges=32)
+ids = bpe.encode("hello world")  # merge-aware token ids (clamped to vocab_size)
+```
+
+Pass `bpe_encoder=bpe` to `Train()` for BPE tokenization during QA and corpus LM training (max 32 tokens per sequence).
 
 | API | Required dataset |
 |-----|------------------|

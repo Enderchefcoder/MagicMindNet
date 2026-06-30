@@ -1,5 +1,5 @@
 use mmn_core::{enable_grad, Device, Result};
-use mmn_data::{DatasetClassification, DatasetCorpus, DatasetQA};
+use mmn_data::{BytePairEncoder, DatasetClassification, DatasetCorpus, DatasetQA};
 use mmn_models::{validate_dataset_for_classifier, Chatbot, Classifier};
 use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
 use rand::Rng;
@@ -30,6 +30,18 @@ pub fn simple_tokenize(text: &str, vocab_size: usize) -> Vec<usize> {
         .map(|b| (b as usize) % vocab_size)
         .take(32)
         .collect()
+}
+
+/// Tokenize for LM training: byte fallback or BPE when `bpe` is set (max 32 tokens).
+pub fn tokenize_lm(text: &str, vocab_size: usize, bpe: Option<&BytePairEncoder>) -> Vec<usize> {
+    match bpe {
+        Some(enc) => {
+            let mut ids = enc.encode(text);
+            ids.truncate(32);
+            ids
+        }
+        None => simple_tokenize(text, vocab_size),
+    }
 }
 
 /// Truncate input/target token streams to the same length for CE (min length, max 32 each).
@@ -79,8 +91,12 @@ pub fn mean_qa_loss(model: &Chatbot, dataset: &DatasetQA) -> Result<f32> {
     })
 }
 
-fn corpus_row_lm_pairs(text: &str, vocab_size: usize) -> Option<(Vec<usize>, Vec<usize>)> {
-    let tokens = simple_tokenize(text, vocab_size);
+fn corpus_row_lm_pairs(
+    text: &str,
+    vocab_size: usize,
+    bpe: Option<&BytePairEncoder>,
+) -> Option<(Vec<usize>, Vec<usize>)> {
+    let tokens = tokenize_lm(text, vocab_size, bpe);
     if tokens.len() < 2 {
         return None;
     }
@@ -95,7 +111,7 @@ pub fn mean_corpus_loss(model: &Chatbot, dataset: &DatasetCorpus) -> Result<f32>
     let mut total = 0.0f32;
     let mut count = 0usize;
     for row in &dataset.rows {
-        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab) {
+        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, None) {
             total += model.loss_on_batch(&tokens, &targets)?;
             count += 1;
         }
@@ -108,6 +124,15 @@ pub fn mean_corpus_loss(model: &Chatbot, dataset: &DatasetCorpus) -> Result<f32>
 }
 
 pub fn train_corpus(model: &mut Chatbot, dataset: &DatasetCorpus, config: &TrainConfig) -> Result<()> {
+    train_corpus_with_bpe(model, dataset, config, None)
+}
+
+pub fn train_corpus_with_bpe(
+    model: &mut Chatbot,
+    dataset: &DatasetCorpus,
+    config: &TrainConfig,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
     let cuda_ok = mmn_cuda::is_available();
     Device::require_cuda_available_checked(config.cuda, cuda_ok)?;
     if config.cuda {
@@ -143,7 +168,7 @@ pub fn train_corpus(model: &mut Chatbot, dataset: &DatasetCorpus, config: &Train
         let mut valid_steps = 0usize;
         for (i, &idx) in indices.iter().enumerate() {
             let row = &dataset.rows[idx];
-            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab) else {
+            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, bpe) else {
                 continue;
             };
             valid_steps += 1;
@@ -195,6 +220,15 @@ pub fn train_corpus(model: &mut Chatbot, dataset: &DatasetCorpus, config: &Train
 }
 
 pub fn train(model: &mut Chatbot, dataset: &DatasetQA, config: &TrainConfig) -> Result<()> {
+    train_with_bpe(model, dataset, config, None)
+}
+
+pub fn train_with_bpe(
+    model: &mut Chatbot,
+    dataset: &DatasetQA,
+    config: &TrainConfig,
+    bpe: Option<&BytePairEncoder>,
+) -> Result<()> {
     let cuda_ok = mmn_cuda::is_available();
     Device::require_cuda_available_checked(config.cuda, cuda_ok)?;
     if config.cuda {
@@ -229,8 +263,8 @@ pub fn train(model: &mut Chatbot, dataset: &DatasetQA, config: &TrainConfig) -> 
         let mut micro = 0usize;
         for (i, &idx) in indices.iter().enumerate() {
             let sample = &dataset.samples[idx];
-            let mut tokens = simple_tokenize(&sample.input, vocab);
-            let mut targets = simple_tokenize(&sample.output, vocab);
+            let mut tokens = tokenize_lm(&sample.input, vocab, bpe);
+            let mut targets = tokenize_lm(&sample.output, vocab, bpe);
             align_qa_token_pairs(&mut tokens, &mut targets);
             if batch_size == 1 {
                 model.train_step_lm(
@@ -963,5 +997,53 @@ mod tests {
             rel < 0.5,
             "post-train int8 quantize mean loss drift: {loss_before} -> {loss_after} (rel={rel})"
         );
+    }
+
+    #[test]
+    fn train_with_bpe_reduces_loss() {
+        let ds = toy_dataset();
+        let mut texts: Vec<String> = ds
+            .samples
+            .iter()
+            .flat_map(|s| vec![s.input.clone(), s.output.clone()])
+            .collect();
+        texts.extend(std::iter::repeat("hello hello hello world".to_string()).take(24));
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let bpe = BytePairEncoder::train(&refs, 512, 16);
+        assert!(bpe.merge_count() > 0);
+
+        let mut model = Chatbot::new_with_pe_options(
+            false, None, 512, Some(1), Some(32), Some(14), false, 64,
+        );
+        let cfg = TrainConfig {
+            epochs: 4,
+            batch_size: 1,
+            learning_rate: 0.05,
+            optimizer: "adamw".into(),
+            ..Default::default()
+        };
+
+        let loss_before = mean_qa_loss_bpe(&model, &ds, &bpe).unwrap();
+        train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
+        let loss_after = mean_qa_loss_bpe(&model, &ds, &bpe).unwrap();
+        assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
+    }
+
+    fn mean_qa_loss_bpe(model: &Chatbot, dataset: &DatasetQA, bpe: &BytePairEncoder) -> Result<f32> {
+        let vocab = model.shape.vocab_size;
+        let mut total = 0.0f32;
+        let mut count = 0usize;
+        for sample in &dataset.samples {
+            let mut tokens = tokenize_lm(&sample.input, vocab, Some(bpe));
+            let mut targets = tokenize_lm(&sample.output, vocab, Some(bpe));
+            align_qa_token_pairs(&mut tokens, &mut targets);
+            total += model.loss_on_batch(&tokens, &targets)?;
+            count += 1;
+        }
+        Ok(if count > 0 {
+            total / count as f32
+        } else {
+            0.0
+        })
     }
 }
