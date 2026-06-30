@@ -142,4 +142,6 @@
 [X] Pass 107 — quantize int8 after train learned PE pytest, 204 Rust / 466 pytest, verify_gate
 [X] Pass 108 — int4 quantize-after-train + merge trained learned PE, 204 Rust / 468 pytest, verify_gate
 [X] Pass 109 — quickstart --learned-pe + Rust quantize-after-train, 205 Rust / 469 pytest, verify_gate
-[ ] Pass 110 — examples/README quickstart flag; training_coverage quickstart row
+[X] Pass 110 — quickstart flag docs in training/examples coverage
+[X] Git — 8 feature commits pushed to github.com/Enderchefcoder/MagicMindNet
+[ ] Pass 111 — Python BytePairEncoder binding; Train() optional BPE tokenize
