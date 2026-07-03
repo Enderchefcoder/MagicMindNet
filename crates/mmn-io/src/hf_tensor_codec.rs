@@ -44,7 +44,7 @@ pub fn tensor_from_view(name: &str, view: &TensorView<'_>) -> Result<Tensor, Mmn
 }
 
 fn decode_f32_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
-    if data.len() % 4 != 0 {
+    if !data.len().is_multiple_of(4) {
         return Err(MmnError::Other {
             message: format!("tensor {name}: invalid F32 byte length {}", data.len()),
         });
@@ -59,7 +59,7 @@ fn decode_f32_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray
 }
 
 fn decode_f16_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
-    if data.len() % 2 != 0 {
+    if !data.len().is_multiple_of(2) {
         return Err(MmnError::Other {
             message: format!("tensor {name}: invalid F16 byte length {}", data.len()),
         });
@@ -74,7 +74,7 @@ fn decode_f16_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray
 }
 
 fn decode_bf16_tensor(data: &[u8], shape: &[usize], name: &str) -> Result<ndarray::ArrayD<f32>, MmnError> {
-    if data.len() % 2 != 0 {
+    if !data.len().is_multiple_of(2) {
         return Err(MmnError::Other {
             message: format!("tensor {name}: invalid BF16 byte length {}", data.len()),
         });

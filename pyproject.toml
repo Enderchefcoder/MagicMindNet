@@ -5,17 +5,27 @@ build-backend = "maturin"
 [project]
 name = "magicmindnet"
 version = "0.1.0"
-description = "High-level Python AI library with a from-scratch Rust core"
+description = "Beginner-friendly AI library: train chatbots, classifiers, and diffusion models with a from-scratch Rust core"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.12"
+keywords = ["ai", "machine-learning", "transformer", "chatbot", "beginner", "rust"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
 ]
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Enderchefcoder/MagicMindNet"
+Documentation = "https://github.com/Enderchefcoder/MagicMindNet/blob/master/docs/getting_started.md"
+Changelog = "https://github.com/Enderchefcoder/MagicMindNet/blob/master/CHANGELOG.md"
 
 [project.optional-dependencies]
 cuda = []

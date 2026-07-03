@@ -1,6 +1,14 @@
 """Smoke-test runnable example scripts."""
 
 
+def test_hello_ai_example_runs(run_example):
+    proc = run_example("hello_ai.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "Loss went from" in proc.stdout
+    assert "Reloaded:" in proc.stdout
+    assert "'sunny warm bright' is: nice" in proc.stdout
+
+
 def test_benchmark_train_example_runs(run_example):
     proc = run_example("benchmark_train.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

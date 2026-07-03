@@ -2,6 +2,29 @@
 
 Regression coverage for `mmn-train` and Python `Train` / `TrainClassifier` / `RL` / `SPIN`.
 
+## Config validation, loss history, verbose
+
+| Behavior | Rust (`mmn-train`) | Python (`tests/`) |
+|----------|-------------------|-------------------|
+| `optimizer` accepts `adamw` / `muon` / `hybrid` | `resolve_use_hybrid_accepts_documented_optimizers` | `test_constructor_validation.py` |
+| Unknown optimizer errors with valid options | `unknown_optimizer_fails_with_valid_options` | `test_constructor_validation.py`, `test_model_train_methods.py` |
+| `"muon"` routes matrix weights through Muon | `muon_optimizer_name_trains_matrix_weights` | `test_constructor_validation.py` |
+| Train returns one mean loss per epoch | `train_returns_one_mean_loss_per_epoch` | `test_model_train_methods.py` |
+| TrainClassifier returns per-epoch losses | `train_classifier_returns_one_mean_loss_per_epoch` | `test_model_train_methods.py` |
+| TrainDiffusion returns per-epoch losses | (return type) | `test_model_train_methods.py` |
+| `verbose` prints epoch/mean loss lines | `report_epoch` | `test_model_train_methods.py` (`capfd`) |
+| `verbose` off by default | `train_config_default_is_not_verbose` | `test_constructor_validation.py` |
+
+## Method-style training (`model.train(...)`)
+
+| Behavior | Python (`tests/`) |
+|----------|-------------------|
+| `bot.train(ds)` defaults to one epoch | `test_model_train_methods.py` |
+| `bot.train(ds, cfg)` honors `TrainConfig` | `test_model_train_methods.py` |
+| Keyword overrides beat `config=` | `test_model_train_methods.py` |
+| Wrong dataset raises `DataMismatchError` | `test_model_train_methods.py` |
+| `clf.train` / `diff.train` parity | `test_model_train_methods.py` |
+
 ## Language modeling (`Train`)
 
 | Behavior | Rust (`mmn-train`) | Python (`tests/`) |

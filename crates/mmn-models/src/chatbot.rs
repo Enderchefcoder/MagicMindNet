@@ -299,6 +299,7 @@ impl Chatbot {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_pe_options(
         vision: bool,
         autoset_budget: Option<&str>,
@@ -325,6 +326,7 @@ impl Chatbot {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_position_options(
         vision: bool,
         autoset_budget: Option<&str>,
@@ -356,6 +358,7 @@ impl Chatbot {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_position_and_ffn(
         vision: bool,
         autoset_budget: Option<&str>,
@@ -690,16 +693,10 @@ impl Chatbot {
         h = self.apply_position_encoding(h)?;
         for (i, block) in self.blocks.iter().enumerate() {
             h = block.forward(&h)?;
-            if i == 0
-                && n_patch > 0
-                && self.vision_cross_attn.is_some()
-            {
-                h = vision_cross_attn_residual(
-                    self.vision_cross_attn.as_ref().unwrap(),
-                    &h,
-                    n_patch,
-                )?
-                .0;
+            if i == 0 && n_patch > 0 {
+                if let Some(cross) = &self.vision_cross_attn {
+                    h = vision_cross_attn_residual(cross, &h, n_patch)?.0;
+                }
             }
         }
         Ok(h)
@@ -1047,7 +1044,7 @@ impl Chatbot {
                 &grad,
             );
         }
-        if self.vision_patch_proj.is_some() {
+        if let Some(proj) = self.vision_patch_proj.as_mut() {
             i += 1;
             let grad = accum.averaged_grad(i);
             optim_step_weight(
@@ -1055,11 +1052,11 @@ impl Chatbot {
                 adamw,
                 use_hybrid,
                 param_id_base,
-                &mut self.vision_patch_proj.as_mut().unwrap().weight,
+                &mut proj.weight,
                 &grad,
             );
         }
-        if self.vision_patch_conv.is_some() {
+        if let Some(conv) = self.vision_patch_conv.as_mut() {
             i += 1;
             let grad = accum.averaged_grad(i);
             optim_step_weight(
@@ -1067,7 +1064,7 @@ impl Chatbot {
                 adamw,
                 use_hybrid,
                 param_id_base,
-                &mut self.vision_patch_conv.as_mut().unwrap().weight,
+                &mut conv.weight,
                 &grad,
             );
         }
@@ -1088,6 +1085,7 @@ impl Chatbot {
         Ok(loss_val)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn backward_lm(
         &mut self,
         token_ids: &[usize],
@@ -1172,25 +1170,25 @@ impl Chatbot {
                 &grads[i],
             );
         }
-        if self.vision_patch_proj.is_some() {
+        if let Some(proj) = self.vision_patch_proj.as_mut() {
             i += 1;
             optim_step_weight(
                 &mut hybrid_opt,
                 adamw,
                 use_hybrid,
                 param_id_base,
-                &mut self.vision_patch_proj.as_mut().unwrap().weight,
+                &mut proj.weight,
                 &grads[i],
             );
         }
-        if self.vision_patch_conv.is_some() {
+        if let Some(conv) = self.vision_patch_conv.as_mut() {
             i += 1;
             optim_step_weight(
                 &mut hybrid_opt,
                 adamw,
                 use_hybrid,
                 param_id_base,
-                &mut self.vision_patch_conv.as_mut().unwrap().weight,
+                &mut conv.weight,
                 &grads[i],
             );
         }
@@ -1213,17 +1211,12 @@ impl Chatbot {
             let (out, cache) = block.forward_with_cache(&h)?;
             caches.push(BlockFfnCache { block: cache });
             h = out;
-            if i == 0
-                && n_patch > 0
-                && self.vision_cross_attn.is_some()
-            {
-                let (h_new, xc) = vision_cross_attn_residual(
-                    self.vision_cross_attn.as_ref().unwrap(),
-                    &h,
-                    n_patch,
-                )?;
-                h = h_new;
-                cross_cache = Some(xc);
+            if i == 0 && n_patch > 0 {
+                if let Some(cross) = &self.vision_cross_attn {
+                    let (h_new, xc) = vision_cross_attn_residual(cross, &h, n_patch)?;
+                    h = h_new;
+                    cross_cache = Some(xc);
+                }
             }
         }
 
@@ -2031,6 +2024,12 @@ fn latent_mask_weight(mask: &Tensor, flat_index: usize, spatial: usize) -> f32 {
     let sy = (flat_index % spatial) / mask.shape[3];
     let sx = (flat_index % spatial) % mask.shape[3];
     mask.data[[0, 0, sy, sx]]
+}
+
+impl Default for Diffusion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Diffusion {

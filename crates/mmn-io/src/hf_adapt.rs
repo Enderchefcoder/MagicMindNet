@@ -31,9 +31,7 @@ pub fn fill_missing_block_layernorm_defaults(
             ("ln2.beta", 0.0),
         ] {
             let key = format!("blocks.{i}.{suffix}");
-            if !tensors.contains_key(&key) {
-                tensors.insert(key, vector_tensor(d_model, val));
-            }
+            tensors.entry(key).or_insert_with(|| vector_tensor(d_model, val));
         }
     }
 }
@@ -64,7 +62,7 @@ fn split_fused_qkv_tensors(tensors: &mut HashMap<String, Tensor>) -> Result<(), 
 }
 
 fn split_qkv_weight(fused: &Tensor, name: &str) -> Result<(Tensor, Tensor, Tensor), MmnError> {
-    let shape: Vec<usize> = fused.data.shape().iter().copied().collect();
+    let shape: Vec<usize> = fused.data.shape().to_vec();
     if shape.len() != 2 {
         return Err(MmnError::Other {
             message: format!("tensor {name}: fused qkv must be rank-2, got {shape:?}"),
@@ -184,7 +182,7 @@ fn infer_ffn_dim_meta(tensors: &HashMap<String, Tensor>, meta: &mut serde_json::
         return;
     }
     if let Some(ffn) = tensors.get("blocks.0.ffn") {
-        let shape: Vec<usize> = ffn.data.shape().iter().copied().collect();
+        let shape: Vec<usize> = ffn.data.shape().to_vec();
         if shape.len() == 2 {
             meta["ffn_dim"] = serde_json::json!(shape[0]);
         }
@@ -204,8 +202,8 @@ fn ensure_gqa_meta(
     let Some((q, k)) = q.zip(k) else {
         return Ok(());
     };
-    let q_shape: Vec<usize> = q.data.shape().iter().copied().collect();
-    let k_shape: Vec<usize> = k.data.shape().iter().copied().collect();
+    let q_shape: Vec<usize> = q.data.shape().to_vec();
+    let k_shape: Vec<usize> = k.data.shape().to_vec();
     if q_shape.len() != 2 || k_shape.len() != 2 || q_shape[0] != q_shape[1] {
         return Ok(());
     }
@@ -244,7 +242,7 @@ fn gqa_dims_from_meta_or_guess(
     ) {
         let n_heads = n_heads as usize;
         let n_kv_heads = n_kv as usize;
-        if n_heads > 0 && n_kv_heads > 0 && d_model % n_heads == 0 {
+        if n_heads > 0 && n_kv_heads > 0 && d_model.is_multiple_of(n_heads) {
             let head_dim = d_model / n_heads;
             if kv_dim == n_kv_heads * head_dim {
                 return Some((head_dim, n_heads, n_kv_heads));
@@ -257,11 +255,11 @@ fn gqa_dims_from_meta_or_guess(
         .and_then(|v| v.as_u64())
     {
         let n_heads = n_heads as usize;
-        if n_heads > 0 && d_model % n_heads == 0 {
+        if n_heads > 0 && d_model.is_multiple_of(n_heads) {
             let head_dim = d_model / n_heads;
-            if kv_dim % head_dim == 0 {
+            if kv_dim.is_multiple_of(head_dim) {
                 let n_kv_heads = kv_dim / head_dim;
-                if n_heads % n_kv_heads == 0 && n_heads >= n_kv_heads {
+                if n_heads.is_multiple_of(n_kv_heads) && n_heads >= n_kv_heads {
                     return Some((head_dim, n_heads, n_kv_heads));
                 }
             }
@@ -273,16 +271,15 @@ fn gqa_dims_from_meta_or_guess(
 fn guess_gqa_dims(d_model: usize, kv_dim: usize) -> Option<(usize, usize, usize)> {
     let mut best: Option<(usize, usize, usize)> = None;
     for head_dim in 1..=d_model.min(kv_dim) {
-        if d_model % head_dim != 0 || kv_dim % head_dim != 0 {
+        if !d_model.is_multiple_of(head_dim) || !kv_dim.is_multiple_of(head_dim) {
             continue;
         }
         let n_heads = d_model / head_dim;
         let n_kv_heads = kv_dim / head_dim;
-        if n_heads % n_kv_heads == 0 && n_heads >= n_kv_heads {
-            if best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true) {
+        if n_heads.is_multiple_of(n_kv_heads) && n_heads >= n_kv_heads
+            && best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true) {
                 best = Some((head_dim, n_heads, n_kv_heads));
             }
-        }
     }
     best
 }

@@ -1,5 +1,6 @@
-/target/
+target/
 /dist/
+python/magicmindnet/*.so
 *.egg-info/
 .venv/
 venv/

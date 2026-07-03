@@ -48,7 +48,7 @@ pub fn import_classifier(path: &str) -> Result<Classifier, MmnError> {
 }
 
 fn import_classifier_json(text: &str) -> Result<Classifier, MmnError> {
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| MmnError::Other {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
         message: e.to_string(),
     })?;
     if v["format"].as_str() != Some("mmn-classifier-v1") {

@@ -57,6 +57,9 @@ See also [CONTRIBUTING.md](../CONTRIBUTING.md) (coverage table for contributors)
 |------|------|--------|
 | Tensor / CE / embed backward | `mmn-core` | — |
 | Optimizers | `mmn-optim` | `test_optimizer_integration_py.py` |
+| Beginner API (`model.train/save/load/chat`, `ai.load`) | `mmn-io detect`, `mmn-train` | `test_model_train_methods.py`, `test_model_save_load.py`, `test_chatbot_chat.py`, `test_constructor_validation.py` |
+| In-memory datasets (`data=[...]`) | — | `test_dataset_in_memory.py` |
+| Typing (`py.typed`, `_native.pyi`) | — | `test_type_stubs.py` |
 | Datasets / ChatXML | `mmn-data` | `test_dataset_matrix_py.py`, `test_datasets.py`, … |
 | `mmn-nn` blocks | `mmn-nn` | — (see [nn_coverage.md](nn_coverage.md)) |
 | Train updates attn + LN (RL frozen) | `mmn-models` | `test_train_block_params_py.py`, `test_train_rl_spin_py.py` |

@@ -49,7 +49,7 @@ impl UnigramEncoder {
             }
         }
         let mut ranked: Vec<(Vec<u8>, usize)> = sub_counts.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
 
         for (piece, _) in ranked {
             if pieces.len() >= target {

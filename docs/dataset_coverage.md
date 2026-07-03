@@ -15,6 +15,11 @@ Regression coverage for `mmn-data` loaders and Python dataset classes.
 | `format_sample` system + thinktag | — | matrix |
 | `format_sample` out of range | — | `test_dataset_qa_format_sample.py` |
 | QA on diffusion rejected | `validate_for_model_rejects_diffusion` | — |
+| In-memory `data=[...]` rows (`format == "memory"`) | — | `test_dataset_in_memory.py` |
+| In-memory custom `user_row` / `ai_row` / `system_row` | — | `test_dataset_in_memory.py` |
+| In-memory missing key → `DataMissingRowError` | — | `test_dataset_in_memory.py` |
+| `file=` + `data=` together / neither → `ValueError` | — | `test_dataset_in_memory.py` |
+| In-memory rows train a Chatbot | — | `test_dataset_in_memory.py` |
 
 ## DatasetCorpus
 
@@ -24,6 +29,9 @@ Regression coverage for `mmn-data` loaders and Python dataset classes.
 | Sort by complexity (short first) | `sort_by_complexity_orders_short_first` | — |
 | `type_` / `format` / `corpus_batch_size` | — | `test_dataset_corpus_getters.py` |
 | `Train` + `compute_mean_loss` (LM) | `train_corpus_reduces_mean_loss` | `test_train_corpus_py.py` |
+| In-memory `data=["chunk", ...]` (`format == "memory"`) | — | `test_dataset_in_memory.py` |
+| Missing sources / files + data together → `ValueError` | — | `test_dataset_in_memory.py` |
+| In-memory chunks train a Chatbot (LM) | — | `test_dataset_in_memory.py` |
 
 ## DatasetClassification
 
@@ -33,6 +41,9 @@ Regression coverage for `mmn-data` loaders and Python dataset classes.
 | Auto `class_N` when tag missing | `auto_tags_when_tag_column_missing` | matrix |
 | `unique_labels` sorted deduped | `unique_labels_sorted_deduped` | `test_dataset_classification_unique_labels.py` |
 | `type_` / `format` | — | matrix, repr tests |
+| In-memory `data=[...]` rows + custom columns | — | `test_dataset_in_memory.py` |
+| In-memory missing key → `DataMissingRowError` | — | `test_dataset_in_memory.py` |
+| In-memory rows train a Classifier | — | `test_dataset_in_memory.py` |
 
 ## DatasetImageGen / DatasetImageEdit
 

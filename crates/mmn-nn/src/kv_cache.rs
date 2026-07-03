@@ -17,6 +17,10 @@ impl LayerKvCache {
         self.k.as_ref().map(|t| t.shape[0]).unwrap_or(0)
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn clear(&mut self) {
         self.k = None;
         self.v = None;
@@ -185,7 +189,7 @@ pub fn apply_rope_with_position_offset(
     }
     let seq = q.shape[0];
     let d_model = q.shape[1];
-    if d_model % n_heads != 0 {
+    if !d_model.is_multiple_of(n_heads) {
         return Err(MmnError::Shape {
             message: format!("d_model {d_model} not divisible by n_heads {n_heads}"),
         });
@@ -197,7 +201,7 @@ pub fn apply_rope_with_position_offset(
             message: format!("k width {kv_dim} expected, got {}", k.shape[1]),
         });
     }
-    if head_dim % 2 != 0 {
+    if !head_dim.is_multiple_of(2) {
         return Err(MmnError::Shape {
             message: format!("head_dim {head_dim} must be even for RoPE"),
         });
@@ -284,7 +288,7 @@ pub fn scaled_dot_product_attention_with_kv(
         });
     }
     let d_model = q.shape[1];
-    if d_model % n_heads != 0 {
+    if !d_model.is_multiple_of(n_heads) {
         return Err(MmnError::Shape {
             message: format!("d_model {d_model} not divisible by n_heads {n_heads}"),
         });
@@ -296,7 +300,7 @@ pub fn scaled_dot_product_attention_with_kv(
             message: format!("k,v width {kv_dim} expected"),
         });
     }
-    if n_heads % n_kv_heads != 0 {
+    if !n_heads.is_multiple_of(n_kv_heads) {
         return Err(MmnError::Shape {
             message: format!("n_heads {n_heads} must be divisible by n_kv_heads {n_kv_heads}"),
         });

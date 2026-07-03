@@ -1,3 +1,8 @@
+// Attention/conv kernels index tensors by explicit head/timestep positions;
+// iterator rewrites would obscure the math, and cache tuples mirror the
+// (out, k, v, weights) shapes documented at each call site.
+#![allow(clippy::needless_range_loop, clippy::type_complexity)]
+
 use mmn_core::{MmnError, Result, Tensor};
 use ndarray::{ArrayD, IxDyn};
 use rand::{Rng, SeedableRng};
@@ -181,7 +186,7 @@ pub fn apply_rope(
     }
     let seq = q.shape[0];
     let d_model = q.shape[1];
-    if d_model % n_heads != 0 {
+    if !d_model.is_multiple_of(n_heads) {
         return Err(MmnError::Shape {
             message: format!("d_model {d_model} not divisible by n_heads {n_heads}"),
         });
@@ -193,7 +198,7 @@ pub fn apply_rope(
             message: format!("apply_rope k width {kv_dim} expected, got {}", k.shape[1]),
         });
     }
-    if head_dim % 2 != 0 {
+    if !head_dim.is_multiple_of(2) {
         return Err(MmnError::Shape {
             message: format!("head_dim {head_dim} must be even for RoPE"),
         });
@@ -755,7 +760,7 @@ impl MultiHeadAttention {
         rng: &mut impl Rng,
     ) -> Self {
         assert_eq!(d_model % n_heads, 0);
-        assert!(n_heads >= n_kv_heads && n_heads % n_kv_heads == 0);
+        assert!(n_heads >= n_kv_heads && n_heads.is_multiple_of(n_kv_heads));
         let kv_dim = gqa_kv_dim(d_model, n_heads, n_kv_heads);
         Self {
             d_model,
@@ -855,7 +860,7 @@ pub fn cross_attention_with_cache(
             ),
         });
     }
-    if d_model % n_heads != 0 {
+    if !d_model.is_multiple_of(n_heads) {
         return Err(MmnError::Shape {
             message: format!("d_model {d_model} not divisible by n_heads {n_heads}"),
         });
@@ -1159,7 +1164,7 @@ pub fn scaled_dot_product_attention_with_cache(
         });
     }
     let d_model = q.shape[1];
-    if d_model % n_heads != 0 {
+    if !d_model.is_multiple_of(n_heads) {
         return Err(MmnError::Shape {
             message: format!("d_model {d_model} not divisible by n_heads {n_heads}"),
         });
@@ -1171,7 +1176,7 @@ pub fn scaled_dot_product_attention_with_cache(
             message: format!("attention k,v width {kv_dim} expected, got k={} v={}", k.shape[1], v.shape[1]),
         });
     }
-    if n_heads % n_kv_heads != 0 {
+    if !n_heads.is_multiple_of(n_kv_heads) {
         return Err(MmnError::Shape {
             message: format!("n_heads {n_heads} must be divisible by n_kv_heads {n_kv_heads}"),
         });
@@ -2119,6 +2124,12 @@ pub struct VaeEncoder {
     pub conv2: Conv2d,
 }
 
+impl Default for VaeEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VaeEncoder {
     pub fn new() -> Self {
         Self {
@@ -2135,6 +2146,12 @@ impl VaeEncoder {
 pub struct VaeDecoder {
     pub conv1: Conv2d,
     pub conv2: Conv2d,
+}
+
+impl Default for VaeDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VaeDecoder {
@@ -2161,6 +2178,12 @@ pub struct UNetForwardCache {
     pub x: Tensor,
     pub h1: Tensor,
     pub h2: Tensor,
+}
+
+impl Default for UNet2D {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UNet2D {

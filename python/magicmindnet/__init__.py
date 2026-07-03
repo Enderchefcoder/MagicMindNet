@@ -1,13 +1,20 @@
 """MagicMindNet — easy, powerful AI with a from-scratch Rust core.
 
-Usage::
+Train your first chatbot in five lines::
 
     import magicmindnet as ai
 
-    data = ai.DatasetQA(file="qa.json", user_row="input", ai_row="output")
-    bot = ai.Chatbot(autoset="sub-100M")
-    cfg = ai.TrainConfig(epochs=1, batch_size=4, cuda=False, optimizer="hybrid")
-    ai.Train(bot, data, cfg)
+    data = ai.DatasetQA(data=[{"input": "hi", "output": "hello!"}])
+    bot = ai.Chatbot(vocab_size=512, n_layer=2, d_model=64)
+    bot.train(data, epochs=3)
+    print(bot.chat("hi"))
+
+Save and reload any model with one call each::
+
+    bot.save("bot.mmn")
+    bot = ai.load("bot.mmn")
+
+See docs/getting_started.md for the full beginner tutorial.
 """
 
 from magicmindnet._native import (
@@ -40,6 +47,8 @@ from magicmindnet._native import (
     import_model,
     limit,
     limit_percent,
+    load,
+    load_checkpoint,
     merge,
     merge_classifier,
     merge_diffusion_model,
@@ -104,7 +113,9 @@ __all__ = [
     "import_model",
     "limit",
     "limit_percent",
+    "load",
     "load_bpe_sidecar",
+    "load_checkpoint",
     "load_unigram_sidecar",
     "merge",
     "merge_classifier",

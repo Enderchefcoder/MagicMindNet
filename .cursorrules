@@ -13,6 +13,10 @@
 - PowerShell `Join-Path` accepts only two path segments on Windows PS 5.x — nest calls or use string paths for `.venv\Scripts\python.exe`.
 - CI scripts should resolve `.venv` Python via `scripts/venv_python.ps1` so `verify_gate` works without manual venv activation.
 - `mmn-train` can use `mmn-io` as a **dev-dependency** for train→export→import integration tests without creating a cyclic dep (`mmn-io` does not depend on `mmn-train`).
+- PyO3 `panic!` in `#[new]` surfaces as `pyo3_runtime.PanicException` — user-facing constructors must return `PyResult` and raise `ValueError` instead.
+- Rust `println!` bypasses Python's buffered stdout; flush `sys.stdout` before Rust-side progress prints so output interleaves correctly (see `flush_python_stdout` in mmn-py train dispatch).
+- Cloud VM rust default was 1.83; deps need edition2024 → `rustup default stable` (1.96) before `maturin develop`.
+- This linux VM needs `sudo apt-get install python3.12-venv` before `python3 -m venv .venv`.
 
 # Scratchpad
 
@@ -182,3 +186,13 @@
 [X] diffusion_benchmark example, masked fixed-t loss regression, eval_mean_loss edit --train; 311 Rust / 631 pytest, verify_gate
 [X] Diffusion parameters getter, quantize roundtrip example, roundtrip pytest; 313 Rust / 635 pytest, verify_gate
 [X] Image dataset path resolvers, merge_diffusion demo, classifier IO guard; 314 Rust / 640 pytest, verify_gate
+
+## Task: Beginner API overhaul (easy-to-use professional library)
+[X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses
+[X] mmn-io: detect.rs — detect_checkpoint_kind for all formats (JSON/binary/bin, 3 model families)
+[X] mmn-py: Chatbot ctor ValueError (PE+RoPE conflict, bad autoset, vocab 0); save/load/train/chat methods; Classifier predict_label/save/load/train; Diffusion save/load/train; universal ai.load()
+[X] In-memory datasets: DatasetQA(data=[...]) + DatasetClassification(data=[...])
+[X] py.typed + _native.pyi stubs; vision.py top-level imports; Python-style bools in reprs
+[X] Docs: getting_started.md, README beginner quickstart, API.md, CHANGELOG, coverage matrices
+[X] examples/hello_ai.py + smoke + pytest wiring
+[X] New tests: ~80 pytest (7 files) + 9 Rust (detect + train regressions)

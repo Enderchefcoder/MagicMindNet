@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import inspect
 
-import magicmindnet._native as native
-
 import magicmindnet as ai
+import magicmindnet._native as native
 
 
 def test_native_module_exports_core_symbols():

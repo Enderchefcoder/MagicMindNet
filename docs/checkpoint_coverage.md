@@ -129,6 +129,24 @@ Seven conv weight tensors: `vae_enc_conv1`, `vae_enc_conv2`, `vae_dec_conv1`, `v
 
 See [diffusion_coverage.md](diffusion_coverage.md).
 
+## Model `save()` / `load()` methods & universal `ai.load()`
+
+`Chatbot.save`/`Classifier.save`/`Diffusion.save` run the same export code as
+`ai.export*`; `Model.load` and `ai.load(path)` route through
+`detect_checkpoint_kind` (mmn-io `detect.rs`).
+
+| Behavior | Rust (`mmn-io detect`) | Python (`tests/test_model_save_load.py`) |
+|----------|------------------------|------------------------------------------|
+| Detect chatbot JSON + HF binary | `detects_chatbot_json_and_binary` | `test_universal_load_dispatches_chatbot`, `..._hf_binary_chatbot` |
+| Detect classifier JSON + HF binary | `detects_classifier_json_and_binary` | `test_universal_load_dispatches_classifier` |
+| Detect diffusion + bin stub | `detects_diffusion_and_bin_stub` | `test_universal_load_dispatches_diffusion`, `..._bin_stub` |
+| Unknown format errors | `unknown_json_format_errors` | `test_universal_load_rejects_non_checkpoint` |
+| Missing file names the path | `missing_file_errors_with_path` | `test_chatbot_load_missing_file_mentions_path` |
+| Wrong-family load errors name the family | — | `test_chatbot_load_rejects_classifier_checkpoint` (+ classifier/diffusion variants) |
+| `save()` bytes match `export()` | — | `test_save_matches_export_function` |
+| `save()`/`load()` weight roundtrips (all 3 models) | — | `test_chatbot_save_load_roundtrip`, classifier + diffusion variants |
+| `save(bpe_encoder=...)` writes sidecar | — | `test_save_with_bpe_sidecar` |
+
 ## Running coverage checks
 
 ```powershell

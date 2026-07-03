@@ -1,8 +1,25 @@
 # MagicMindNet
 
-**MagicMindNet** is a high-level Python AI library (`import magicmindnet as ai`) backed by a **from-scratch Rust** workspace: custom tensors and autograd, AdamW + Muon hybrid optimizers, datasets, chatbot training, classification, RL, SPIN, checkpoint IO (export / import / merge / quantize), resource limits, and diffusion building blocks.
+**MagicMindNet** is a beginner-friendly Python AI library (`import magicmindnet as ai`) backed by a **from-scratch Rust** core. Train real transformer chatbots, text classifiers, and toy diffusion models on your own machine — no PyTorch, no Hugging Face, no GPU required — and read every line of the stack that made it happen.
 
-Designed for researchers and integrators who want a **small, auditable stack** without pulling in PyTorch or Hugging Face — with strict checkpoint validation so partial or corrupt loads never silently mix random weights.
+```python
+import magicmindnet as ai
+
+data = ai.DatasetQA(data=[
+    {"input": "hi", "output": "hello there!"},
+    {"input": "how are you?", "output": "doing great, thanks!"},
+])
+bot = ai.Chatbot(vocab_size=512, n_layer=2, d_model=64, seed=42)
+bot.train(data, epochs=5, verbose=True)   # prints per-epoch loss, returns loss history
+print(bot.chat("hi"))
+
+bot.save("my_bot.mmn")
+bot = ai.load("my_bot.mmn")               # loads any MagicMindNet checkpoint
+```
+
+Under the hood: custom tensors and autograd, AdamW + Muon hybrid optimizers, KV-cache generation with modern sampling (top-p/top-k/min-p, penalties), BPE/unigram tokenizers, RoPE/learned/sinusoidal position encodings, GQA attention, vision-prefix multimodal input, RL + SPIN loops, strict checkpoint IO (export / import / merge / quantize), and HF-safetensors interchange.
+
+**New to the library? Start with [docs/getting_started.md](docs/getting_started.md)** and `python examples/hello_ai.py`.
 
 ---
 
@@ -29,27 +46,26 @@ Designed for researchers and integrators who want a **small, auditable stack** w
 **Requires:** Python 3.12+, [Rust](https://rustup.rs/), optional CUDA toolkit for GPU matmul.
 
 ```bash
-pip install maturin pytest
-maturin develop --release -m crates/mmn-py/Cargo.toml
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+maturin develop --release
+python examples/hello_ai.py
 pytest -q
-python examples/quickstart.py
 ```
 
 **Full merge gate** (Rust tests, maturin, pytest, ruff, example smoke):
 
-```powershell
-.\scripts\verify_gate.ps1
+```bash
+bash scripts/verify_gate.sh        # Windows: .\scripts\verify_gate.ps1
 ```
 
-Minimal training script:
+Everything is also available function-style for scripting pipelines:
 
 ```python
-import magicmindnet as ai
-
 data = ai.DatasetQA(file="qa.json", user_row="input", ai_row="output")
 bot = ai.Chatbot(autoset="sub-100M")
 cfg = ai.TrainConfig(epochs=1, batch_size=4, cuda=False, optimizer="hybrid")
-ai.Train(bot, data, cfg)
+losses = ai.Train(bot, data, cfg)          # same engine as bot.train(...)
 ai.export(bot, "safetensors", "bot.mmn")
 ```
 
@@ -64,10 +80,14 @@ See [docs/position_encoding_coverage.md](docs/position_encoding_coverage.md), `e
 Classification:
 
 ```python
-ds = ai.DatasetClassification("labels.json", "text", "tag")
+ds = ai.DatasetClassification(data=[
+    {"text": "sunny warm", "label": "nice"},
+    {"text": "rainy cold", "label": "gloomy"},
+])
 clf = ai.Classifier.from_classification(ds, input_dim=64, seed=42)
-ai.TrainClassifier(clf, ds, ai.TrainConfig(epochs=5, batch_size=4, learning_rate=0.05))
-ai.export_classifier(clf, "safetensors", "classifier.mmn")
+clf.train(ds, epochs=20)
+print(clf.predict_label("sunny warm"))    # -> "nice"
+clf.save("classifier.mmn")
 ```
 
 ---
@@ -119,16 +139,18 @@ flowchart TB
 
 | Area | Capabilities |
 |------|----------------|
-| **Datasets** | `DatasetQA`, `DatasetCorpus`, `DatasetClassification`, `DatasetImageGen`, `DatasetImageEdit`; ChatXML think-tag split |
-| **Chatbot** | Autoset presets (`sub-100M`, `sub-1B`, `sub-10B`), vision flag, seed, shape getters |
-| **Classifier** | `from_classification`, `with_labels`, CE training, `predict` probs |
-| **Training** | `Train`, `TrainClassifier`, batch accumulation, hybrid AdamW+Muon |
+| **Datasets** | `DatasetQA`, `DatasetCorpus`, `DatasetClassification`, `DatasetImageGen`, `DatasetImageEdit`; **in-memory `data=[...]` lists**; ChatXML think-tag split |
+| **Chatbot** | `bot.train` / `bot.chat` / `bot.save` / `Chatbot.load`; autoset presets (`sub-100M`, `sub-1B`, `sub-10B`), vision flag, seed, shape getters |
+| **Classifier** | `from_classification`, `with_labels`, `clf.train`, `predict` probs, `predict_label` |
+| **Training** | `Train`, `TrainClassifier`, `TrainDiffusion` all return per-epoch loss history; `verbose=True` progress; batch accumulation; `adamw` / `muon` / `hybrid` optimizers (typos raise `ValueError`) |
+| **Generation** | KV cache, top-k/top-p/min-p, repetition/frequency/presence penalties, stop strings, sliding context |
 | **RL / SPIN** | Toy alignment loops on small models |
-| **IO** | `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
+| **IO** | Universal `ai.load(path)` auto-detects model family + format; `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
-| **Errors** | Typed Python exceptions: `CUDAError`, `DataMismatchError`, `ModelMismatchError`, … |
+| **Errors** | Typed Python exceptions: `CUDAError`, `DataMismatchError`, `ModelMismatchError`, …; constructor typos raise `ValueError` with the valid options |
+| **Typing** | Ships `py.typed` + full `.pyi` stubs — IDE autocomplete for the whole API |
 
 Known gaps: see [docs/limitations.md](docs/limitations.md) (external HF model import, full diffusion backward, etc.).
 
@@ -164,19 +186,28 @@ Pre-commit (optional): `.pre-commit-config.yaml` runs ruff on Python sources.
 ### Datasets
 
 ```python
-ai.DatasetQA(file, user_row, ai_row)
-ai.DatasetCorpus(file, text_row, batch_size=24)
-ai.DatasetClassification(file, text_col, label_col)
-ai.DatasetImageGen(...)
-ai.DatasetImageEdit(...)
+ai.DatasetQA(file="qa.json", user_row="input", ai_row="output")
+ai.DatasetQA(data=[{"input": "hi", "output": "hello"}])       # no file needed
+ai.DatasetCorpus(rowfile="rows.json", txtfile="corpus.txt")
+ai.DatasetCorpus(data=["a chunk of text", "another chunk"])
+ai.DatasetClassification(file="labels.json", text_col="text", tags_col="tag")
+ai.DatasetClassification(data=[{"text": "yay", "label": "pos"}])
+ai.DatasetImageGen("manifest.json")
+ai.DatasetImageEdit("edit_manifest.json")
 ```
 
 ### Models
 
 ```python
-ai.Chatbot(vocab_size=..., n_layer=..., d_model=..., seed=..., autoset="sub-100M")
-ai.Classifier.from_classification(dataset, input_dim=..., seed=...)
-ai.Diffusion(...)  # foundation API
+bot = ai.Chatbot(vocab_size=..., n_layer=..., d_model=..., seed=..., autoset="sub-100M")
+clf = ai.Classifier.from_classification(dataset, input_dim=..., seed=...)
+diff = ai.Diffusion()
+
+# Every model has the same four core methods:
+model.train(dataset, epochs=..., learning_rate=..., verbose=True)  # -> list of epoch losses
+model.save("model.mmn")
+Model.load("model.mmn")     # or the universal ai.load("model.mmn")
+bot.chat("hello")           # chatbot only; clf.predict_label(text) for classifiers
 ```
 
 ### Training config
@@ -187,17 +218,21 @@ cfg = ai.TrainConfig(
     batch_size=8,
     learning_rate=0.001,
     cuda=False,
-    optimizer="hybrid",  # adamw | muon | hybrid
+    optimizer="hybrid",  # "adamw" | "muon" | "hybrid" — anything else raises ValueError
+    verbose=False,       # True prints per-epoch mean loss
 )
-ai.Train(bot, dataset, cfg)
-ai.TrainClassifier(clf, dataset, cfg)
-ai.RL(bot, dataset, cfg)
-ai.SPIN(bot, dataset, cfg)
+losses = ai.Train(bot, dataset, cfg)             # returns per-epoch mean losses
+losses = ai.TrainClassifier(clf, dataset, cfg)
+losses = ai.TrainDiffusion(diff, dataset, cfg)
+ai.RL(bot, dataset, cfg, reward_amount=1.0, punishment_amount=0.5)
+ai.SPIN(bot, selfplay_epochs=2, dataset=dataset)
 ```
 
 ### Checkpoint IO
 
 ```python
+model = ai.load(path)      # universal: Chatbot / Classifier / Diffusion, any format
+
 ai.export(bot, "safetensors", path)
 bot2 = ai.import_model("safetensors", [path])  # first path only
 merged = ai.merge(bot_a, bot_b)
@@ -209,7 +244,7 @@ ai.quantize_classifier(clf, "int4")
 ai.limit("50%")  # resource cap helper
 ```
 
-Full API reference: [docs/API.md](docs/API.md).
+Full API reference: [docs/API.md](docs/API.md). Beginner tutorial: [docs/getting_started.md](docs/getting_started.md).
 
 ---
 
@@ -236,6 +271,7 @@ Format details: [docs/checkpoints.md](docs/checkpoints.md).
 
 | Script | Purpose |
 |--------|---------|
+| `examples/hello_ai.py` | **Start here**: in-memory data, `bot.train`, `bot.chat`, save/`ai.load` |
 | `examples/quickstart.py` | QA load, train, export |
 | `examples/benchmark_train.py` | Mean loss before/after train |
 | `examples/rl_spin.py` | RL + SPIN on fixture QA |
@@ -267,8 +303,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **314**
-- pytest: **640**
+- Rust `#[test]`: **325**
+- pytest: **714**
 
 Test area map: [docs/testing.md](docs/testing.md).
 
@@ -313,6 +349,7 @@ MagicMindNet/
 
 | Doc | Contents |
 |-----|----------|
+| [docs/getting_started.md](docs/getting_started.md) | **Beginner tutorial** — install to first trained model |
 | [docs/API.md](docs/API.md) | Public Python surface |
 | [docs/training.md](docs/training.md) | Losses, optimizers, batching |
 | [docs/training_coverage.md](docs/training_coverage.md) | **Training regression matrix** |

@@ -1,7 +1,7 @@
 pub mod autoset;
 pub mod chatbot;
 
-pub use autoset::{autoset, ModelShape};
+pub use autoset::{autoset, is_valid_autoset_budget, ModelShape, VALID_AUTOSET_BUDGETS};
 pub use chatbot::{
     targets_with_vision_prefix, validate_dataset_for_chatbot, validate_dataset_for_classifier,
     validate_dataset_for_diffusion, vision_patch_from_text, vision_rgb_patch_from_image_path,

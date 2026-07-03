@@ -259,6 +259,10 @@ impl GradAccumulator {
     pub fn len(&self) -> usize {
         self.grads.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.grads.is_empty()
+    }
 }
 
 #[cfg(test)]

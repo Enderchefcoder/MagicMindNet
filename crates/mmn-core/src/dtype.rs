@@ -1,5 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum DType {
+    #[default]
     F32,
     BF16,
 }
@@ -13,8 +15,3 @@ impl DType {
     }
 }
 
-impl Default for DType {
-    fn default() -> Self {
-        DType::F32
-    }
-}
