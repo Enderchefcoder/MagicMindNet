@@ -83,6 +83,32 @@ def test_dataset_classification_requires_file_or_data():
         ai.DatasetClassification()
 
 
+def test_dataset_corpus_from_memory():
+    ds = ai.DatasetCorpus(data=["a longer chunk of corpus text", "short one"])
+    assert ds.rows == 2
+    assert ds.format == "memory"
+    assert ds.type_ == "corpus"
+
+
+def test_dataset_corpus_requires_files_or_data():
+    with pytest.raises(ValueError, match="rowfile"):
+        ai.DatasetCorpus()
+
+
+def test_dataset_corpus_rejects_files_and_data_together(tmp_path):
+    txt = tmp_path / "corpus.txt"
+    txt.write_text("hello world text", encoding="utf-8")
+    with pytest.raises(ValueError, match="not both"):
+        ai.DatasetCorpus(txtfile=str(txt), data=["chunk"])
+
+
+def test_memory_corpus_dataset_trains_chatbot():
+    ds = ai.DatasetCorpus(data=["repeat repeat repeat text sample"] * 3)
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=16, seed=3)
+    losses = bot.train(ds, epochs=2, learning_rate=0.05, optimizer="adamw")
+    assert len(losses) == 2
+
+
 def test_memory_qa_dataset_trains_chatbot():
     ds = ai.DatasetQA(data=QA_ROWS)
     bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=16, seed=3)

@@ -102,6 +102,7 @@ ds = ai.DatasetCorpus(
     rows_with_corpus_chunk="text",
     batch_size="row",         # or fixed size string e.g. "24"
 )
+ds = ai.DatasetCorpus(data=["a chunk of text", "another chunk"])  # in-memory
 ds.corpus_batch_size          # "row" or fixed integer string
 ```
 

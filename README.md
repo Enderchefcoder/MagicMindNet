@@ -189,6 +189,7 @@ Pre-commit (optional): `.pre-commit-config.yaml` runs ruff on Python sources.
 ai.DatasetQA(file="qa.json", user_row="input", ai_row="output")
 ai.DatasetQA(data=[{"input": "hi", "output": "hello"}])       # no file needed
 ai.DatasetCorpus(rowfile="rows.json", txtfile="corpus.txt")
+ai.DatasetCorpus(data=["a chunk of text", "another chunk"])
 ai.DatasetClassification(file="labels.json", text_col="text", tags_col="tag")
 ai.DatasetClassification(data=[{"text": "yay", "label": "pos"}])
 ai.DatasetImageGen("manifest.json")
@@ -303,7 +304,7 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
 - Rust `#[test]`: **325**
-- pytest: **710**
+- pytest: **714**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

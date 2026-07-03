@@ -52,6 +52,7 @@ class DatasetCorpus:
         sort_rows_by_complexity: bool = True,
         rows_with_corpus_chunk: str = "text",
         batch_size: str = "row",
+        data: list[str] | None = None,
     ) -> None: ...
     @property
     def rows(self) -> int: ...
