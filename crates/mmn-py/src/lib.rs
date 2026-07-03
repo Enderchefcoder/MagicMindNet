@@ -19,8 +19,8 @@ use errors::{
 };
 use io::{
     export, export_classifier_model, export_diffusion_model, import_classifier_model,
-    import_diffusion_model, import_model, merge, merge_classifier, merge_diffusion_model,
-    quantize, quantize_classifier_model, quantize_diffusion_model,
+    import_diffusion_model, import_model, load_checkpoint, merge, merge_classifier,
+    merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
@@ -54,6 +54,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(limit_percent, m)?)?;
     m.add_function(wrap_pyfunction!(export, m)?)?;
     m.add_function(wrap_pyfunction!(import_model, m)?)?;
+    m.add_function(wrap_pyfunction!(load_checkpoint, m)?)?;
+    m.add("load", m.getattr("load_checkpoint")?)?;
     m.add_function(wrap_pyfunction!(quantize, m)?)?;
     m.add_function(wrap_pyfunction!(export_classifier_model, m)?)?;
     m.add_function(wrap_pyfunction!(import_classifier_model, m)?)?;

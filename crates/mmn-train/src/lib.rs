@@ -26,6 +26,8 @@ pub struct TrainConfig {
     pub cuda: bool,
     pub optimizer: String,
     pub learning_rate: f32,
+    /// Print per-epoch mean loss during training.
+    pub verbose: bool,
 }
 
 impl Default for TrainConfig {
@@ -36,7 +38,37 @@ impl Default for TrainConfig {
             cuda: false,
             optimizer: "hybrid".into(),
             learning_rate: 3e-4,
+            verbose: false,
         }
+    }
+}
+
+/// Optimizer names accepted by `TrainConfig.optimizer`.
+pub const VALID_OPTIMIZERS: [&str; 3] = ["adamw", "muon", "hybrid"];
+
+/// Validate `TrainConfig.optimizer` and resolve the hybrid-Muon routing flag.
+///
+/// `"muon"` trains matrix weights with Muon and vector weights with AdamW,
+/// which is exactly the hybrid path (pure Muon is undefined for 1-D params).
+pub fn resolve_use_hybrid(config: &TrainConfig) -> Result<bool> {
+    match config.optimizer.as_str() {
+        "adamw" => Ok(false),
+        "muon" | "hybrid" => Ok(true),
+        other => Err(mmn_core::MmnError::Other {
+            message: format!(
+                "Unknown optimizer {other:?}. Valid options: \"adamw\", \"muon\", \"hybrid\"."
+            ),
+        }),
+    }
+}
+
+fn report_epoch(config: &TrainConfig, epoch: usize, mean_loss: f32) {
+    if config.verbose {
+        println!(
+            "[magicmindnet] epoch {}/{} - mean loss {mean_loss:.4}",
+            epoch + 1,
+            config.epochs
+        );
     }
 }
 
@@ -240,7 +272,11 @@ pub fn mean_corpus_loss_with_bpe(
     mean_corpus_loss_with_encoder(model, dataset, bpe.map(TextEncoderRef::Bpe))
 }
 
-pub fn train_corpus(model: &mut Chatbot, dataset: &DatasetCorpus, config: &TrainConfig) -> Result<()> {
+pub fn train_corpus(
+    model: &mut Chatbot,
+    dataset: &DatasetCorpus,
+    config: &TrainConfig,
+) -> Result<Vec<f32>> {
     train_corpus_with_bpe(model, dataset, config, None)
 }
 
@@ -249,13 +285,14 @@ pub fn train_corpus_with_encoder(
     dataset: &DatasetCorpus,
     config: &TrainConfig,
     encoder: Option<TextEncoderRef<'_>>,
-) -> Result<()> {
+) -> Result<Vec<f32>> {
     let cuda_ok = mmn_cuda::is_available();
     Device::require_cuda_available_checked(config.cuda, cuda_ok)?;
     if config.cuda {
         model.device = Device::Cuda;
     }
     mmn_models::validate_dataset_for_chatbot(&dataset.meta.dataset_type)?;
+    let use_hybrid = resolve_use_hybrid(config)?;
     enable_grad(true);
     let mut hybrid = HybridOptimizer::new(
         MuonConfig::default(),
@@ -268,12 +305,12 @@ pub fn train_corpus_with_encoder(
         lr: config.learning_rate,
         ..Default::default()
     });
-    let use_hybrid = config.optimizer == "hybrid";
     let vocab = model.shape.vocab_size;
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let mut epoch_losses = Vec::with_capacity(config.epochs);
 
-    for _epoch in 0..config.epochs {
+    for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
         let mut indices: Vec<usize> = (0..dataset.rows.len()).collect();
         for i in 0..indices.len() {
@@ -283,6 +320,7 @@ pub fn train_corpus_with_encoder(
         let mut accum = mmn_optim::GradAccumulator::new();
         let mut micro = 0usize;
         let mut valid_steps = 0usize;
+        let mut loss_sum = 0.0f32;
         for (i, &idx) in indices.iter().enumerate() {
             let row = &dataset.rows[idx];
             let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder) else {
@@ -290,7 +328,7 @@ pub fn train_corpus_with_encoder(
             };
             valid_steps += 1;
             if batch_size == 1 {
-                model.train_step_lm(
+                loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
                     &mut hybrid,
@@ -302,7 +340,7 @@ pub fn train_corpus_with_encoder(
                 )?;
             } else {
                 micro += 1;
-                model.train_step_lm(
+                loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
                     &mut hybrid,
@@ -327,15 +365,19 @@ pub fn train_corpus_with_encoder(
             }
         }
         if valid_steps == 0 {
+            enable_grad(false);
             return Err(mmn_core::MmnError::DataMismatch {
                 message: "corpus has no rows with at least 2 tokenizable bytes".into(),
                 fix: "Add longer text chunks to the corpus rowfile or txtfile.".into(),
                 explanation: "Corpus LM training needs input/target token pairs.".into(),
             });
         }
+        let mean = loss_sum / valid_steps as f32;
+        report_epoch(config, epoch, mean);
+        epoch_losses.push(mean);
     }
     enable_grad(false);
-    Ok(())
+    Ok(epoch_losses)
 }
 
 pub fn train_corpus_with_bpe(
@@ -343,11 +385,11 @@ pub fn train_corpus_with_bpe(
     dataset: &DatasetCorpus,
     config: &TrainConfig,
     bpe: Option<&BytePairEncoder>,
-) -> Result<()> {
+) -> Result<Vec<f32>> {
     train_corpus_with_encoder(model, dataset, config, bpe.map(TextEncoderRef::Bpe))
 }
 
-pub fn train(model: &mut Chatbot, dataset: &DatasetQA, config: &TrainConfig) -> Result<()> {
+pub fn train(model: &mut Chatbot, dataset: &DatasetQA, config: &TrainConfig) -> Result<Vec<f32>> {
     train_with_bpe(model, dataset, config, None)
 }
 
@@ -356,13 +398,14 @@ pub fn train_with_encoder(
     dataset: &DatasetQA,
     config: &TrainConfig,
     encoder: Option<TextEncoderRef<'_>>,
-) -> Result<()> {
+) -> Result<Vec<f32>> {
     let cuda_ok = mmn_cuda::is_available();
     Device::require_cuda_available_checked(config.cuda, cuda_ok)?;
     if config.cuda {
         model.device = Device::Cuda;
     }
     mmn_models::validate_dataset_for_chatbot(&dataset.meta.dataset_type)?;
+    let use_hybrid = resolve_use_hybrid(config)?;
     enable_grad(true);
     let mut hybrid = HybridOptimizer::new(
         MuonConfig::default(),
@@ -375,12 +418,12 @@ pub fn train_with_encoder(
         lr: config.learning_rate,
         ..Default::default()
     });
-    let use_hybrid = config.optimizer == "hybrid";
     let vocab = model.shape.vocab_size;
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let mut epoch_losses = Vec::with_capacity(config.epochs);
 
-    for _epoch in 0..config.epochs {
+    for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
         let mut indices: Vec<usize> = (0..dataset.samples.len()).collect();
         for i in 0..indices.len() {
@@ -389,6 +432,7 @@ pub fn train_with_encoder(
         }
         let mut accum = mmn_optim::GradAccumulator::new();
         let mut micro = 0usize;
+        let mut loss_sum = 0.0f32;
         for (i, &idx) in indices.iter().enumerate() {
             let sample = &dataset.samples[idx];
             let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
@@ -406,7 +450,7 @@ pub fn train_with_encoder(
                 targets
             };
             if batch_size == 1 {
-                model.train_step_lm(
+                loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
                     &mut hybrid,
@@ -418,7 +462,7 @@ pub fn train_with_encoder(
                 )?;
             } else {
                 micro += 1;
-                model.train_step_lm(
+                loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
                     &mut hybrid,
@@ -442,9 +486,16 @@ pub fn train_with_encoder(
                 }
             }
         }
+        let mean = if indices.is_empty() {
+            0.0
+        } else {
+            loss_sum / indices.len() as f32
+        };
+        report_epoch(config, epoch, mean);
+        epoch_losses.push(mean);
     }
     enable_grad(false);
-    Ok(())
+    Ok(epoch_losses)
 }
 
 pub fn train_with_bpe(
@@ -452,7 +503,7 @@ pub fn train_with_bpe(
     dataset: &DatasetQA,
     config: &TrainConfig,
     bpe: Option<&BytePairEncoder>,
-) -> Result<()> {
+) -> Result<Vec<f32>> {
     train_with_encoder(model, dataset, config, bpe.map(TextEncoderRef::Bpe))
 }
 
@@ -460,9 +511,10 @@ pub fn train_classifier(
     model: &mut Classifier,
     dataset: &DatasetClassification,
     config: &TrainConfig,
-) -> Result<()> {
+) -> Result<Vec<f32>> {
     Device::require_cuda_available_checked(config.cuda, mmn_cuda::is_available())?;
     validate_dataset_for_classifier(&dataset.meta.dataset_type)?;
+    resolve_use_hybrid(config)?;
     enable_grad(true);
     let mut adamw = AdamW::new(AdamWConfig {
         lr: config.learning_rate,
@@ -470,7 +522,8 @@ pub fn train_classifier(
     });
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
-    for _epoch in 0..config.epochs {
+    let mut epoch_losses = Vec::with_capacity(config.epochs);
+    for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
         let mut indices: Vec<usize> = (0..dataset.samples.len()).collect();
         for i in 0..indices.len() {
@@ -487,6 +540,7 @@ pub fn train_classifier(
         let mut accum = mmn_optim::GradAccumulator::new();
         let mut micro = 0usize;
         let mut valid_step = 0usize;
+        let mut loss_sum = 0.0f32;
         for &idx in &indices {
             let (text, tag) = &dataset.samples[idx];
             let Some(label_idx) = model.label_index(tag) else {
@@ -494,10 +548,10 @@ pub fn train_classifier(
             };
             valid_step += 1;
             if batch_size == 1 {
-                model.train_step(text, label_idx, &mut adamw, &mut param_id, None)?;
+                loss_sum += model.train_step(text, label_idx, &mut adamw, &mut param_id, None)?;
             } else {
                 micro += 1;
-                model.train_step(
+                loss_sum += model.train_step(
                     text,
                     label_idx,
                     &mut adamw,
@@ -516,16 +570,23 @@ pub fn train_classifier(
                 }
             }
         }
+        let mean = if valid_step > 0 {
+            loss_sum / valid_step as f32
+        } else {
+            0.0
+        };
+        report_epoch(config, epoch, mean);
+        epoch_losses.push(mean);
     }
     enable_grad(false);
-    Ok(())
+    Ok(epoch_losses)
 }
 
 pub fn train_diffusion(
     model: &mut Diffusion,
     dataset: &DatasetImageGen,
     config: &TrainConfig,
-) -> Result<()> {
+) -> Result<Vec<f32>> {
     Device::require_cuda_available_checked(config.cuda, mmn_cuda::is_available())?;
     validate_dataset_for_diffusion(&dataset.meta.dataset_type)?;
     if dataset.samples.is_empty() {
@@ -541,30 +602,35 @@ pub fn train_diffusion(
         ..Default::default()
     });
     let mut param_id = 0usize;
-    for _epoch in 0..config.epochs {
+    let mut epoch_losses = Vec::with_capacity(config.epochs);
+    for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
         let mut indices: Vec<usize> = (0..dataset.samples.len()).collect();
         for i in 0..indices.len() {
             let j = rng.gen_range(0..indices.len());
             indices.swap(i, j);
         }
+        let mut loss_sum = 0.0f32;
         for &idx in &indices {
             let sample = &dataset.samples[idx];
             let path = dataset.resolve_image_path(&sample.image_path);
             let x = mmn_data::rgb_nchw_tensor_from_image_path(&path)?;
             let t = rng.gen_range(0..1000);
-            model.train_step_denoise(&x, t, &mut adamw, &mut param_id)?;
+            loss_sum += model.train_step_denoise(&x, t, &mut adamw, &mut param_id)?;
         }
+        let mean = loss_sum / indices.len() as f32;
+        report_epoch(config, epoch, mean);
+        epoch_losses.push(mean);
     }
     enable_grad(false);
-    Ok(())
+    Ok(epoch_losses)
 }
 
 pub fn train_diffusion_edit(
     model: &mut Diffusion,
     dataset: &DatasetImageEdit,
     config: &TrainConfig,
-) -> Result<()> {
+) -> Result<Vec<f32>> {
     Device::require_cuda_available_checked(config.cuda, mmn_cuda::is_available())?;
     validate_dataset_for_diffusion(&dataset.meta.dataset_type)?;
     if dataset.samples.is_empty() {
@@ -580,13 +646,15 @@ pub fn train_diffusion_edit(
         ..Default::default()
     });
     let mut param_id = 0usize;
-    for _epoch in 0..config.epochs {
+    let mut epoch_losses = Vec::with_capacity(config.epochs);
+    for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
         let mut indices: Vec<usize> = (0..dataset.samples.len()).collect();
         for i in 0..indices.len() {
             let j = rng.gen_range(0..indices.len());
             indices.swap(i, j);
         }
+        let mut loss_sum = 0.0f32;
         for &idx in &indices {
             let sample = &dataset.samples[idx];
             let image_path = dataset.resolve_image_path(&sample.image);
@@ -594,11 +662,14 @@ pub fn train_diffusion_edit(
             let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path)?;
             let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path)?;
             let t = rng.gen_range(0..1000);
-            model.train_step_denoise_masked(&x, &mask, t, &mut adamw, &mut param_id)?;
+            loss_sum += model.train_step_denoise_masked(&x, &mask, t, &mut adamw, &mut param_id)?;
         }
+        let mean = loss_sum / indices.len() as f32;
+        report_epoch(config, epoch, mean);
+        epoch_losses.push(mean);
     }
     enable_grad(false);
-    Ok(())
+    Ok(epoch_losses)
 }
 
 /// Mean denoise MSE over all `DatasetImageGen` rows at a fixed timestep `t`.
@@ -1685,5 +1756,95 @@ mod tests {
         .unwrap();
         let loss_text = mean_qa_loss(&model, &ds_text).unwrap();
         assert_ne!(loss_with_image, loss_text);
+    }
+
+    #[test]
+    fn resolve_use_hybrid_accepts_documented_optimizers() {
+        for (name, expected) in [("adamw", false), ("muon", true), ("hybrid", true)] {
+            let cfg = TrainConfig {
+                optimizer: name.into(),
+                ..Default::default()
+            };
+            assert_eq!(resolve_use_hybrid(&cfg).unwrap(), expected, "optimizer {name}");
+        }
+    }
+
+    #[test]
+    fn unknown_optimizer_fails_with_valid_options() {
+        let cfg = TrainConfig {
+            optimizer: "sgd".into(),
+            ..Default::default()
+        };
+        let err = resolve_use_hybrid(&cfg).unwrap_err();
+        let msg = err.message().to_string();
+        assert!(msg.contains("sgd") && msg.contains("hybrid"), "got: {msg}");
+        let mut model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(3));
+        let train_err = train(&mut model, &toy_dataset(), &cfg).unwrap_err();
+        assert!(train_err.message().contains("sgd"));
+    }
+
+    #[test]
+    fn train_returns_one_mean_loss_per_epoch() {
+        let ds = toy_dataset();
+        let mut model = Chatbot::new_with_seed(false, None, 256, Some(1), Some(16), Some(5));
+        let cfg = TrainConfig {
+            epochs: 3,
+            batch_size: 1,
+            learning_rate: 0.05,
+            optimizer: "adamw".into(),
+            ..Default::default()
+        };
+        let losses = train(&mut model, &ds, &cfg).unwrap();
+        assert_eq!(losses.len(), 3);
+        assert!(losses.iter().all(|l| l.is_finite() && *l > 0.0));
+        assert!(
+            losses[2] < losses[0],
+            "epoch losses should trend down: {losses:?}"
+        );
+    }
+
+    #[test]
+    fn train_classifier_returns_one_mean_loss_per_epoch() {
+        use mmn_data::{DatasetClassification, DatasetMeta, DatasetType};
+        let ds = DatasetClassification {
+            meta: DatasetMeta {
+                rows: 2,
+                format: "test".into(),
+                dataset_type: DatasetType::Classification,
+            },
+            samples: vec![("sun".into(), "A".into()), ("rain".into(), "B".into())],
+        };
+        let mut model = Classifier::from_classification_dataset_seed(&ds, 32, Some(9));
+        let cfg = TrainConfig {
+            epochs: 4,
+            learning_rate: 0.05,
+            optimizer: "adamw".into(),
+            ..Default::default()
+        };
+        let losses = train_classifier(&mut model, &ds, &cfg).unwrap();
+        assert_eq!(losses.len(), 4);
+        assert!(losses.iter().all(|l| l.is_finite() && *l > 0.0));
+    }
+
+    #[test]
+    fn muon_optimizer_name_trains_matrix_weights() {
+        let ds = toy_dataset();
+        let mut model = Chatbot::new_with_seed(false, None, 256, Some(1), Some(16), Some(6));
+        let ffn_before: Vec<f32> = model.blocks[0].ffn.weight.data.iter().copied().collect();
+        let cfg = TrainConfig {
+            epochs: 1,
+            batch_size: 1,
+            learning_rate: 0.05,
+            optimizer: "muon".into(),
+            ..Default::default()
+        };
+        train(&mut model, &ds, &cfg).unwrap();
+        let ffn_after: Vec<f32> = model.blocks[0].ffn.weight.data.iter().copied().collect();
+        assert_ne!(ffn_before, ffn_after, "muon should update matrix weights");
+    }
+
+    #[test]
+    fn train_config_default_is_not_verbose() {
+        assert!(!TrainConfig::default().verbose);
     }
 }

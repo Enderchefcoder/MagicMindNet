@@ -3,12 +3,16 @@ use mmn_train::{
     align_qa_token_pairs, mean_corpus_loss_with_encoder, mean_qa_loss_with_encoder, tokenize_lm,
 };
 use mmn_models::{targets_with_vision_prefix, vision_patch_from_text, vision_rgb_patch_from_text};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
 use crate::encoder_util::resolve_text_encoder;
 use crate::errors::{mmn_err_to_py, DataMismatchError};
+use crate::io::{expect_checkpoint_family, export_chatbot_to_path, import_chatbot_from_path};
 use crate::tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
+use crate::train::train_chatbot_dispatch;
+use crate::train_config::{resolve_train_config, PyTrainConfig};
 
 fn resolve_generate_vision_patches(
     bot: &Chatbot,
@@ -86,6 +90,7 @@ fn build_generate_config(
     }
 }
 
+/// A small transformer language model you can train, chat with, and save.
 #[pyclass(name = "Chatbot")]
 pub struct PyChatbot {
     pub(crate) inner: Chatbot,
@@ -108,11 +113,25 @@ impl PyChatbot {
         rope_theta: f32,
         n_heads: Option<usize>,
         n_kv_heads: Option<usize>,
-    ) -> Self {
+    ) -> PyResult<Self> {
         if use_learned_pos_embed && use_rope {
-            panic!("Chatbot cannot use both use_learned_pos_embed and use_rope");
+            return Err(PyValueError::new_err(
+                "Chatbot cannot use both use_learned_pos_embed=True and use_rope=True.\nFix: Pick one position-encoding mode (learned table or rotary).",
+            ));
         }
-        Self {
+        if let Some(budget) = autoset.as_deref() {
+            if !mmn_models::is_valid_autoset_budget(budget) {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown autoset preset {budget:?}. Valid presets: \"sub-100M\", \"sub-1B\", \"sub-10B\".",
+                )));
+            }
+        }
+        if vocab_size == 0 {
+            return Err(PyValueError::new_err(
+                "vocab_size must be at least 1.\nFix: Use vocab_size=512 for byte-level toy models or 32000 for BPE-scale vocabularies.",
+            ));
+        }
+        Ok(Self {
             inner: Chatbot::new_with_position_options(
                 vision,
                 autoset.as_deref(),
@@ -127,7 +146,104 @@ impl PyChatbot {
                 n_heads,
                 n_kv_heads,
             ),
-        }
+        })
+    }
+
+    /// Save this chatbot to `path` ("safetensors" JSON by default,
+    /// "hf-safetensors" binary, or "bin" architecture stub).
+    #[pyo3(signature = (path, format="safetensors", bpe_encoder=None, unigram_encoder=None))]
+    fn save(
+        &self,
+        path: &str,
+        format: &str,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
+    ) -> PyResult<()> {
+        export_chatbot_to_path(&self.inner, format, path, bpe_encoder, unigram_encoder)
+    }
+
+    /// Load a chatbot checkpoint; the file format is detected automatically.
+    #[staticmethod]
+    #[pyo3(signature = (path, format=None))]
+    fn load(path: &str, format: Option<&str>) -> PyResult<Self> {
+        let format = match format {
+            Some(f) => f.to_string(),
+            None => {
+                match expect_checkpoint_family(
+                    path,
+                    "Chatbot",
+                    "Use Classifier.load() / Diffusion.load() or the universal ai.load().",
+                )? {
+                    mmn_io::CheckpointKind::ChatbotBin => "bin".to_string(),
+                    _ => "safetensors".to_string(),
+                }
+            }
+        };
+        Ok(Self {
+            inner: import_chatbot_from_path(&format, path)?,
+        })
+    }
+
+    /// Train on a `DatasetQA` or `DatasetCorpus`; returns one mean loss per epoch.
+    ///
+    /// All settings are optional: `bot.train(data)` uses sensible defaults, or
+    /// pass `epochs=`, `learning_rate=`, ... to override (a full `TrainConfig`
+    /// in `config=` also works).
+    #[pyo3(signature = (dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn train(
+        &mut self,
+        dataset: &Bound<'_, PyAny>,
+        config: Option<&PyTrainConfig>,
+        epochs: Option<usize>,
+        batch_size: Option<usize>,
+        learning_rate: Option<f32>,
+        optimizer: Option<&str>,
+        cuda: Option<bool>,
+        verbose: Option<bool>,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
+    ) -> PyResult<Vec<f32>> {
+        let cfg = resolve_train_config(
+            config,
+            epochs,
+            batch_size,
+            learning_rate,
+            optimizer,
+            cuda,
+            verbose,
+        )?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        train_chatbot_dispatch(self, dataset, &cfg, enc)
+    }
+
+    /// Generate a reply with beginner-friendly sampling defaults
+    /// (temperature 0.8, top-p 0.95, light repetition penalty).
+    #[pyo3(signature = (prompt, *, max_new_tokens=64, temperature=0.8, top_p=0.95, top_k=0, repetition_penalty=1.1, stop_strings=None, bpe_encoder=None, unigram_encoder=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn chat(
+        &self,
+        prompt: &str,
+        max_new_tokens: usize,
+        temperature: f32,
+        top_p: f32,
+        top_k: usize,
+        repetition_penalty: f32,
+        stop_strings: Option<Vec<String>>,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
+    ) -> PyResult<String> {
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let cfg = mmn_train::GenerateConfig {
+            max_new_tokens,
+            temperature,
+            top_p,
+            top_k,
+            repetition_penalty,
+            stop_strings: stop_strings.unwrap_or_default(),
+            ..Default::default()
+        };
+        mmn_train::generate_text(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
 
     #[getter]
@@ -232,21 +348,20 @@ impl PyChatbot {
 
     fn __repr__(&self) -> String {
         let s = &self.inner.shape;
+        let vision = if self.inner.vision { "True" } else { "False" };
         match self.inner.init_seed {
             Some(seed) => format!(
-                "Chatbot(vocab_size={}, n_layer={}, d_model={}, vision={}, parameters={}, init_seed={seed})",
+                "Chatbot(vocab_size={}, n_layer={}, d_model={}, vision={vision}, parameters={}, init_seed={seed})",
                 s.vocab_size,
                 s.n_layer,
                 s.d_model,
-                self.inner.vision,
                 self.inner.parameters()
             ),
             None => format!(
-                "Chatbot(vocab_size={}, n_layer={}, d_model={}, vision={}, parameters={})",
+                "Chatbot(vocab_size={}, n_layer={}, d_model={}, vision={vision}, parameters={})",
                 s.vocab_size,
                 s.n_layer,
                 s.d_model,
-                self.inner.vision,
                 self.inner.parameters()
             ),
         }

@@ -5,7 +5,13 @@ use std::path::Path;
 
 use crate::datasets::{PyDatasetImageEdit, PyDatasetImageGen};
 use crate::errors::{mmn_err_to_py, DataMismatchError};
+use crate::io::{
+    expect_checkpoint_family, export_diffusion_to_path, import_diffusion_from_path,
+};
+use crate::train::train_diffusion_dispatch;
+use crate::train_config::{resolve_train_config, PyTrainConfig};
 
+/// A small latent-diffusion image model (VAE + UNet) for 8x8 RGB patches.
 #[pyclass(name = "Diffusion")]
 pub struct PyDiffusion {
     pub(crate) inner: Diffusion,
@@ -49,6 +55,58 @@ impl PyDiffusion {
             self.inner.latent_channels,
             self.inner.parameters()
         )
+    }
+
+    /// Save this diffusion model to `path` (`mmn-diffusion-v1` JSON).
+    #[pyo3(signature = (path, format="safetensors"))]
+    fn save(&self, path: &str, format: &str) -> PyResult<()> {
+        export_diffusion_to_path(&self.inner, format, path)
+    }
+
+    /// Load a diffusion checkpoint; the file format is detected automatically.
+    #[staticmethod]
+    #[pyo3(signature = (path, format=None))]
+    fn load(path: &str, format: Option<&str>) -> PyResult<Self> {
+        let format = match format {
+            Some(f) => f.to_string(),
+            None => {
+                expect_checkpoint_family(
+                    path,
+                    "Diffusion",
+                    "Use Chatbot.load() / Classifier.load() or the universal ai.load().",
+                )?;
+                "safetensors".to_string()
+            }
+        };
+        Ok(Self {
+            inner: import_diffusion_from_path(&format, path)?,
+        })
+    }
+
+    /// Train on a `DatasetImageGen` or `DatasetImageEdit`; returns one mean loss per epoch.
+    #[pyo3(signature = (dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn train(
+        &mut self,
+        dataset: &Bound<'_, PyAny>,
+        config: Option<&PyTrainConfig>,
+        epochs: Option<usize>,
+        batch_size: Option<usize>,
+        learning_rate: Option<f32>,
+        optimizer: Option<&str>,
+        cuda: Option<bool>,
+        verbose: Option<bool>,
+    ) -> PyResult<Vec<f32>> {
+        let cfg = resolve_train_config(
+            config,
+            epochs,
+            batch_size,
+            learning_rate,
+            optimizer,
+            cuda,
+            verbose,
+        )?;
+        train_diffusion_dispatch(self, dataset, &cfg)
     }
 
     /// One random latent training step; returns True when the UNet output is finite.

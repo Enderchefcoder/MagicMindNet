@@ -10,6 +10,17 @@ pub struct ModelShape {
     pub estimated_params: usize,
 }
 
+/// Autoset presets accepted by `Chatbot(autoset=...)`.
+pub const VALID_AUTOSET_BUDGETS: [&str; 3] = ["sub-100M", "sub-1B", "sub-10B"];
+
+/// True when `budget` is a recognized autoset preset (either spelling).
+pub fn is_valid_autoset_budget(budget: &str) -> bool {
+    matches!(
+        budget,
+        "sub-100M" | "sub_100m" | "sub-1B" | "sub_1b" | "sub-10B" | "sub_10b"
+    )
+}
+
 pub fn autoset(budget: &str, vocab_size: usize) -> ModelShape {
     let param_budget = match budget {
         "sub-100M" | "sub_100m" => 100_000_000,

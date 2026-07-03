@@ -2,6 +2,7 @@ mod block_tensors;
 mod chatbot_io;
 mod checkpoint_util;
 mod classifier_io;
+mod detect;
 mod diffusion_io;
 mod hf_adapt;
 mod hf_classifier_safetensors;
@@ -13,6 +14,7 @@ pub use chatbot_io::{
     export_bin, export_safetensors, import_bin, import_safetensors, merge_models, quantize_model,
     TokenizerSidecarRefs,
 };
+pub use detect::{detect_checkpoint_kind, CheckpointKind};
 pub use hf_classifier_safetensors::{
     export_hf_classifier_safetensors, hf_classifier_name_to_mmn, import_hf_classifier_safetensors,
     import_hf_classifier_safetensors_bytes, HF_CLASSIFIER_FORMAT,
