@@ -4,6 +4,9 @@ Set-Location $PSScriptRoot\..
 
 $PY = & "$PSScriptRoot\venv_python.ps1"
 
+Write-Host "== examples/hello_ai =="
+& $PY examples/hello_ai.py
+
 Write-Host "== examples/quickstart =="
 & $PY examples/quickstart.py
 

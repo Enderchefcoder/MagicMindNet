@@ -2,8 +2,11 @@
 
 Runnable demos live here. From the repo root, activate `.venv` and run `maturin develop --release` first.
 
+**New to MagicMindNet? Start with [hello_ai.py](hello_ai.py)** — it trains a chatbot and a classifier with in-memory data, no files required.
+
 | Script | Purpose |
 |--------|---------|
+| [hello_ai.py](hello_ai.py) | **Beginner start here**: in-memory data, `bot.train`, `bot.chat`, `save`/`ai.load`, `predict_label` |
 | [quickstart.py](quickstart.py) | Minimal QA load → train → export (optional `--learned-pe`, `--rope`, `--bpe`) |
 | [benchmark_train.py](benchmark_train.py) | Mean QA loss before/after `Train` (optional `--learned-pe`, `--rope`, `--bpe`) |
 | [bpe_roundtrip.py](bpe_roundtrip.py) | BPE `save`/`load` parity + optional `--train` with `bpe_encoder` |
@@ -30,6 +33,7 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 ## Quick commands
 
 ```powershell
+python examples/hello_ai.py
 python examples/quickstart.py
 python examples/benchmark_train.py
 python examples/rl_spin.py

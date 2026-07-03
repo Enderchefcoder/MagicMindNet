@@ -4,6 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PY="$(bash "$(dirname "$0")/venv_python.sh")"
 
+echo "== examples/hello_ai =="
+"$PY" examples/hello_ai.py
+
 echo "== examples/quickstart =="
 "$PY" examples/quickstart.py
 

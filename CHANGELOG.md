@@ -2,6 +2,28 @@
 
 ## 0.1.0 — 2026-05-31
 
+### Added (beginner API overhaul: train/chat/save/load, in-memory data, typed errors)
+- **Method-style workflow on every model**: `bot.train(data, epochs=...)`, `bot.chat(prompt)`,
+  `model.save(path)`, `Model.load(path)`, `clf.predict_label(text)`, `clf.train(...)`, `diff.train(...)`
+- **Universal `ai.load(path)`** auto-detects model family (Chatbot / Classifier / Diffusion)
+  and format (JSON, binary HF safetensors, bin stub) via new `mmn-io detect_checkpoint_kind`;
+  wrong-family `Model.load` raises `ValueError` naming the actual family
+- **In-memory datasets**: `DatasetQA(data=[{"input": ..., "output": ...}])` and
+  `DatasetClassification(data=[{"text": ..., "label": ...}])` — no files needed (`format == "memory"`)
+- **Training returns loss history**: `Train` / `TrainClassifier` / `TrainDiffusion` and the
+  `model.train` methods return one mean-loss value per epoch; `TrainConfig(verbose=True)`
+  prints `[magicmindnet] epoch i/n - mean loss ...`
+- **Validation instead of panics/silence**: unknown `TrainConfig.optimizer` raises `ValueError`
+  (was silently treated as AdamW); `optimizer="muon"` now routes matrix weights through Muon;
+  `Chatbot(use_learned_pos_embed=True, use_rope=True)` raises `ValueError` (was a Rust panic);
+  unknown `autoset` presets and `vocab_size=0` raise `ValueError` (were silent fallbacks)
+- **IDE typing**: package ships `py.typed` + complete `_native.pyi` stubs
+- Python-style booleans in `Chatbot` / `TrainConfig` reprs; `vision.py` cleanup (top-level imports)
+- New beginner docs: `docs/getting_started.md`, README beginner quick start, `examples/hello_ai.py`
+- Tests: `test_model_train_methods.py`, `test_model_save_load.py`, `test_dataset_in_memory.py`,
+  `test_constructor_validation.py`, `test_chatbot_chat.py`, `test_classifier_predict_label.py`,
+  `test_type_stubs.py`; Rust `detect` module tests + optimizer/loss-history regressions
+
 ### Added (image dataset path resolvers + diffusion merge demo)
 - Python `resolve_image_path`, `image_path_at`, `prompt_at` on `DatasetImageGen`
 - Python `resolve_mask_path`, `mask_path_at` on `DatasetImageEdit`; inpaint sample uses manifest paths

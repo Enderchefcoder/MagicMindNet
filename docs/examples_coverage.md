@@ -4,6 +4,7 @@ Runnable scripts under `examples/` and how they are regression-tested.
 
 | Script | Purpose | Smoke (`smoke_examples`) | pytest (`test_examples_scripts_py`) |
 |--------|---------|--------------------------|-------------------------------------|
+| [hello_ai.py](../examples/hello_ai.py) | Beginner tour: in-memory data, `bot.train`/`chat`/`save`, `ai.load`, `predict_label` | yes | yes |
 | [quickstart.py](../examples/quickstart.py) | Minimal QA train + export; `--learned-pe` | yes | yes |
 | [benchmark_train.py](../examples/benchmark_train.py) | QA mean loss before/after `Train`; `--learned-pe` | yes | yes |
 | [eval_mean_loss.py](../examples/eval_mean_loss.py) | Mean CE (`qa` / `cls` / `corpus`) or denoise loss (`diffusion` / `diffusion-edit`); `--learned-pe`, `--train` | yes (all modes) | yes (+ flag variants) |
