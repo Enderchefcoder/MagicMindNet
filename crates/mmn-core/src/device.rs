@@ -2,7 +2,9 @@ use crate::error::{MmnError, Result};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum Device {
+    #[default]
     Cpu,
     Cuda,
 }
@@ -50,8 +52,3 @@ impl fmt::Display for Device {
     }
 }
 
-impl Default for Device {
-    fn default() -> Self {
-        Device::Cpu
-    }
-}

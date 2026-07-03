@@ -81,7 +81,7 @@ pub fn estimate_params(
     n_heads: usize,
     n_kv_heads: usize,
 ) -> usize {
-    let head_dim = if n_heads > 0 { d_model / n_heads } else { d_model };
+    let head_dim = d_model.checked_div(n_heads).unwrap_or(d_model);
     let kv_dim = n_kv_heads * head_dim;
     let embed = vocab_size * d_model;
     let attn = 2 * d_model * d_model + 2 * kv_dim * d_model;

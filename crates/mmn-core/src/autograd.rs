@@ -18,8 +18,8 @@ pub struct Node {
 }
 
 thread_local! {
-    static TAPE: RefCell<Vec<Node>> = RefCell::new(Vec::new());
-    static ENABLED: RefCell<bool> = RefCell::new(false);
+    static TAPE: RefCell<Vec<Node>> = const { RefCell::new(Vec::new()) };
+    static ENABLED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 pub fn enable_grad(enabled: bool) {
@@ -54,7 +54,7 @@ pub fn register_node(parents: Vec<u64>, backward: BackwardFn) -> u64 {
 pub fn backward(root: &Tensor, grad: Option<ArrayD<f32>>) -> Vec<(u64, ArrayD<f32>)> {
     let mut grads: std::collections::HashMap<u64, ArrayD<f32>> = std::collections::HashMap::new();
     let root_id = root.node_id.unwrap_or(0);
-    let init = grad.unwrap_or_else(|| ArrayD::ones(IxDyn(&root.shape)).into());
+    let init = grad.unwrap_or_else(|| ArrayD::ones(IxDyn(&root.shape)));
     grads.insert(root_id, init);
 
     let mut tape = TAPE.with(|t| std::mem::take(&mut *t.borrow_mut()));
@@ -63,7 +63,7 @@ pub fn backward(root: &Tensor, grad: Option<ArrayD<f32>>) -> Vec<(u64, ArrayD<f3
         if let Some(g) = grads.get(&node.id).cloned() {
             if let Some(bw) = node.backward {
                 let parent_grads = bw(&g);
-                for (pid, pg) in node.parents.iter().zip(parent_grads.into_iter()) {
+                for (pid, pg) in node.parents.iter().zip(parent_grads) {
                     grads
                         .entry(*pid)
                         .and_modify(|acc| {

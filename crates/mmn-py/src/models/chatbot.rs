@@ -60,6 +60,7 @@ fn resolve_generate_vision_patches(
     Ok(Some(patch_list))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_generate_config(
     max_new_tokens: usize,
     temperature: f32,
@@ -100,6 +101,7 @@ pub struct PyChatbot {
 impl PyChatbot {
     #[new]
     #[pyo3(signature = (vision=false, autoset=None, vocab_size=32000, n_layer=None, d_model=None, seed=None, use_learned_pos_embed=false, max_seq_len=512, use_rope=false, rope_theta=10000.0, n_heads=None, n_kv_heads=None))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         vision: bool,
         autoset: Option<String>,
@@ -453,6 +455,7 @@ impl PyChatbot {
 
     /// Autoregressive continuation from `prompt` (greedy when `temperature=0`).
     #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, stop_token_ids=None, stop_strings=None))]
+    #[allow(clippy::too_many_arguments)]
     fn generate(
         &self,
         prompt: &str,
@@ -494,6 +497,7 @@ impl PyChatbot {
 
     /// Sample new token ids after `prompt` (excludes prompt tokens).
     #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, stop_token_ids=None, stop_strings=None))]
+    #[allow(clippy::too_many_arguments)]
     fn generate_tokens(
         &self,
         prompt: &str,

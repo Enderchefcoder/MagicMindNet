@@ -54,7 +54,7 @@ pub(crate) fn json_byte(v: &serde_json::Value) -> Result<u8, MmnError> {
 }
 
 pub(crate) fn expect_tensor_shape(t: &Tensor, expected: &[usize], name: &str) -> Result<(), MmnError> {
-    let shape: Vec<usize> = t.data.shape().iter().copied().collect();
+    let shape: Vec<usize> = t.data.shape().to_vec();
     if shape.as_slice() != expected {
         return Err(MmnError::Other {
             message: format!("{name} shape mismatch: expected {expected:?}, got {shape:?}"),

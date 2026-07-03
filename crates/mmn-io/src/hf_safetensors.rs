@@ -346,7 +346,7 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
         let embed = mmn_tensors.get("embed").ok_or_else(|| MmnError::Other {
             message: "HF safetensors missing embed / model.embed_tokens.weight".into(),
         })?;
-        let shape: Vec<usize> = embed.data.shape().iter().copied().collect();
+        let shape: Vec<usize> = embed.data.shape().to_vec();
         if shape.len() != 2 {
             return Err(MmnError::Other {
                 message: format!("embed shape {:?} cannot infer vocab_size/d_model", shape),

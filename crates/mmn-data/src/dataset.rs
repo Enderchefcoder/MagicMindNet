@@ -98,7 +98,7 @@ fn load_qa_json(path: &Path, cfg: &DatasetQAConfig) -> Result<Vec<QaSample>, Mmn
     let rows: Vec<Value> = if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
         text.lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l))
+            .map(serde_json::from_str)
             .collect::<Result<_, _>>()
             .map_err(|e| MmnError::Other {
                 message: e.to_string(),

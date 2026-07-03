@@ -122,6 +122,7 @@ pub fn TrainDiffusion(
 
 #[pyfunction]
 #[pyo3(signature = (model, dataset, train_config, reward_amount, punishment_amount, rl_type="policy", bpe_encoder=None, unigram_encoder=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn RL(
     model: &mut PyChatbot,
     dataset: &Bound<'_, PyAny>,

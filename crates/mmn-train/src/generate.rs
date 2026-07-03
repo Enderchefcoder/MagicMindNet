@@ -265,7 +265,7 @@ fn last_token_scores(
     Ok(scores)
 }
 
-fn context_window<'a>(tokens: &'a [usize], max_ctx: usize) -> &'a [usize] {
+fn context_window(tokens: &[usize], max_ctx: usize) -> &[usize] {
     let start = tokens.len().saturating_sub(max_ctx);
     &tokens[start..]
 }
