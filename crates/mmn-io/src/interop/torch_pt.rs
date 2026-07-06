@@ -289,29 +289,70 @@ fn stubs_from_state_dict(
     Ok((stubs, meta))
 }
 
+fn array_from_stub(
+    name: &str,
+    stub: &TensorStub,
+    storages: &HashMap<&str, &[u8]>,
+) -> Result<Vec<f32>, MmnError> {
+    let raw = storages.get(stub.storage_key.as_str()).ok_or_else(|| {
+        err(format!(
+            "torch checkpoint missing storage blob {} for tensor {name}",
+            stub.storage_key
+        ))
+    })?;
+    let item = stub.dtype.item_size();
+    if !raw.len().is_multiple_of(item) {
+        return Err(err(format!(
+            "torch storage {} has {} bytes, not a multiple of item size {item}",
+            stub.storage_key,
+            raw.len()
+        )));
+    }
+    let values: Vec<f32> = raw.chunks_exact(item).map(|c| stub.dtype.decode(c)).collect();
+    gather_strided(&values, stub.storage_offset, &stub.shape, &stub.stride)
+}
+
+/// Decode all tensors, fanning storage decode out across available cores.
 fn arrays_from_stubs(
     stubs: NamedStubs,
     storages: &HashMap<&str, &[u8]>,
 ) -> Result<Vec<super::NamedArray>, MmnError> {
-    let mut arrays = Vec::with_capacity(stubs.len());
-    for (name, stub) in stubs {
-        let raw = storages.get(stub.storage_key.as_str()).ok_or_else(|| {
-            err(format!(
-                "torch checkpoint missing storage blob {} for tensor {name}",
-                stub.storage_key
-            ))
-        })?;
-        let item = stub.dtype.item_size();
-        if !raw.len().is_multiple_of(item) {
-            return Err(err(format!(
-                "torch storage {} has {} bytes, not a multiple of item size {item}",
-                stub.storage_key,
-                raw.len()
-            )));
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(stubs.len().max(1));
+    if workers <= 1 {
+        let mut arrays = Vec::with_capacity(stubs.len());
+        for (name, stub) in stubs {
+            let data = array_from_stub(&name, &stub, storages)?;
+            arrays.push((name, stub.shape, data));
         }
-        let values: Vec<f32> = raw.chunks_exact(item).map(|c| stub.dtype.decode(c)).collect();
-        let data = gather_strided(&values, stub.storage_offset, &stub.shape, &stub.stride)?;
-        arrays.push((name, stub.shape, data));
+        return Ok(arrays);
+    }
+    let chunk_size = stubs.len().div_ceil(workers);
+    let results: Vec<Result<Vec<super::NamedArray>, MmnError>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = stubs
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|(name, stub)| {
+                            array_from_stub(name, stub, storages)
+                                .map(|data| (name.clone(), stub.shape.clone(), data))
+                        })
+                        .collect()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("torch decode worker panicked"))
+            .collect()
+    });
+    let mut arrays = Vec::with_capacity(stubs.len());
+    for chunk in results {
+        arrays.extend(chunk?);
     }
     Ok(arrays)
 }

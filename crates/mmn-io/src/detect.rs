@@ -25,6 +25,8 @@ pub enum CheckpointKind {
     ChatbotNpz,
     /// PyTorch `.pt` / `.pth` state-dict archive of chatbot weights.
     ChatbotTorch,
+    /// Sharded HF checkpoint index (`*.index.json` + shard files).
+    ChatbotSharded,
 }
 
 impl CheckpointKind {
@@ -35,7 +37,8 @@ impl CheckpointKind {
             | CheckpointKind::ChatbotBin
             | CheckpointKind::ChatbotGguf
             | CheckpointKind::ChatbotNpz
-            | CheckpointKind::ChatbotTorch => "Chatbot",
+            | CheckpointKind::ChatbotTorch
+            | CheckpointKind::ChatbotSharded => "Chatbot",
             CheckpointKind::Classifier => "Classifier",
             CheckpointKind::Diffusion => "Diffusion",
         }
@@ -120,6 +123,9 @@ pub fn detect_checkpoint_kind(path: &str) -> Result<CheckpointKind, MmnError> {
     }
     if is_legacy_torch_bytes(&bytes) {
         return Ok(CheckpointKind::ChatbotTorch);
+    }
+    if crate::interop::sharded::is_shard_index_bytes(&bytes) {
+        return Ok(CheckpointKind::ChatbotSharded);
     }
     if is_hf_binary_bytes(&bytes) {
         detect_binary_kind(&bytes)
