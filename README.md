@@ -146,7 +146,7 @@ flowchart TB
 | **Generation** | KV cache, top-k/top-p/min-p, repetition/frequency/presence penalties, stop strings, sliding context |
 | **RL / SPIN** | Toy alignment loops on small models |
 | **IO** | Universal `ai.load(path)` auto-detects model family + format; `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
-| **Global formats** | **GGUF read/write from scratch** (Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q4_K/Q6_K dequant, no llama.cpp), **PyTorch `.pt`** state dicts (from-scratch pickle VM, `torch.load`-compatible export), **NumPy `.npy`/`.npz`** (numpy-free codec + DEFLATE inflate; TensorFlow/Keras bridge) — [docs/interop.md](docs/interop.md) |
+| **Global formats** | **GGUF read/write from scratch** (no llama.cpp): classic quants, full k-quant family Q2_K–Q8_K, IQ4_NL/IQ4_XS, ternary TQ1_0/TQ2_0, MXFP4; parallel dequant; header-only `gguf_info`; embedded SentencePiece tokenizers (`load_gguf_tokenizer`, self-contained exports). **PyTorch `.pt`** state dicts (from-scratch pickle VM, zip + legacy pre-1.6, `torch.load`-compatible export). **NumPy `.npy`/`.npz`** (numpy-free codec + DEFLATE inflate). **HDF5/Keras** `.h5`/`.keras` reading without h5py — [docs/interop.md](docs/interop.md) |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
@@ -246,9 +246,12 @@ ai.merge_classifier(clf_a, clf_b)
 ai.quantize_classifier(clf, "int4")
 ai.limit("50%")  # resource cap helper
 
-# Generic array IO — no numpy/torch required (but their arrays are accepted)
+# Generic array IO — no numpy/torch/h5py required (but their arrays are accepted)
 ai.save_npz("arrays.npz", {"w": [[1.0, 2.0]]})
 ai.save_pt("arrays.pt", {"w": [[1.0, 2.0]]})   # torch.load-compatible
+weights = ai.load_h5("model.weights.h5")       # HDF5 / Keras without h5py
+info = ai.gguf_info("model.gguf")              # GGUF metadata, header-only read
+tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab
 ```
 
 Full API reference: [docs/API.md](docs/API.md). Beginner tutorial: [docs/getting_started.md](docs/getting_started.md).
@@ -310,8 +313,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **395**
-- pytest: **772**
+- Rust `#[test]`: **427**
+- pytest: **796**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

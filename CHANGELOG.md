@@ -2,6 +2,40 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 2: full quant coverage, HDF5, legacy torch, GGUF tokenizers)
+- **Every practical GGML quantization**: Q2_K / Q3_K / Q5_K / Q8_K join Q4_K/Q6_K
+  (full k-quant family); IQ4_NL / IQ4_XS non-linear lookup quants; TQ1_0 / TQ2_0
+  ternary BitNet quants; **MXFP4** (E8M0-scaled FP4, gpt-oss era); Q8_1. Removed
+  ids (Q4_2/Q4_3, repacked Q4_0_x_x) and grid-codebook IQ1/IQ2/IQ3 rejected with
+  actionable messages. GGUF writer gains **F16 and Q4_0** encodings
+  (`format="gguf-f16"` / `"gguf-q4_0"`)
+- **GGUF inspection + embedded tokenizers**: `ai.gguf_info(path)` returns version,
+  full metadata (incl. `tokenizer.chat_template`), and tensor summaries from a
+  header-only incremental read (multi-GB files never fully load);
+  `ai.load_gguf_tokenizer(path)` converts embedded SentencePiece vocabs
+  (`▁` markers, `<0xNN>` byte tokens) into a `UnigramEncoder` with model-aligned
+  ids; `bot.save(..., format="gguf", unigram_encoder=tok)` embeds the vocab for a
+  **self-contained model file** (llama.cpp convention)
+- **Legacy PyTorch (pre-1.6) checkpoints**: the non-zip pickle-stream format
+  (magic `0x1950a86a20f9469cfc6c`, protocol/sys-info pickles, appended raw
+  storages) is auto-detected by `ai.load` / `ai.load_pt`; pickle VM adds LONG/
+  big-LONG1 opcodes and prefix parsing
+- **From-scratch HDF5 reader** — the TensorFlow/Keras bridge: superblock v0/1,
+  v1 object headers + continuations, B-tree v1 symbol-table groups, local heaps,
+  compact/contiguous datasets of all fixed/float types. `ai.load_h5(path)` and
+  `ai.load_keras(path)` (`.keras` v3 zip archives, `.weights.h5`, plain `.h5`);
+  committed `tests/fixtures/simple.h5` validates against real h5py output
+- **Performance**: GGUF tensors dequantize in parallel across all cores; CRC-32
+  table cached in a `OnceLock`; unigram Viterbi uses a hash-map piece index
+  (O(n·window) instead of a linear vocab scan — required for 32k+ GGUF vocabs)
+- `UnigramEncoder::from_pieces` builds encoders from external vocabularies,
+  preserving id order; Viterbi window sizes to the longest piece
+- Tests: +32 Rust (every quant codec against hand-built blocks, legacy torch
+  streams, HDF5 fixture, embedded tokenizer roundtrip, parallel dequant) and
+  +31 pytest (`test_interop_h5_py`, `test_interop_gguf_info_py`,
+  `test_interop_legacy_pt_py`, self-contained GGUF chat); h5py added to dev
+  extras for cross-validation
+
 ### Added (global format interop: GGUF, PyTorch, NumPy/TensorFlow — all from scratch)
 - **GGUF read/write with zero llama.cpp code**: from-scratch container parser (v2/v3
   headers, typed metadata KV, aligned tensor data) plus block-dequant codecs for

@@ -1,21 +1,25 @@
-# Global format interop — GGUF, PyTorch, NumPy/TensorFlow
+# Global format interop — GGUF, PyTorch, NumPy, TensorFlow/Keras
 
 MagicMindNet reads and writes the major model/array formats of the wider ML
 ecosystem. **Every codec is implemented from scratch in the Rust core** — no
-llama.cpp, no libtorch, no zlib, and no Python-side numpy/torch dependency.
+llama.cpp, no libtorch, no zlib, no HDF5 library, and no Python-side
+numpy/torch/h5py dependency.
 
 | Format | Extension | Read | Write | Implementation |
 | --- | --- | --- | --- | --- |
 | MMN JSON safetensors | `.mmn` | ✅ | ✅ | `mmn-safetensors-v1` wrapper |
 | HF binary safetensors | `.safetensors` | ✅ | ✅ | `safetensors` container |
-| GGUF (llama.cpp ecosystem) | `.gguf` | ✅ | ✅ (F32, Q8_0) | from-scratch container + dequant |
-| PyTorch state dict | `.pt` / `.pth` | ✅ | ✅ | from-scratch ZIP + pickle VM |
+| GGUF (llama.cpp ecosystem) | `.gguf` | ✅ | ✅ (F32/F16/Q8_0/Q4_0) | from-scratch container + dequant |
+| PyTorch state dict (zip, ≥1.6) | `.pt` / `.pth` | ✅ | ✅ | from-scratch ZIP + pickle VM |
+| PyTorch legacy (pre-1.6) | `.pt` / `.pth` | ✅ | — | pickle-stream + raw storages |
 | NumPy archive | `.npz` | ✅ | ✅ | from-scratch ZIP + NPY codec |
 | NumPy array | `.npy` | ✅ | ✅ | from-scratch NPY codec |
+| HDF5 / Keras weights | `.h5` / `.weights.h5` | ✅ | — | from-scratch HDF5 reader |
+| Keras v3 archive | `.keras` | ✅ | — | ZIP + HDF5 reader |
 | Architecture stub | `.bin` | ✅ | ✅ | `mmn-bin-v1` JSON |
 
-`ai.load(path)` detects all of them automatically by magic bytes and archive
-contents — no format argument needed.
+`ai.load(path)` detects checkpoint formats automatically by magic bytes and
+archive contents — no format argument needed.
 
 ## GGUF — run llama.cpp-ecosystem models, from scratch
 
@@ -23,9 +27,17 @@ The GGUF reader implements the container spec directly (versions 2 and 3):
 header, typed metadata key/values, tensor infos, and the aligned data section.
 Quantized tensors are dequantized by from-scratch block codecs:
 
-- **Classic quants:** Q4_0, Q4_1, Q5_0, Q5_1, Q8_0
-- **K-quants:** Q4_K, Q6_K (the Q4_K_M pairing used by most published models)
+- **Classic quants:** Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1
+- **K-quants (full family):** Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K
+  (the Q4_K_M / Q3_K_M / Q5_K_M pairings used by most published models)
+- **Non-linear lookup quants:** IQ4_NL, IQ4_XS
+- **Ternary BitNet quants:** TQ1_0, TQ2_0
+- **MXFP4** (E8M0-scaled FP4 blocks, as used by gpt-oss)
 - **Floats/ints:** F32, F16, BF16, F64, I8/I16/I32/I64
+
+Removed ggml type ids (Q4_2/Q4_3, repacked `Q4_0_x_x`) and the codebook-grid
+IQ1/IQ2/IQ3 families are rejected with actionable messages. Large checkpoints
+dequantize **in parallel across all cores**.
 
 Tensor names follow the llama.cpp convention (`token_embd.weight`,
 `blk.N.attn_q.weight`, `blk.N.ffn_gate.weight`, …) and are mapped onto the
@@ -40,12 +52,34 @@ import magicmindnet as ai
 bot = ai.load("model.gguf")       # any supported quantization
 print(bot.chat("hello!"))
 
-bot.save("model_f32.gguf", format="gguf")       # write GGUF back out
-bot.save("model_q8.gguf", format="gguf-q8_0")   # 8-bit block-quantized
+bot.save("model_f32.gguf", format="gguf")  # also: gguf-f16, gguf-q8_0, gguf-q4_0
+```
+
+### GGUF inspection and embedded tokenizers
+
+`ai.gguf_info(path)` reads **only the header** (multi-GB files are loaded
+incrementally, never fully into memory) and returns the version, alignment,
+full metadata dict — including `tokenizer.chat_template` when present — and
+per-tensor name/shape/type summaries.
+
+GGUF models embed their vocabulary. `ai.load_gguf_tokenizer(path)` converts a
+SentencePiece-unigram vocab (`tokenizer.ggml.model == "llama"`) into a
+`UnigramEncoder` whose token ids match the model rows (`▁` space markers and
+`<0xNN>` byte-fallback tokens are decoded). Exports can embed a vocabulary the
+same way, producing a single self-contained model file:
+
+```python
+tok = ai.UnigramEncoder.train(corpus_lines, vocab_size=8192)
+bot.save("packed.gguf", format="gguf-q8_0", unigram_encoder=tok)
+
+bot = ai.load("packed.gguf")
+tok = ai.load_gguf_tokenizer("packed.gguf")
+print(bot.chat("hello", unigram_encoder=tok))
 ```
 
 Limitations: vision chatbots cannot be exported to GGUF (use safetensors or
-npz); the writer emits F32 or Q8_0 tensors.
+npz); the writer emits F32/F16/Q8_0/Q4_0 tensors; BPE (`gpt2`) GGUF vocabs are
+inspectable via `gguf_info` but not yet convertible to an encoder.
 
 ## PyTorch `.pt` — no torch required
 
@@ -63,11 +97,29 @@ ai.save_pt("tensors.pt", {"w": [[1.0, 2.0]]})  # generic named arrays
 tensors = ai.load_pt("tensors.pt")
 ```
 
+The **legacy pre-1.6 format** (raw pickle stream with the
+`0x1950a86a20f9469cfc6c` magic, protocol/sys-info pickles, and appended raw
+storages) is auto-detected and read by the same APIs.
+
 Exports include an `_mmn_meta` JSON entry so shape/seed/RoPE settings survive
 the roundtrip; external checkpoints without it infer architecture from tensor
 shapes exactly like the HF safetensors importer.
 
-## NumPy `.npy` / `.npz` — also the TensorFlow bridge
+## HDF5 — TensorFlow/Keras weights without h5py
+
+A from-scratch HDF5 reader covers the layout `h5py`/Keras write by default
+("earliest" libver): superblock v0/1, version-1 object headers with
+continuation blocks, symbol-table groups (B-tree v1 + local heap + SNOD), and
+compact or contiguous datasets of fixed-point / IEEE-float types (F16 through
+F64, all int widths, both endiannesses). Chunked/compressed datasets are
+rejected with a clear message.
+
+```python
+weights = ai.load_h5("model.weights.h5")   # {"dense/kernel": [[...]], ...}
+weights = ai.load_keras("model.keras")     # Keras v3 zip archive
+```
+
+## NumPy `.npy` / `.npz` — also a TensorFlow bridge
 
 The NPY codec handles format 1.0/2.0 headers, every common dtype
 (`f2/f4/f8`, signed/unsigned ints, bools, big-endian variants), and
@@ -84,9 +136,8 @@ x = ai.load_npy("x.npy")
 ai.save_npz("many.npz", {"w": [[1.0]], "b": [0.5]})
 ```
 
-TensorFlow/Keras interchange goes through the same path — export weights with
-`np.savez(path, **{name: w})` from `model.get_weights()` and load them here,
-or read a MagicMindNet `.npz` from TF with `np.load`.
+TensorFlow/Keras interchange also goes through `np.savez` on
+`model.get_weights()`, or read a MagicMindNet `.npz` from TF with `np.load`.
 
 Anything exposing `.tolist()` (numpy arrays, torch tensors) is accepted by
 `save_npy` / `save_npz` / `save_pt` directly.
@@ -101,8 +152,18 @@ recognize files by content, not extension:
 | `GGUF` | GGUF chatbot |
 | `PK\x03\x04` + `data.pkl` entry | PyTorch state dict |
 | `PK\x03\x04` + `.npy` entries | NumPy npz checkpoint |
+| pickle PROTO + torch legacy magic | Legacy PyTorch checkpoint |
 | safetensors binary header | HF safetensors (chatbot or classifier) |
 | `{` JSON | MMN JSON formats (`mmn-safetensors-v1`, …) |
+
+## Performance notes
+
+- GGUF tensor dequantization fans out across `available_parallelism` threads.
+- `gguf_info` / `load_gguf_tokenizer` parse the header only, growing the read
+  buffer geometrically instead of loading the tensor data.
+- The CRC-32 table is computed once per process (`OnceLock`).
+- Unigram Viterbi encoding indexes pieces in a hash map — O(n·window)
+  lookups even for 32k+ piece GGUF vocabularies (was a linear vocab scan).
 
 ## Tensor ops (mmn-core)
 
@@ -116,9 +177,14 @@ register autograd nodes like the existing `relu`.
 ## Regression tests
 
 - Rust: `crates/mmn-io/src/interop/*` module tests (container roundtrips,
-  quant block codecs, pickle VM opcodes, inflate vectors, detection) and
-  `crates/mmn-core/src/elementwise.rs`.
+  every quant block codec against hand-built blocks, pickle VM opcodes,
+  legacy torch streams, inflate vectors, HDF5 fixture parsing, detection)
+  and `crates/mmn-core/src/elementwise.rs`.
 - Python: `tests/test_interop_npy_py.py`, `tests/test_interop_gguf_py.py`,
-  `tests/test_interop_pt_py.py`, `tests/test_interop_npz_chatbot_py.py`,
-  `tests/test_universal_formats_py.py` — including CPython-`pickle`
-  cross-checks and (when numpy is installed) `numpy.load` compatibility.
+  `tests/test_interop_gguf_info_py.py`, `tests/test_interop_pt_py.py`,
+  `tests/test_interop_legacy_pt_py.py`, `tests/test_interop_h5_py.py`,
+  `tests/test_interop_npz_chatbot_py.py`, `tests/test_universal_formats_py.py`
+  — including CPython-`pickle` cross-checks in both directions and (when
+  numpy/h5py are installed) `numpy.load` / `h5py` compatibility.
+- Fixture: `tests/fixtures/simple.h5` (written by h5py) validates the HDF5
+  parser without any Python dependency in Rust tests.
