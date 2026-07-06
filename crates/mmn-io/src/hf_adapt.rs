@@ -144,7 +144,9 @@ fn fuse_swiglu_gate_up_tensors(tensors: &mut HashMap<String, Tensor>) {
             continue;
         };
         let Some(gate) = tensors.get(&gate_key) else {
-            tensors.insert(up_key, up);
+            // Plain MLP checkpoints name the first layer `up_proj`/`ffn_up`
+            // with no gate: treat it as the FFN weight directly.
+            tensors.insert(gate_key, up);
             continue;
         };
         if let Ok(fused) = elementwise_mul(gate, &up) {

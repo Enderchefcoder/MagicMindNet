@@ -17,7 +17,10 @@ use std::fs;
 
 pub const HF_FORMAT: &str = crate::hf_tensor_codec::HF_CHATBOT_FORMAT;
 
-fn chatbot_meta_json(model: &Chatbot, tokenizer_sidecars: TokenizerSidecarRefs<'_>) -> serde_json::Value {
+pub(crate) fn chatbot_meta_json(
+    model: &Chatbot,
+    tokenizer_sidecars: TokenizerSidecarRefs<'_>,
+) -> serde_json::Value {
     let mut meta = serde_json::json!({
         "vocab_size": model.shape.vocab_size,
         "n_layer": model.shape.n_layer,
@@ -60,7 +63,7 @@ fn chatbot_meta_json(model: &Chatbot, tokenizer_sidecars: TokenizerSidecarRefs<'
     meta
 }
 
-fn collect_named_tensors(model: &Chatbot) -> HashMap<String, Tensor> {
+pub(crate) fn collect_named_tensors(model: &Chatbot) -> HashMap<String, Tensor> {
     let mut map = HashMap::new();
     map.insert("embed".to_string(), model.embed.weight.clone());
     map.insert("lm_head".to_string(), model.lm_head.weight.clone());
@@ -184,7 +187,7 @@ fn tensors_to_json_map(tensors: &HashMap<String, Tensor>) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-fn load_chatbot_from_mmn_tensors(
+pub(crate) fn load_chatbot_from_mmn_tensors(
     mut tensors: HashMap<String, Tensor>,
     meta: &serde_json::Value,
 ) -> Result<Chatbot, MmnError> {
@@ -307,7 +310,7 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
     let (_header_len, header_meta) = SafeTensors::read_metadata(bytes).map_err(hf_err)?;
     let st = SafeTensors::deserialize(bytes).map_err(hf_err)?;
     let file_meta = header_meta.metadata();
-    let mut meta = file_meta
+    let meta = file_meta
         .as_ref()
         .and_then(|m| m.get("meta"))
         .map(|meta_str| {
@@ -341,10 +344,21 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
             mmn_tensors.insert(mmn_key, t);
         }
     }
+    chatbot_from_external_tensors(mmn_tensors, meta)
+}
+
+/// Build a `Chatbot` from MMN-keyed tensors and (possibly partial) metadata.
+///
+/// Shared by every external importer (HF safetensors, GGUF, npz, PyTorch):
+/// adapts fused/SwiGLU/GQA layouts and infers missing meta from tensor shapes.
+pub(crate) fn chatbot_from_external_tensors(
+    mut mmn_tensors: HashMap<String, Tensor>,
+    mut meta: serde_json::Value,
+) -> Result<Chatbot, MmnError> {
     adapt_external_hf_tensors(&mut mmn_tensors, &mut meta)?;
     if meta.get("vocab_size").is_none() {
         let embed = mmn_tensors.get("embed").ok_or_else(|| MmnError::Other {
-            message: "HF safetensors missing embed / model.embed_tokens.weight".into(),
+            message: "checkpoint missing embed / token embedding tensor".into(),
         })?;
         let shape: Vec<usize> = embed.data.shape().to_vec();
         if shape.len() != 2 {
@@ -352,7 +366,7 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
                 message: format!("embed shape {:?} cannot infer vocab_size/d_model", shape),
             });
         }
-        let inferred = serde_json::json!({
+        let mut inferred = serde_json::json!({
             "vocab_size": shape[0],
             "d_model": shape[1],
             "n_layer": count_block_layers(&mmn_tensors),
@@ -361,9 +375,19 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
                 t.data.shape().first().copied()
             }),
         });
+        merge_missing_meta(&mut inferred, &meta);
         return load_chatbot_from_mmn_tensors(mmn_tensors, &inferred);
     }
     load_chatbot_from_mmn_tensors(mmn_tensors, &meta)
+}
+
+/// Copy keys present in `extra` but absent in `base` (shallow).
+fn merge_missing_meta(base: &mut serde_json::Value, extra: &serde_json::Value) {
+    if let (Some(base_map), Some(extra_map)) = (base.as_object_mut(), extra.as_object()) {
+        for (k, v) in extra_map {
+            base_map.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
 }
 
 fn count_block_layers(tensors: &HashMap<String, Tensor>) -> usize {
