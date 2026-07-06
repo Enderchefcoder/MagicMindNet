@@ -94,6 +94,8 @@ pub(crate) fn export_chatbot_to_path(
         "gguf-q4_k" | "gguf_q4_k" => Some("q4_k"),
         "gguf-q5_k" | "gguf_q5_k" => Some("q5_k"),
         "gguf-q6_k" | "gguf_q6_k" => Some("q6_k"),
+        "gguf-iq4_nl" | "gguf_iq4_nl" => Some("iq4_nl"),
+        "gguf-iq4_xs" | "gguf_iq4_xs" => Some("iq4_xs"),
         _ => None,
     } {
         if bpe_encoder.is_some() {

@@ -263,6 +263,13 @@
 [X] Parallel GGUF tensor payload encoding
 [X] 492 Rust / 884 pytest; clippy 0; smoke OK
 
+## Task: Interop wave 8 — IQ4 encoders, vision GGUF, SavedModel
+[X] IQ4_NL/IQ4_XS encoders (ntry codebook scale search, binary-search nearest); gguf-iq4_nl/xs exports; gguf-py decode identity
+[X] Vision GGUF export via v.* mmproj-style names + mmn.vision flag; roundtrips
+[X] SavedModel dir support in load_tf_checkpoint (variables/variables); live tf.saved_model.save validated
+[X] Parallel hf-safetensors import decode; from_id<->type_id roundtrip guard (caught dropped IQ4_XS id)
+[X] 499 Rust / 891 pytest; clippy 0; smoke OK
+
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses
 [X] mmn-io: detect.rs — detect_checkpoint_kind for all formats (JSON/binary/bin, 3 model families)

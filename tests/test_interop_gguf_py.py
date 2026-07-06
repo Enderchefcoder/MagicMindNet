@@ -75,10 +75,17 @@ def test_gguf_roundtrip_preserves_loss(tmp_path):
     assert abs(before - after) < 1e-4
 
 
-def test_gguf_vision_export_rejected(tmp_path):
-    bot = ai.Chatbot(vision=True, vocab_size=64, n_layer=1, d_model=16)
-    with pytest.raises((RuntimeError, ValueError), match="vision"):
-        bot.save(str(tmp_path / "v.gguf"), format="gguf")
+def test_gguf_vision_export_roundtrips(tmp_path):
+    """Vision chatbots export with mmproj-style `v.` tensor names."""
+    bot = ai.Chatbot(vision=True, vocab_size=64, n_layer=1, d_model=16, seed=5)
+    path = str(tmp_path / "v.gguf")
+    bot.save(path, format="gguf")
+    info = ai.gguf_info(path)
+    names = {t["name"] for t in info["tensors"]}
+    assert "v.patch_proj.weight" in names
+    assert info["metadata"]["mmn.vision"] is True
+    loaded = ai.load(path)
+    assert loaded.has_vision is True
 
 
 def test_export_unknown_format_lists_gguf(tmp_path):

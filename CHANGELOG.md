@@ -2,6 +2,22 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 8: IQ4 encoders, vision GGUF export, SavedModel dirs)
+- **IQ4_NL / IQ4_XS encoders** (`gguf-iq4_nl` / `gguf-iq4_xs` exports): from-scratch
+  port of ggml's `ntry` scale search over the non-linear codebook with binary-search
+  nearest-entry lookup — the only IQ types encodable without calibration data, and
+  another capability the reference Python package lacks; blocks decode identically
+  in gguf-py
+- **Vision chatbot GGUF export**: vision prefix tensors travel under mmproj-style
+  `v.*` names with an `mmn.vision` flag and roundtrip through `ai.load` — the last
+  export gap is closed
+- **TF SavedModel directories**: `ai.load_tf_checkpoint("saved_model_dir")` resolves
+  the `variables/variables` bundle (validated against `tf.saved_model.save` output)
+- **Parallel HF-safetensors import decode** (F16/BF16 conversion across cores)
+- Regression guard: every supported GGML type id roundtrips through `from_id`
+  (caught a dropped IQ4_XS id during this wave)
+- Tests: +7 Rust and +7 pytest (`test_interop_wave8_py`)
+
 ### Added (interop wave 7: zero format dependencies, complete k-quant encoder set)
 - **From-scratch safetensors codec** (`st_codec.rs`) replaces the external
   `safetensors` crate — header JSON + offset validation + aligned serialization;

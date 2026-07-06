@@ -109,15 +109,22 @@ k-quant family** (`gguf-q2_k` through `q6_k`, plus Q8_K) via from-scratch
 ports of ggml's reference quantization searches (`make_qx_quants` iscale
 refinement, `make_q3_quants` iterative RMSE refinement, `make_qkx2_quants`
 joint scale+min least squares in both squared-error and MAD variants,
-round-half-to-even `nearest_int`). The reference llama.cpp Python package
-cannot encode k-quants at all; ours produces blocks it decodes identically,
-with a monotone quality ladder (Q2_K → Q8_K reconstruction error strictly
-improves). Per the ggml spec, quantization is **row-wise**: tensors whose
-fastest dimension is not a block multiple stay F32 automatically. Tensor
-payload encoding runs **in parallel across cores**.
+round-half-to-even `nearest_int`), plus the **IQ4 lookup quants**
+(`gguf-iq4_nl` / `gguf-iq4_xs`, the ggml `ntry` scale search over the
+non-linear codebook — the only IQ types encodable without calibration data).
+The reference llama.cpp Python package cannot encode k-quants or IQ4 at all;
+ours produces blocks it decodes identically, with a monotone quality ladder
+(Q2_K → Q8_K reconstruction error strictly improves). Per the ggml spec,
+quantization is **row-wise**: tensors whose fastest dimension is not a block
+multiple stay F32 automatically. Tensor payload encoding runs **in parallel
+across cores**.
 
-Limitations: vision chatbots cannot be exported to GGUF (use safetensors or
-npz).
+**Vision chatbots export too**: vision prefix tensors travel under
+mmproj-style `v.*` names (`v.patch_proj.weight`, `v.cross_attn_q.weight`, …)
+with an `mmn.vision` metadata flag, and roundtrip through `ai.load`.
+
+Limitations: the codebook-grid IQ1/IQ2/IQ3 families decode but do not encode
+(their quantizers require importance-matrix calibration data by design).
 
 ## PyTorch `.pt` — no torch required
 
@@ -188,6 +195,7 @@ checksums:
 
 ```python
 arrays = ai.load_tf_checkpoint("ckpt")        # or "ckpt.index"
+arrays = ai.load_tf_checkpoint("saved_model_dir")  # SavedModel variables/
 # {"w": [[...]], "b": [...]}  (/.ATTRIBUTES/VARIABLE_VALUE stripped)
 
 ai.save_tf_checkpoint("out", arrays)          # tf.train.load_checkpoint reads it
