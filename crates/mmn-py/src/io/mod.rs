@@ -1,9 +1,11 @@
 use mmn_io::{
-    detect_checkpoint_kind, export_bin, export_classifier, export_diffusion,
-    export_hf_classifier_safetensors, export_hf_safetensors, export_safetensors, import_bin,
-    import_classifier, import_diffusion, import_hf_classifier_safetensors, import_hf_safetensors,
-    import_safetensors, merge_classifiers, merge_diffusion, merge_models, quantize_classifier,
-    quantize_diffusion, quantize_model, CheckpointKind, TokenizerSidecarRefs,
+    detect_checkpoint_kind, export_bin, export_classifier, export_diffusion, export_gguf,
+    export_hf_classifier_safetensors, export_hf_safetensors, export_npz, export_safetensors,
+    export_torch_pt, import_bin, import_classifier, import_diffusion, import_gguf,
+    import_hf_classifier_safetensors, import_hf_safetensors, import_npz, import_safetensors,
+    import_torch_pt, merge_classifiers, merge_diffusion, merge_models, quantize_classifier,
+    quantize_diffusion, quantize_model, read_npz_arrays, read_torch_arrays, write_npz_arrays,
+    write_torch_arrays, CheckpointKind, NamedArray, TokenizerSidecarRefs,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -95,7 +97,13 @@ pub(crate) fn export_chatbot_to_path(
             }
             export_bin(model, path).map_err(mmn_err_to_py)
         }
-        _ => Err(PyValueError::new_err(format!("Unknown format: {format}"))),
+        "gguf" => export_gguf(model, path, "f32").map_err(mmn_err_to_py),
+        "gguf-q8_0" | "gguf_q8_0" => export_gguf(model, path, "q8_0").map_err(mmn_err_to_py),
+        "npz" | "numpy" => export_npz(model, path).map_err(mmn_err_to_py),
+        "pt" | "pytorch" | "torch" => export_torch_pt(model, path).map_err(mmn_err_to_py),
+        _ => Err(PyValueError::new_err(format!(
+            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, gguf-q8_0, npz, pt"
+        ))),
     }
 }
 
@@ -108,7 +116,12 @@ pub(crate) fn import_chatbot_from_path(
         "safetensors" => import_safetensors(path, 0).map_err(mmn_err_to_py),
         "hf-safetensors" | "hf_safetensors" => import_hf_safetensors(path).map_err(mmn_err_to_py),
         "bin" => import_bin(path).map_err(mmn_err_to_py),
-        _ => Err(PyValueError::new_err(format!("Unknown format: {format}"))),
+        "gguf" | "gguf-q8_0" | "gguf_q8_0" => import_gguf(path).map_err(mmn_err_to_py),
+        "npz" | "numpy" => import_npz(path).map_err(mmn_err_to_py),
+        "pt" | "pytorch" | "torch" => import_torch_pt(path).map_err(mmn_err_to_py),
+        _ => Err(PyValueError::new_err(format!(
+            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, npz, pt"
+        ))),
     }
 }
 
@@ -283,6 +296,18 @@ pub fn load_checkpoint(py: Python<'_>, path: &str) -> PyResult<PyObject> {
             let inner = import_bin(path).map_err(mmn_err_to_py)?;
             Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
         }
+        CheckpointKind::ChatbotGguf => {
+            let inner = import_gguf(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
+        CheckpointKind::ChatbotNpz => {
+            let inner = import_npz(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
+        CheckpointKind::ChatbotTorch => {
+            let inner = import_torch_pt(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
         CheckpointKind::Classifier => {
             let inner = import_classifier(path).map_err(mmn_err_to_py)?;
             Ok(PyClassifier { inner }.into_pyobject(py)?.into_any().unbind())
@@ -292,4 +317,57 @@ pub fn load_checkpoint(py: Python<'_>, path: &str) -> PyResult<PyObject> {
             Ok(PyDiffusion { inner }.into_pyobject(py)?.into_any().unbind())
         }
     }
+}
+
+/// Read a NumPy `.npy` file into `(shape, flat f32 values)`.
+#[pyfunction]
+pub fn read_npy(path: &str) -> PyResult<(Vec<usize>, Vec<f32>)> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| PyValueError::new_err(format!("cannot read npy {path}: {e}")))?;
+    let arr = mmn_io::decode_npy(&bytes).map_err(mmn_err_to_py)?;
+    Ok((arr.shape, arr.data))
+}
+
+/// Write a NumPy `.npy` file from `(shape, flat f32 values)`.
+#[pyfunction]
+pub fn write_npy(path: &str, shape: Vec<usize>, data: Vec<f32>) -> PyResult<()> {
+    let bytes = mmn_io::encode_npy_f32(&shape, &data).map_err(mmn_err_to_py)?;
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        }
+    }
+    std::fs::write(path, bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Read every array in an `.npz` archive as `[(name, shape, values), ...]`.
+#[pyfunction]
+pub fn read_npz(path: &str) -> PyResult<Vec<NamedArray>> {
+    read_npz_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays to an `.npz` archive readable by `numpy.load`.
+#[pyfunction]
+pub fn write_npz(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    write_npz_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Read every tensor in a PyTorch `.pt` state dict as `[(name, shape, values), ...]`.
+#[pyfunction]
+pub fn read_pt(path: &str) -> PyResult<Vec<NamedArray>> {
+    read_torch_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays as a `torch.load`-compatible `.pt` state dict.
+#[pyfunction]
+pub fn write_pt(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    let bytes = write_torch_arrays(&arrays, None).map_err(mmn_err_to_py)?;
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        }
+    }
+    std::fs::write(path, bytes).map_err(|e| PyValueError::new_err(e.to_string()))
 }

@@ -21,6 +21,7 @@ use io::{
     export, export_classifier_model, export_diffusion_model, import_classifier_model,
     import_diffusion_model, import_model, load_checkpoint, merge, merge_classifier,
     merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
+    read_npy, read_npz, read_pt, write_npy, write_npz, write_pt,
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
@@ -64,6 +65,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(import_diffusion_model, m)?)?;
     m.add_function(wrap_pyfunction!(merge_diffusion_model, m)?)?;
     m.add_function(wrap_pyfunction!(quantize_diffusion_model, m)?)?;
+    m.add_function(wrap_pyfunction!(read_npy, m)?)?;
+    m.add_function(wrap_pyfunction!(write_npy, m)?)?;
+    m.add_function(wrap_pyfunction!(read_npz, m)?)?;
+    m.add_function(wrap_pyfunction!(write_npz, m)?)?;
+    m.add_function(wrap_pyfunction!(read_pt, m)?)?;
+    m.add_function(wrap_pyfunction!(write_pt, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patch_from_image_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patches_from_image_path_py, m)?)?;
     m.add("vision_rgb_patch_from_image_path", m.getattr("vision_rgb_patch_from_image_path_py")?)?;

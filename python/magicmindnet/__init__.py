@@ -57,6 +57,14 @@ from magicmindnet._native import (
     quantize_diffusion_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
+from magicmindnet.interop import (
+    load_npy,
+    load_npz,
+    load_pt,
+    save_npy,
+    save_npz,
+    save_pt,
+)
 from magicmindnet.unigram_io import load_unigram_sidecar
 from magicmindnet.vision import (
     VISION_PATCH_DIM,
@@ -116,6 +124,9 @@ __all__ = [
     "load",
     "load_bpe_sidecar",
     "load_checkpoint",
+    "load_npy",
+    "load_npz",
+    "load_pt",
     "load_unigram_sidecar",
     "merge",
     "merge_classifier",
@@ -126,6 +137,9 @@ __all__ = [
     "quantize_classifier_model",
     "quantize_diffusion",
     "quantize_diffusion_model",
+    "save_npy",
+    "save_npz",
+    "save_pt",
     "VISION_PATCH_DIM",
     "VISION_RGB_CHANNELS",
     "VISION_RGB_DIM",
