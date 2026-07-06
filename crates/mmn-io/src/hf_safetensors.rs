@@ -4,7 +4,7 @@ use crate::hf_adapt::{adapt_external_hf_tensors, fill_missing_block_layernorm_de
 use crate::block_tensors::import_block_tensors;
 use crate::chatbot_io::TokenizerSidecarRefs;
 use crate::checkpoint_util::{
-    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry,
+    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry, TensorMap,
     write_file_create_parents,
 };
 use mmn_core::{MmnError, Tensor};
@@ -179,12 +179,11 @@ fn parse_hf_layer_tensor(name: &str) -> Option<String> {
     Some(format!("blocks.{i}.{mmn_suffix}"))
 }
 
-fn tensors_to_json_map(tensors: &HashMap<String, Tensor>) -> serde_json::Value {
-    let mut map = serde_json::Map::new();
-    for (k, t) in tensors {
-        map.insert(k.clone(), tensor_to_entry(t));
-    }
-    serde_json::Value::Object(map)
+fn tensors_to_entry_map(tensors: &HashMap<String, Tensor>) -> TensorMap {
+    tensors
+        .iter()
+        .map(|(k, t)| (k.clone(), tensor_to_entry(t)))
+        .collect()
 }
 
 pub(crate) fn load_chatbot_from_mmn_tensors(
@@ -228,7 +227,7 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize;
 
     fill_missing_block_layernorm_defaults(&mut tensors, n_layer, d_model);
-    let json_tensors = tensors_to_json_map(&tensors);
+    let json_tensors = tensors_to_entry_map(&tensors);
     let mut model = Chatbot::new_with_position_and_ffn(
         vision,
         None,

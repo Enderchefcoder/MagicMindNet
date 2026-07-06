@@ -1,13 +1,21 @@
 use crate::block_tensors::{export_block_tensors, import_block_tensors};
 use crate::checkpoint_util::{
     expect_tensor_shape, quantize_tensor, require_tensor_entry, tensor_from_entry, tensor_to_entry,
-    write_file_create_parents,
+    write_file_create_parents, TensorMap,
 };
 use crate::tensor_merge::average_tensors;
 use mmn_core::MmnError;
 use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
-use std::collections::HashMap;
 use std::fs;
+
+/// Typed on-disk layout of `mmn-safetensors-v1` (fields in the alphabetical
+/// order serde_json's `Value` objects used, keeping output byte-identical).
+#[derive(serde::Serialize)]
+struct MmnCheckpoint {
+    format: Option<String>,
+    meta: serde_json::Value,
+    tensors: TensorMap,
+}
 
 /// Relative paths to tokenizer sidecars written beside a chatbot checkpoint.
 #[derive(Clone, Copy, Default)]
@@ -28,7 +36,7 @@ pub fn export_safetensors<'a>(
     tokenizer_sidecars: impl Into<TokenizerSidecarRefs<'a>>,
 ) -> Result<(), MmnError> {
     let tokenizer_sidecars = tokenizer_sidecars.into();
-    let mut map = HashMap::new();
+    let mut map = TensorMap::new();
     map.insert("embed".to_string(), tensor_to_entry(&model.embed.weight));
     map.insert("lm_head".to_string(), tensor_to_entry(&model.lm_head.weight));
     export_block_tensors(model, &mut map);
@@ -100,12 +108,15 @@ pub fn export_safetensors<'a>(
     if let Some(uni_path) = tokenizer_sidecars.unigram {
         meta["unigram_checkpoint"] = serde_json::json!(uni_path);
     }
-    let wrapper = serde_json::json!({
-        "tensors": map,
-        "format": "mmn-safetensors-v1",
-        "meta": meta,
-    });
-    write_file_create_parents(path, wrapper.to_string())?;
+    let wrapper = MmnCheckpoint {
+        format: Some("mmn-safetensors-v1".to_string()),
+        meta,
+        tensors: map,
+    };
+    let text = serde_json::to_string(&wrapper).map_err(|e| MmnError::Other {
+        message: e.to_string(),
+    })?;
+    write_file_create_parents(path, text)?;
     Ok(())
 }
 
@@ -123,16 +134,17 @@ pub fn import_safetensors(path: &str, _vocab_size: usize) -> Result<Chatbot, Mmn
 }
 
 fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
-    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
+    let ckpt = crate::mmn_json::parse_checkpoint(text).map_err(|e| MmnError::Other {
         message: e.to_string(),
     })?;
-    if v["format"].as_str() != Some("mmn-safetensors-v1") {
-        let got = v["format"].as_str().unwrap_or("<missing>");
+    if ckpt.format.as_deref() != Some("mmn-safetensors-v1") {
+        let got = ckpt.format.as_deref().unwrap_or("<missing>");
         return Err(MmnError::Other {
             message: format!("Expected mmn-safetensors-v1 checkpoint, got {got}"),
         });
     }
-    let meta = &v["meta"];
+    let tensors = &ckpt.tensors;
+    let meta = &ckpt.meta;
     let vocab_size = meta["vocab_size"].as_u64().ok_or_else(|| MmnError::Other {
         message: "checkpoint meta missing vocab_size".into(),
     })? as usize;
@@ -177,20 +189,20 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         use_rope,
         rope_theta,
     );
-    model.embed.weight = tensor_from_entry(require_tensor_entry(&v["tensors"], "embed")?)?;
-    model.lm_head.weight = tensor_from_entry(require_tensor_entry(&v["tensors"], "lm_head")?)?;
+    model.embed.weight = tensor_from_entry(require_tensor_entry(tensors, "embed")?)?;
+    model.lm_head.weight = tensor_from_entry(require_tensor_entry(tensors, "lm_head")?)?;
     expect_tensor_shape(&model.embed.weight, &[vocab_size, d_model], "embed")?;
     expect_tensor_shape(&model.lm_head.weight, &[vocab_size, d_model], "lm_head")?;
     if use_learned_pos_embed {
         let pe = model.pos_embed.as_mut().ok_or_else(|| MmnError::Other {
             message: "use_learned_pos_embed meta set but model has no pos_embed".into(),
         })?;
-        pe.weight = tensor_from_entry(require_tensor_entry(&v["tensors"], "pos_embed")?)?;
+        pe.weight = tensor_from_entry(require_tensor_entry(tensors, "pos_embed")?)?;
         expect_tensor_shape(&pe.weight, &[max_seq_len, d_model], "pos_embed")?;
     }
     if vision {
         if let Some(proj) = model.vision_patch_proj.as_mut() {
-            if let Ok(entry) = require_tensor_entry(&v["tensors"], "vision_patch_proj") {
+            if let Ok(entry) = require_tensor_entry(tensors, "vision_patch_proj") {
                 proj.weight = tensor_from_entry(entry)?;
                 expect_tensor_shape(
                     &proj.weight,
@@ -199,7 +211,7 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
                 )?;
             }
         }
-        if let Ok(entry) = require_tensor_entry(&v["tensors"], "vision_patch_conv") {
+        if let Ok(entry) = require_tensor_entry(tensors, "vision_patch_conv") {
             let conv = model.vision_patch_conv.as_mut().ok_or_else(|| MmnError::Other {
                 message: "vision_patch_conv tensor present but model has no conv encoder".into(),
             })?;
@@ -217,7 +229,7 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         } else {
             model.vision_patch_conv = None;
         }
-        if let Ok(entry) = require_tensor_entry(&v["tensors"], "vision_cross_attn.out") {
+        if let Ok(entry) = require_tensor_entry(tensors, "vision_cross_attn.out") {
             let cross = model.vision_cross_attn.as_mut().ok_or_else(|| MmnError::Other {
                 message: "vision_cross_attn tensor present but model has no cross-attn".into(),
             })?;
@@ -228,21 +240,21 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
                 "vision_cross_attn.out",
             )?;
             cross.q_proj.weight =
-                tensor_from_entry(require_tensor_entry(&v["tensors"], "vision_cross_attn.q")?)?;
+                tensor_from_entry(require_tensor_entry(tensors, "vision_cross_attn.q")?)?;
             expect_tensor_shape(
                 &cross.q_proj.weight,
                 &[d_model, d_model],
                 "vision_cross_attn.q",
             )?;
             cross.k_proj.weight =
-                tensor_from_entry(require_tensor_entry(&v["tensors"], "vision_cross_attn.k")?)?;
+                tensor_from_entry(require_tensor_entry(tensors, "vision_cross_attn.k")?)?;
             expect_tensor_shape(
                 &cross.k_proj.weight,
                 &[d_model, d_model],
                 "vision_cross_attn.k",
             )?;
             cross.v_proj.weight =
-                tensor_from_entry(require_tensor_entry(&v["tensors"], "vision_cross_attn.v")?)?;
+                tensor_from_entry(require_tensor_entry(tensors, "vision_cross_attn.v")?)?;
             expect_tensor_shape(
                 &cross.v_proj.weight,
                 &[d_model, d_model],
@@ -252,7 +264,7 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
             model.vision_cross_attn = None;
         }
     }
-    import_block_tensors(&mut model, &v["tensors"])?;
+    import_block_tensors(&mut model, tensors)?;
     Ok(model)
 }
 

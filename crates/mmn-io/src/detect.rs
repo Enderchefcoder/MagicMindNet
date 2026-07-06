@@ -84,10 +84,18 @@ fn detect_json_kind(bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
     let text = std::str::from_utf8(bytes).map_err(|e| MmnError::Other {
         message: format!("checkpoint is neither binary safetensors nor UTF-8 JSON: {e}"),
     })?;
-    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
-        message: format!("checkpoint JSON parse failed: {e}"),
-    })?;
-    match v["format"].as_str() {
+    // Structural scan first: reads only the top-level `"format"` key instead
+    // of materializing multi-megabyte tensor arrays into a `Value` tree.
+    let format: Option<String> = match crate::mmn_json::top_level_format(text) {
+        Some(found) => found,
+        None => {
+            let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
+                message: format!("checkpoint JSON parse failed: {e}"),
+            })?;
+            v["format"].as_str().map(str::to_string)
+        }
+    };
+    match format.as_deref() {
         Some("mmn-safetensors-v1") => Ok(CheckpointKind::Chatbot),
         Some("mmn-classifier-v1") => Ok(CheckpointKind::Classifier),
         Some("mmn-diffusion-v1") => Ok(CheckpointKind::Diffusion),

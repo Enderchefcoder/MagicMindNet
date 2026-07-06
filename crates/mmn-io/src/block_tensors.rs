@@ -1,11 +1,12 @@
 //! Chatbot transformer block checkpoint export/import.
 
-use crate::checkpoint_util::{expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry};
+use crate::checkpoint_util::{
+    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry, TensorMap,
+};
 use mmn_core::{MmnError, Tensor};
 use mmn_models::Chatbot;
-use std::collections::HashMap;
 
-pub(crate) fn export_block_tensors(model: &Chatbot, map: &mut HashMap<String, serde_json::Value>) {
+pub(crate) fn export_block_tensors(model: &Chatbot, map: &mut TensorMap) {
     for (i, block) in model.blocks.iter().enumerate() {
         let p = format!("blocks.{i}");
         map.insert(
@@ -33,7 +34,7 @@ pub(crate) fn export_block_tensors(model: &Chatbot, map: &mut HashMap<String, se
     }
 }
 
-pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &serde_json::Value) -> Result<(), MmnError> {
+pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &TensorMap) -> Result<(), MmnError> {
     let d_model = model.shape.d_model;
     let ffn_dim = model.shape.ffn_dim;
     let kv_dim = model.shape.n_kv_heads * (d_model / model.shape.n_heads);

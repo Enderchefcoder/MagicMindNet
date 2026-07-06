@@ -24,6 +24,14 @@ pub fn is_shard_index_bytes(bytes: &[u8]) -> bool {
     if bytes.first() != Some(&b'{') {
         return false;
     }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    // Structural scan avoids serde-parsing multi-megabyte checkpoints just
+    // to conclude they are not shard indexes.
+    if let Some(found) = crate::mmn_json::top_level_key_is_object(text, "weight_map") {
+        return found;
+    }
     serde_json::from_slice::<serde_json::Value>(bytes)
         .map(|v| v.get("weight_map").is_some_and(|m| m.is_object()))
         .unwrap_or(false)

@@ -9,6 +9,7 @@ mod hf_classifier_safetensors;
 mod hf_safetensors;
 mod hf_tensor_codec;
 mod interop;
+mod mmn_json;
 mod st_codec;
 mod tensor_merge;
 
