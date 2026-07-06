@@ -61,6 +61,7 @@ pub use interop::pickle_arrays::{
     read_pickle_arrays, read_pickle_arrays_bytes, write_pickle_arrays,
     write_pickle_arrays_bytes,
 };
+pub use interop::zarr::{is_zarr_dir, read_zarr_arrays, write_zarr_arrays};
 pub use interop::st_arrays::{
     read_safetensors_arrays, read_safetensors_arrays_bytes, write_safetensors_arrays,
     write_safetensors_arrays_bytes, write_safetensors_arrays_bytes_dtype,

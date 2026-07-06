@@ -350,6 +350,22 @@ bot = ai.load("model.ggjt")   # legacy llama models adapt to Chatbot and chat
 `layers.N.attention.wq`, SwiGLU `w1/w2/w3`, RMSNorm gammas) through the
 same fusion pipeline as HF imports, so pre-GGUF models load and generate.
 
+## Zarr v2 — chunked array stores without zarr
+
+Directory stores read completely: `.zarray` metadata, group trees
+(`/`-joined names), C-order chunk grids with edge padding, `fill_value`
+for missing chunks, zlib or uncompressed chunks, every numeric dtype.
+Writes produce group stores `zarr.open_group` reads (one zlib `<f4` chunk
+per array). Blosc-compressed stores get a clear re-encode hint:
+
+```python
+arrays = ai.load_zarr("weights.zarr")          # {"layer/kernel": [[...]]}
+ai.save_zarr("out.zarr", arrays)               # zarr-python opens it
+```
+
+Cross-validated against zarr-python in both directions (v2 format,
+`numcodecs.Zlib` chunks, multiple dtypes, uncompressed groups).
+
 ## Universal array IO
 
 Beyond the per-format helpers, one pair of calls covers everything:

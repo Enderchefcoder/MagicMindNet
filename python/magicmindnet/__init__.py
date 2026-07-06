@@ -77,6 +77,7 @@ from magicmindnet.interop import (
     load_safetensors,
     load_tf_checkpoint,
     load_tflite,
+    load_zarr,
     save_arrays,
     save_flax,
     save_gguf_arrays,
@@ -89,6 +90,7 @@ from magicmindnet.interop import (
     save_safetensors,
     save_safetensors_sharded,
     save_tf_checkpoint,
+    save_zarr,
 )
 from magicmindnet.unigram_io import load_unigram_sidecar
 from magicmindnet.vision import (
@@ -169,6 +171,7 @@ __all__ = [
     "load_tf_checkpoint",
     "load_tflite",
     "load_unigram_sidecar",
+    "load_zarr",
     "merge",
     "merge_classifier",
     "merge_diffusion",
@@ -190,6 +193,7 @@ __all__ = [
     "save_safetensors",
     "save_safetensors_sharded",
     "save_tf_checkpoint",
+    "save_zarr",
     "VISION_PATCH_DIM",
     "VISION_RGB_CHANNELS",
     "VISION_RGB_DIM",

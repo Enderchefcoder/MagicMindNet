@@ -302,7 +302,7 @@ pub(crate) fn adler32(data: &[u8]) -> u32 {
 }
 
 /// Undo the HDF5 deflate filter: a zlib wrapper (header + deflate + adler32).
-fn undo_deflate(raw: &[u8]) -> Result<Vec<u8>, MmnError> {
+pub(crate) fn undo_deflate(raw: &[u8]) -> Result<Vec<u8>, MmnError> {
     if raw.len() < 6 || raw[0] & 0x0F != 8 {
         return Err(err("hdf5 gzip chunk is not a zlib stream"));
     }

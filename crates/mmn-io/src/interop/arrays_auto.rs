@@ -108,6 +108,8 @@ pub enum ArrayFormat {
     Pickle,
     /// Sharded checkpoint index (`*.index.json` + shard files).
     ShardedIndex,
+    /// Zarr v2 directory store.
+    Zarr,
 }
 
 impl ArrayFormat {
@@ -128,6 +130,7 @@ impl ArrayFormat {
             ArrayFormat::Tflite => "tflite",
             ArrayFormat::Pickle => "pickle",
             ArrayFormat::ShardedIndex => "sharded",
+            ArrayFormat::Zarr => "zarr",
         }
     }
 }
@@ -230,8 +233,12 @@ pub fn detect_array_format(path: &str, bytes: &[u8]) -> Result<ArrayFormat, MmnE
 /// Load any supported weights file into named f32 arrays plus the detected
 /// format tag. Single unnamed containers (`.npy`) use the name `"arr"`.
 pub fn read_arrays_auto(path: &str) -> Result<(ArrayFormat, Vec<NamedArray>), MmnError> {
-    // TF checkpoints are two files behind a prefix; resolve them by path.
+    // Directory stores and prefix-based formats resolve by path.
     let as_path = std::path::Path::new(path);
+    if super::zarr::is_zarr_dir(as_path) {
+        let arrays = super::zarr::read_zarr_arrays(path)?;
+        return Ok((ArrayFormat::Zarr, arrays));
+    }
     if as_path.is_dir()
         || path.ends_with(".index")
         || fs::metadata(format!("{path}.index")).is_ok()
@@ -258,6 +265,7 @@ pub fn read_arrays_auto(path: &str) -> Result<(ArrayFormat, Vec<NamedArray>), Mm
         ArrayFormat::FlaxMsgpack => super::flax::read_flax_arrays_bytes(&bytes)?,
         ArrayFormat::Pickle => super::pickle_arrays::read_pickle_arrays_bytes(&bytes)?,
         ArrayFormat::ShardedIndex => super::sharded::read_sharded_arrays(path)?,
+        ArrayFormat::Zarr => super::zarr::read_zarr_arrays(path)?,
         ArrayFormat::Onnx => super::onnx::read_onnx_arrays_bytes(&bytes)?,
         ArrayFormat::TfCheckpoint => super::tf_checkpoint::read_tf_checkpoint_arrays(path)?,
     };

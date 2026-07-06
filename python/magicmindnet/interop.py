@@ -53,6 +53,7 @@ __all__ = [
     "load_safetensors",
     "load_tf_checkpoint",
     "load_tflite",
+    "load_zarr",
     "save_arrays",
     "save_flax",
     "save_gguf_arrays",
@@ -62,9 +63,10 @@ __all__ = [
     "save_onnx",
     "save_pickle_arrays",
     "save_pt",
-    "save_safetensors_sharded",
     "save_safetensors",
+    "save_safetensors_sharded",
     "save_tf_checkpoint",
+    "save_zarr",
 ]
 
 
@@ -232,6 +234,30 @@ def save_flax(path, arrays):
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
     _native.write_flax(path, packed)
+
+
+def load_zarr(path):
+    """Read a Zarr v2 directory store into ``{name: nested lists}``.
+
+    Handles single arrays and group trees (names ``/``-joined), zlib or
+    uncompressed chunks, every numeric dtype, chunk grids with edge padding,
+    and ``fill_value`` for missing chunks — no zarr install needed. Blosc
+    stores are rejected with a re-encode hint.
+    """
+    return {name: _nest(shape, flat) for name, shape, flat in _native.read_zarr(path)}
+
+
+def save_zarr(path, arrays):
+    """Write named arrays as a Zarr v2 group store.
+
+    ``/`` in names creates nested groups; each array stores as one
+    zlib-compressed ``<f4`` chunk. ``zarr.open_group(path)`` reads it.
+    """
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_zarr(path, packed)
 
 
 def load_safetensors(path):
@@ -450,6 +476,7 @@ def save_arrays(path, arrays, format=None):
             (".pkl", "pickle"),
             (".pickle", "pickle"),
             (".pdparams", "pickle"),
+            (".zarr", "zarr"),
         ):
             if lower.endswith(suffix):
                 inferred = name
@@ -464,6 +491,7 @@ def save_arrays(path, arrays, format=None):
         "gguf": save_gguf_arrays,
         "tf-checkpoint": save_tf_checkpoint,
         "pickle": save_pickle_arrays,
+        "zarr": save_zarr,
     }
     if inferred not in savers:
         raise ValueError(

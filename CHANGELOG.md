@@ -51,6 +51,14 @@
   on 1.3M params (cumulative vs the original serde `Value` path: 337→50 / 487→30)
 - **GGUF array writes in any encodable type**: `ai.save_gguf_arrays(...,
   dtype="f16"/"q8_0"/"q4_k"/...)` — verified against gguf-py's `dequantize`
+- **Zarr v2 stores** (`ai.load_zarr` / `ai.save_zarr`): from-scratch reader for
+  directory stores — group trees, chunk grids with edge padding, `fill_value`
+  for missing chunks, zlib/uncompressed chunks, all numeric dtypes — and a
+  writer `zarr.open_group` reads; wired into `load_arrays`/`save_arrays`
+  (`.zarr` extension, `"zarr"` detection); cross-validated against zarr-python
+  both directions; blosc stores rejected with a re-encode hint
+- **npy decode fast paths**: bulk `<f4`/`<f8`/`<f2` decoding skips per-element
+  dtype dispatch — `.npz` checkpoint loads ~34 ms → ~17 ms (1.3M params)
 
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp

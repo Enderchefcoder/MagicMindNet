@@ -29,6 +29,7 @@ pub mod msgpack;
 pub mod onnx;
 pub mod pickle_arrays;
 pub mod st_arrays;
+pub mod zarr;
 pub mod pickle;
 pub mod proto;
 pub mod sharded;

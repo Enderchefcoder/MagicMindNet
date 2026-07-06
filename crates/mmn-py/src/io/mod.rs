@@ -619,6 +619,18 @@ pub fn read_pickle_arrays(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_pickle_arrays(path).map_err(mmn_err_to_py)
 }
 
+/// Read a Zarr v2 directory store into named arrays.
+#[pyfunction]
+pub fn read_zarr(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_zarr_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named f32 arrays as a Zarr v2 group store (zlib chunks).
+#[pyfunction]
+pub fn write_zarr(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_zarr_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
 /// Write a sharded safetensors checkpoint (HF weight_map index + shards).
 #[pyfunction]
 pub fn write_safetensors_sharded(

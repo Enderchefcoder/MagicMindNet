@@ -24,11 +24,12 @@ use io::{
     merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
     read_arrays_auto, read_arrays_auto_bytes, read_flax, read_gguf_arrays, read_ggml_legacy,
     read_h5, read_keras,
-    read_npy, read_npz, read_pickle_arrays, read_tflite, write_arrays_bytes,
+    read_npy, read_npz, read_pickle_arrays, read_tflite, read_zarr, write_arrays_bytes,
     write_safetensors_sharded,
     read_onnx, read_pt, read_safetensors,
     read_tf_checkpoint, write_h5,
     write_flax, write_gguf_arrays, write_npy, write_npz, write_onnx, write_pickle_arrays,
+    write_zarr,
     write_pt, write_safetensors,
     write_tf_checkpoint,
 };
@@ -99,6 +100,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_pickle_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(write_safetensors_sharded, m)?)?;
     m.add_function(wrap_pyfunction!(write_arrays_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(read_zarr, m)?)?;
+    m.add_function(wrap_pyfunction!(write_zarr, m)?)?;
     m.add_function(wrap_pyfunction!(write_pickle_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(read_ggml_legacy, m)?)?;
     m.add_function(wrap_pyfunction!(write_flax, m)?)?;

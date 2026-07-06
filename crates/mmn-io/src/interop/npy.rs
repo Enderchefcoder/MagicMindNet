@@ -270,10 +270,31 @@ pub fn decode_npy(bytes: &[u8]) -> Result<NpyArray, MmnError> {
     let payload = bytes
         .get(header.data_start..header.data_start + numel * item)
         .ok_or_else(|| err("npy data truncated"))?;
-    let mut data = Vec::with_capacity(numel);
-    for chunk in payload.chunks_exact(item) {
-        data.push(decode_element(&header.descr, chunk)?);
-    }
+    // Bulk fast paths for the dominant dtypes skip the per-element descr
+    // dispatch (this is the hot loop of `.npy`/`.npz` loading).
+    let mut data: Vec<f32> = match header.descr.as_str() {
+        "<f4" => payload
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+        "<f8" => payload
+            .chunks_exact(8)
+            .map(|c| {
+                f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32
+            })
+            .collect(),
+        "<f2" => payload
+            .chunks_exact(2)
+            .map(|c| f16::from_le_bytes([c[0], c[1]]).to_f32())
+            .collect(),
+        _ => {
+            let mut out = Vec::with_capacity(numel);
+            for chunk in payload.chunks_exact(item) {
+                out.push(decode_element(&header.descr, chunk)?);
+            }
+            out
+        }
+    };
     if header.fortran_order && header.shape.len() > 1 {
         // Fortran layout: read with reversed dims, then permute back to C order.
         let reversed: Vec<usize> = header.shape.iter().rev().copied().collect();
