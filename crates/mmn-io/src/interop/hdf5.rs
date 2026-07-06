@@ -1,12 +1,14 @@
 //! From-scratch minimal HDF5 reader — the TensorFlow/Keras `.h5` bridge.
 //!
-//! Implements the subset the `h5py`/Keras default writer produces
-//! ("earliest" libver): superblock version 0/1, version-1 object headers
-//! (with continuation blocks), symbol-table groups (B-tree v1 + local heap +
-//! SNOD nodes), and compact or contiguous datasets of fixed-point / IEEE
-//! float datatypes. Chunked/compressed datasets are rejected with a clear
-//! message. No HDF5 library is linked.
+//! Implements the subset the `h5py`/Keras writers produce ("earliest"
+//! libver): superblock version 0/1, version-1 object headers (with
+//! continuation blocks), symbol-table groups (B-tree v1 + local heap + SNOD
+//! nodes), and compact, contiguous, or **chunked** datasets (B-tree v1 chunk
+//! index) of fixed-point / IEEE float datatypes, with **gzip (deflate)** and
+//! **shuffle** filters undone by the from-scratch inflate. No HDF5 library
+//! is linked.
 
+use super::inflate::inflate;
 use super::zip::{is_zip_bytes, read_zip};
 use half::f16;
 use mmn_core::MmnError;
@@ -193,8 +195,19 @@ fn parse_datatype(bytes: &[u8], msg: &Message) -> Result<H5Dtype, MmnError> {
 }
 
 enum Layout {
-    Compact { start: usize, len: usize },
-    Contiguous { addr: u64, size: usize },
+    Compact {
+        start: usize,
+        len: usize,
+    },
+    Contiguous {
+        addr: u64,
+        size: usize,
+    },
+    Chunked {
+        btree_addr: u64,
+        /// Chunk dims incl. the trailing element-size entry (spec layout).
+        chunk_dims: Vec<usize>,
+    },
 }
 
 fn parse_layout(bytes: &[u8], msg: &Message) -> Result<Layout, MmnError> {
@@ -218,11 +231,273 @@ fn parse_layout(bytes: &[u8], msg: &Message) -> Result<Layout, MmnError> {
             let size = u64_at(bytes, msg.body_start + 10)? as usize;
             Ok(Layout::Contiguous { addr, size })
         }
-        2 => Err(err(
-            "hdf5 chunked datasets are not supported; save without chunking/compression (h5py: no chunks=/compression=)",
-        )),
+        2 => {
+            let dimensionality = get(bytes, msg.body_start + 2, 1)?[0] as usize;
+            let btree_addr = u64_at(bytes, msg.body_start + 3)?;
+            let mut chunk_dims = Vec::with_capacity(dimensionality);
+            for i in 0..dimensionality {
+                chunk_dims.push(u32_at(bytes, msg.body_start + 11 + i * 4)? as usize);
+            }
+            Ok(Layout::Chunked {
+                btree_addr,
+                chunk_dims,
+            })
+        }
         other => Err(err(format!("hdf5 layout class {other} unknown"))),
     }
+}
+
+/// One entry of the filter pipeline message: (filter id, client values).
+type Filter = (u16, Vec<u32>);
+
+const FILTER_DEFLATE: u16 = 1;
+const FILTER_SHUFFLE: u16 = 2;
+
+fn parse_filter_pipeline(bytes: &[u8], msg: &Message) -> Result<Vec<Filter>, MmnError> {
+    let version = get(bytes, msg.body_start, 1)?[0];
+    let nfilters = get(bytes, msg.body_start + 1, 1)?[0] as usize;
+    let mut pos = match version {
+        1 => msg.body_start + 8, // 2 + 2 reserved + 4 reserved
+        2 => msg.body_start + 2,
+        other => return Err(err(format!("hdf5 filter pipeline version {other} unknown"))),
+    };
+    let mut filters = Vec::with_capacity(nfilters);
+    for _ in 0..nfilters {
+        let id = u16_at(bytes, pos)?;
+        let has_name = version == 1 || id >= 256;
+        let name_len = if has_name { u16_at(bytes, pos + 2)? as usize } else { 0 };
+        let base = if has_name { pos + 4 } else { pos + 2 };
+        let flags = u16_at(bytes, base)?;
+        let n_values = u16_at(bytes, base + 2)? as usize;
+        let mut vpos = base + 4 + name_len;
+        let mut values = Vec::with_capacity(n_values);
+        for _ in 0..n_values {
+            values.push(u32_at(bytes, vpos)?);
+            vpos += 4;
+        }
+        if version == 1 && n_values % 2 == 1 {
+            vpos += 4; // pad to 8-byte multiple
+        }
+        let _ = flags;
+        filters.push((id, values));
+        pos = vpos;
+    }
+    Ok(filters)
+}
+
+/// Adler-32 (RFC 1950) for zlib stream verification.
+fn adler32(data: &[u8]) -> u32 {
+    const MOD: u32 = 65_521;
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for chunk in data.chunks(5_552) {
+        for &byte in chunk {
+            a += byte as u32;
+            b += a;
+        }
+        a %= MOD;
+        b %= MOD;
+    }
+    (b << 16) | a
+}
+
+/// Undo the HDF5 deflate filter: a zlib wrapper (header + deflate + adler32).
+fn undo_deflate(raw: &[u8]) -> Result<Vec<u8>, MmnError> {
+    if raw.len() < 6 || raw[0] & 0x0F != 8 {
+        return Err(err("hdf5 gzip chunk is not a zlib stream"));
+    }
+    let body = &raw[2..raw.len() - 4];
+    let out = inflate(body)?;
+    let stored = u32::from_be_bytes([
+        raw[raw.len() - 4],
+        raw[raw.len() - 3],
+        raw[raw.len() - 2],
+        raw[raw.len() - 1],
+    ]);
+    if adler32(&out) != stored {
+        return Err(err("hdf5 gzip chunk Adler-32 mismatch"));
+    }
+    Ok(out)
+}
+
+/// Undo the HDF5 shuffle filter (byte transpose by element size).
+fn undo_shuffle(raw: &[u8], elem_size: usize) -> Vec<u8> {
+    if elem_size <= 1 || !raw.len().is_multiple_of(elem_size) {
+        return raw.to_vec();
+    }
+    let n = raw.len() / elem_size;
+    let mut out = vec![0u8; raw.len()];
+    for j in 0..elem_size {
+        for i in 0..n {
+            out[i * elem_size + j] = raw[j * n + i];
+        }
+    }
+    out
+}
+
+/// Undo the filter pipeline in reverse write order, honoring the skip mask.
+fn undo_filters(
+    raw: &[u8],
+    filters: &[Filter],
+    mask: u32,
+    elem_size: usize,
+) -> Result<Vec<u8>, MmnError> {
+    let mut data = raw.to_vec();
+    for (i, (id, _values)) in filters.iter().enumerate().rev() {
+        if mask & (1 << i) != 0 {
+            continue; // filter skipped for this chunk
+        }
+        data = match *id {
+            FILTER_DEFLATE => undo_deflate(&data)?,
+            FILTER_SHUFFLE => undo_shuffle(&data, elem_size),
+            other => {
+                return Err(err(format!(
+                    "hdf5 filter id {other} not supported (gzip and shuffle only)"
+                )));
+            }
+        };
+    }
+    Ok(data)
+}
+
+/// A chunk located by the v1 B-tree: element offsets + data extent.
+struct ChunkRef {
+    offsets: Vec<usize>,
+    filter_mask: u32,
+    addr: usize,
+    size: usize,
+}
+
+/// Walk a raw-data-chunk B-tree (v1, node type 1).
+fn walk_chunk_btree(
+    bytes: &[u8],
+    addr: usize,
+    dimensionality: usize,
+    out: &mut Vec<ChunkRef>,
+) -> Result<(), MmnError> {
+    if get(bytes, addr, 4)? != b"TREE" {
+        return Err(err("hdf5 chunk B-tree signature mismatch"));
+    }
+    let node_type = get(bytes, addr + 4, 1)?[0];
+    let level = get(bytes, addr + 5, 1)?[0];
+    let entries = u16_at(bytes, addr + 6)? as usize;
+    if node_type != 1 {
+        return Err(err("hdf5 chunk B-tree node type mismatch"));
+    }
+    let key_len = 8 + 8 * dimensionality;
+    let mut pos = addr + 8 + 16; // skip siblings
+    for _ in 0..entries {
+        let size = u32_at(bytes, pos)? as usize;
+        let filter_mask = u32_at(bytes, pos + 4)?;
+        let mut offsets = Vec::with_capacity(dimensionality);
+        for d in 0..dimensionality {
+            offsets.push(u64_at(bytes, pos + 8 + d * 8)? as usize);
+        }
+        pos += key_len;
+        let child = u64_at(bytes, pos)? as usize;
+        pos += 8;
+        if level > 0 {
+            walk_chunk_btree(bytes, child, dimensionality, out)?;
+        } else {
+            out.push(ChunkRef {
+                offsets,
+                filter_mask,
+                addr: child,
+                size,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Assemble a chunked dataset into a contiguous row-major byte buffer.
+fn assemble_chunked(
+    bytes: &[u8],
+    name: &str,
+    dims: &[usize],
+    elem_size: usize,
+    btree_addr: u64,
+    chunk_dims: &[usize],
+    filters: &[Filter],
+) -> Result<Vec<u8>, MmnError> {
+    // The stored chunk dims carry a trailing element-size entry.
+    let rank = dims.len();
+    if chunk_dims.len() != rank + 1 {
+        return Err(err(format!(
+            "hdf5 dataset {name}: chunk rank {} does not match dataspace rank {rank}",
+            chunk_dims.len().saturating_sub(1)
+        )));
+    }
+    let chunk_shape = &chunk_dims[..rank];
+    let numel: usize = dims.iter().product();
+    let mut out = vec![0u8; numel * elem_size];
+    if btree_addr == UNDEFINED_ADDR {
+        return Ok(out); // never-written dataset
+    }
+    let mut chunks = Vec::new();
+    walk_chunk_btree(bytes, btree_addr as usize, rank + 1, &mut chunks)?;
+    // Row-major strides in elements.
+    let mut strides = vec![1usize; rank];
+    for i in (0..rank.saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1];
+    }
+    let chunk_numel: usize = chunk_shape.iter().product();
+    for chunk in &chunks {
+        let raw = bytes
+            .get(chunk.addr..chunk.addr + chunk.size)
+            .ok_or_else(|| err(format!("hdf5 dataset {name}: chunk out of bounds")))?;
+        let data = undo_filters(raw, filters, chunk.filter_mask, elem_size)?;
+        if data.len() < chunk_numel * elem_size {
+            return Err(err(format!(
+                "hdf5 dataset {name}: chunk decoded to {} bytes, expected {}",
+                data.len(),
+                chunk_numel * elem_size
+            )));
+        }
+        // Copy row-runs of the last dimension, clipping edge chunks.
+        let last = rank - 1;
+        let row_len = chunk_shape[last]
+            .min(dims[last].saturating_sub(chunk.offsets[last]));
+        if row_len == 0 {
+            continue;
+        }
+        let outer: usize = chunk_shape[..last].iter().product();
+        let mut index = vec![0usize; last];
+        for _ in 0..outer.max(1) {
+            let mut in_bounds = true;
+            let mut target = chunk.offsets[last];
+            for d in 0..last {
+                let pos = chunk.offsets[d] + index[d];
+                if pos >= dims[d] {
+                    in_bounds = false;
+                    break;
+                }
+                target += pos * strides[d];
+            }
+            if in_bounds {
+                let mut src = 0usize;
+                let mut mul = 1usize;
+                for d in (0..last).rev() {
+                    src += index[d] * mul * chunk_shape[last];
+                    mul *= chunk_shape[d];
+                }
+                // src currently counts elements of the flattened chunk rows.
+                let src_start = src * elem_size;
+                let dst_start = target * elem_size;
+                out[dst_start..dst_start + row_len * elem_size]
+                    .copy_from_slice(&data[src_start..src_start + row_len * elem_size]);
+            }
+            // Odometer increment over the outer chunk dims.
+            for d in (0..last).rev() {
+                index[d] += 1;
+                if index[d] < chunk_shape[d] {
+                    break;
+                }
+                index[d] = 0;
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Read a NUL-terminated name from the local heap data segment.
@@ -301,10 +576,12 @@ fn dataset_values(
     dims: &[usize],
     dtype: H5Dtype,
     layout: Layout,
+    filters: &[Filter],
 ) -> Result<Vec<f32>, MmnError> {
     let numel: usize = dims.iter().product();
     let expected = numel * dtype.size;
-    let raw = match layout {
+    let assembled;
+    let raw: &[u8] = match layout {
         Layout::Compact { start, len } => get(bytes, start, len)?,
         Layout::Contiguous { addr, size } => {
             if addr == UNDEFINED_ADDR {
@@ -312,6 +589,24 @@ fn dataset_values(
                 return Ok(vec![0.0; numel]);
             }
             get(bytes, addr as usize, size)?
+        }
+        Layout::Chunked {
+            btree_addr,
+            chunk_dims,
+        } => {
+            if dims.is_empty() {
+                return Err(err(format!("hdf5 dataset {name}: chunked scalar unsupported")));
+            }
+            assembled = assemble_chunked(
+                bytes,
+                name,
+                dims,
+                dtype.size,
+                btree_addr,
+                &chunk_dims,
+                filters,
+            )?;
+            &assembled
         }
     };
     if raw.len() < expected {
@@ -342,13 +637,13 @@ fn visit_object(
     let mut dtype = None;
     let mut layout = None;
     let mut symbol_table = None;
-    let mut has_filters = false;
+    let mut filters: Vec<Filter> = Vec::new();
     for msg in &messages {
         match msg.msg_type {
             MSG_DATASPACE => dims = Some(parse_dataspace(bytes, msg)?),
             MSG_DATATYPE => dtype = Some(parse_datatype(bytes, msg)?),
             MSG_LAYOUT => layout = Some(parse_layout(bytes, msg)),
-            MSG_FILTER_PIPELINE => has_filters = true,
+            MSG_FILTER_PIPELINE => filters = parse_filter_pipeline(bytes, msg)?,
             MSG_SYMBOL_TABLE => {
                 let btree = u64_at(bytes, msg.body_start)? as usize;
                 let heap = u64_at(bytes, msg.body_start + 8)? as usize;
@@ -373,12 +668,7 @@ fn visit_object(
         return Ok(());
     }
     if let (Some(dims), Some(dtype), Some(layout)) = (dims, dtype, layout) {
-        if has_filters {
-            return Err(err(format!(
-                "hdf5 dataset {path} uses filters (compression); save uncompressed"
-            )));
-        }
-        let values = dataset_values(bytes, path, &dims, dtype, layout?)?;
+        let values = dataset_values(bytes, path, &dims, dtype, layout?, &filters)?;
         out.push((path.to_string(), dims, values));
     }
     Ok(())
@@ -477,6 +767,46 @@ mod tests {
         let arrays = read_keras_arrays(path.to_str().unwrap()).unwrap();
         assert!(arrays.iter().any(|(n, _, _)| n == "layer1/kernel"));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn chunked_gzip_shuffle_fixture_reads() {
+        // Written by h5py: gzip'd 64x64 arange, gzip+shuffle 32x32 arange,
+        // plain-chunked 16x16 ones (chunks of (4,16)).
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/chunked.h5");
+        let arrays = read_h5_arrays(path.to_str().unwrap()).unwrap();
+        let gz = arrays.iter().find(|(n, _, _)| n == "gz").unwrap();
+        assert_eq!(gz.1, vec![64, 64]);
+        assert_eq!(gz.2[0], 0.0);
+        assert_eq!(gz.2[65], 65.0);
+        assert_eq!(gz.2[4095], 4095.0);
+        let shuf = arrays.iter().find(|(n, _, _)| n == "shuf").unwrap();
+        assert_eq!(shuf.1, vec![32, 32]);
+        assert_eq!(shuf.2[100], 100.0);
+        assert_eq!(shuf.2[1023], 1023.0);
+        let plain = arrays.iter().find(|(n, _, _)| n == "plainchunk").unwrap();
+        assert!(plain.2.iter().all(|&v| v == 1.0));
+    }
+
+    #[test]
+    fn adler32_reference_value() {
+        // zlib.adler32(b"Wikipedia") == 0x11E60398.
+        assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
+        assert_eq!(adler32(b""), 1);
+    }
+
+    #[test]
+    fn shuffle_filter_roundtrip_shape() {
+        // shuffle stores all byte-0s, then byte-1s, ...; undo restores order.
+        let original: Vec<u8> = (0..16).collect();
+        let mut shuffled = vec![0u8; 16];
+        for (i, chunk) in original.chunks(4).enumerate() {
+            for (j, &b) in chunk.iter().enumerate() {
+                shuffled[j * 4 + i] = b;
+            }
+        }
+        assert_eq!(undo_shuffle(&shuffled, 4), original);
     }
 
     #[test]
