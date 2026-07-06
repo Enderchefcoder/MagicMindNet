@@ -301,6 +301,8 @@ Lesson: libhdf5 reads B-tree/SNOD nodes at FIXED allocation sizes derived from s
 [X] Wave 19: from-scratch LZ4 block decoder + Blosc1 frame decoder (split byte-lane streams w/ single-stream fallback since c-blosc split modes vary, byte shuffle, memcpy, zlib-in-blosc) — default Blosc(lz4) zarr stores read; numcodecs fixtures + live matrix; blosclz/zstd/snappy/bitshuffle rejected by name
 [X] 567 Rust / 1041 pytest; clippy 0; ruff clean
 Lesson: zarr-python 3.x defaults NEW v2 stores to plain zstd (not blosc); classic blosc default needs explicit compressors=Blosc(...). numcodecs Blosc default cname is blosclz, zarr classic default was lz4.
+[X] Wave 20: blosclz decoder (FastLZ-family, byte-verified vs c-blosc captures) + bit-shuffle undo (bitplane transpose, 8*typesize region + raw tail) + Zarr v3 read (zarr.json nodes, c/ chunk keys, bytes+gzip/blosc chains, RFC-1952 gzip w/ CRC); v3 zstd rejected by name
+[X] 571 Rust / 1049 pytest; clippy 0; ruff clean
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
