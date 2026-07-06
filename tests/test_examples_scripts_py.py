@@ -76,6 +76,15 @@ def test_checkpoint_roundtrip_example_runs(run_example):
     assert proc.returncode == 0, proc.stderr or proc.stdout
 
 
+def test_global_formats_roundtrip_example_runs(run_example):
+    proc = run_example("global_formats_roundtrip.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "_roundtrip_global.gguf: loaded via ai.load" in proc.stdout
+    assert "_roundtrip_global.pt: loaded via ai.load" in proc.stdout
+    assert "_roundtrip_global.npz: loaded via ai.load" in proc.stdout
+    assert "generic .npz / .pt array roundtrips ok" in proc.stdout
+
+
 def test_learned_pos_embed_roundtrip_example_runs(run_example):
     proc = run_example("learned_pos_embed_roundtrip.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

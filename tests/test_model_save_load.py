@@ -46,7 +46,13 @@ def test_chatbot_save_load_bin_stub(tmp_path):
 
 def test_chatbot_save_unknown_format_raises(tmp_path):
     with pytest.raises(ValueError, match="Unknown format"):
-        make_bot().save(str(tmp_path / "x.gguf"), format="gguf")
+        make_bot().save(str(tmp_path / "x.onnx"), format="onnx")
+
+
+def test_chatbot_save_gguf_is_supported(tmp_path):
+    path = tmp_path / "x.gguf"
+    make_bot().save(str(path), format="gguf")
+    assert path.read_bytes()[:4] == b"GGUF"
 
 
 def test_chatbot_load_missing_file_mentions_path():
