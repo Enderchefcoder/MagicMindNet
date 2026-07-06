@@ -16,11 +16,18 @@ pub use chatbot_io::{
     TokenizerSidecarRefs,
 };
 pub use detect::{detect_checkpoint_kind, CheckpointKind};
-pub use interop::gguf::{is_gguf_bytes, read_gguf, write_gguf, GgufValue, GgufWriteTensor};
-pub use interop::gguf_chatbot::{export_gguf, gguf_name_to_mmn, import_gguf, mmn_name_to_gguf};
+pub use interop::gguf::{
+    is_gguf_bytes, read_gguf, read_gguf_header_file, write_gguf, GgufValue, GgufWriteTensor,
+};
+pub use interop::gguf_chatbot::{
+    export_gguf, export_gguf_with_tokenizer, gguf_name_to_mmn, import_gguf, mmn_name_to_gguf,
+};
+pub use interop::gguf_info::{gguf_info_json, import_gguf_tokenizer};
 pub use interop::gguf_quant::GgmlType;
+pub use interop::hdf5::{read_h5_arrays, read_h5_arrays_bytes, read_keras_arrays};
 pub use interop::inflate::inflate;
 pub use interop::npy::{decode_npy, encode_npy_f32, NpyArray};
+pub use interop::pickle::{parse_pickle, parse_pickle_prefix, PickleValue, PickleWriter};
 pub use interop::npz_chatbot::{
     export_npz, import_npz, read_npz_arrays, write_npz_arrays,
 };

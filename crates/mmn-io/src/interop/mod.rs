@@ -10,7 +10,9 @@ pub type NamedArray = (String, Vec<usize>, Vec<f32>);
 
 pub mod gguf;
 pub mod gguf_chatbot;
+pub mod gguf_info;
 pub mod gguf_quant;
+pub mod hdf5;
 pub mod inflate;
 pub mod npy;
 pub mod npz_chatbot;
