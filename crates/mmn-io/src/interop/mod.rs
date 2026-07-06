@@ -37,6 +37,7 @@ pub mod zstd;
 pub mod pickle;
 pub mod proto;
 pub mod sharded;
+pub mod snappy;
 pub mod tf_checkpoint;
 pub mod torch_pt;
 pub mod zip;

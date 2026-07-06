@@ -165,6 +165,52 @@ def test_blosc_zstd_inner_codec_reads(tmp_path):
     np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
 
 
+def test_lz4_standalone_codec_reads(tmp_path):
+    from numcodecs import LZ4
+
+    store = str(tmp_path / "lz4.zarr")
+    values = ((np.arange(30_000, dtype=np.float32) % 97) / 7.0)
+    z = zarr.create_array(store=store, shape=values.shape, chunks=(8192,), dtype="<f4",
+                          zarr_format=2, compressors=LZ4(acceleration=1))
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_blosc_snappy_chunk_decodes(tmp_path):
+    # numcodecs' c-blosc build has no snappy encoder, so hand-build the
+    # Blosc container (single unsplit stream) around a cramjam-written
+    # raw snappy block — the layout every c-blosc build reads.
+    import json
+    import os
+    import struct
+
+    import cramjam
+
+    values = ((np.arange(10_000, dtype=np.float32) % 97) / 7.0)
+    raw = values.tobytes()
+    stream = bytes(cramjam.snappy.compress_raw(raw))
+    frame = bytearray()
+    frame += bytes([2, 1, 2 << 5, 4])  # version, versionlz, flags: snappy, typesize
+    frame += struct.pack("<I", len(raw))       # nbytes
+    frame += struct.pack("<I", len(raw))       # blocksize (single block)
+    cbytes_pos = len(frame)
+    frame += struct.pack("<I", 0)              # cbytes placeholder
+    frame += struct.pack("<I", 20)             # bstart (after header + bstarts)
+    frame += struct.pack("<I", len(stream))    # stream cbytes
+    frame += stream
+    struct.pack_into("<I", frame, cbytes_pos, len(frame))
+    store = tmp_path / "snappy.zarr"
+    os.makedirs(store)
+    (store / ".zarray").write_text(json.dumps({
+        "chunks": [10_000], "compressor": {"id": "blosc", "cname": "snappy"},
+        "dtype": "<f4", "fill_value": 0.0, "filters": None, "order": "C",
+        "shape": [10_000], "zarr_format": 2}))
+    (store / "0").write_bytes(bytes(frame))
+    loaded = ai.load_zarr(str(store))
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
 @pytest.mark.parametrize("level", [1, 9, 22])
 def test_raw_zstd_frames_decode_at_all_levels(tmp_path, level):
     import json

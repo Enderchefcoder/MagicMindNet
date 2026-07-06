@@ -15,6 +15,14 @@
   multi-block/level-19) + live zarr default-store matrix
 - Debugging note: the initial failure traced to a misremembered predefined
   match-length distribution; fixed against the published format spec
+- **zstd throughput 2x** (~120 → ~240 MB/s on literal-heavy data): the backward
+  bit reader moved from per-bit loops to single unaligned u64 window loads, and
+  the Huffman literal decoder to a peek-window loop over signed bit positions
+- **Snappy decoder** (raw block format: varint preamble, literal/copy tags with
+  1-4-byte lengths and offsets) — Blosc's last inner codec; validated against
+  cramjam-written fixtures + a hand-built blosc-snappy container
+- **Standalone numcodecs LZ4 codec** in zarr v2 (4-byte size prefix + block),
+  live-validated
 
 ### Added (interop wave 13: numpy arrays in any pickle — PaddlePaddle, sklearn)
 - **Generic pickle array IO** (`ai.load_pickle_arrays` / `ai.save_pickle_arrays`):

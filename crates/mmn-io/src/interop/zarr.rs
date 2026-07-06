@@ -41,6 +41,8 @@ enum ZarrCompressor {
     Blosc,
     /// Raw zstd frames (zarr-python 3.x default for both v2 and v3).
     Zstd,
+    /// numcodecs LZ4: 4-byte LE original size + one LZ4 block.
+    Lz4,
 }
 
 struct ZarrayMeta {
@@ -225,9 +227,10 @@ fn parse_zarray(path: &Path) -> Result<ZarrayMeta, MmnError> {
             "zlib" | "gzip" => ZarrCompressor::Zlib,
             "blosc" => ZarrCompressor::Blosc,
             "zstd" => ZarrCompressor::Zstd,
+            "lz4" => ZarrCompressor::Lz4,
             other => {
                 return Err(err(format!(
-                    "zarr compressor {other:?} not supported (blosc/zstd/zlib/none)"
+                    "zarr compressor {other:?} not supported (blosc/zstd/lz4/zlib/none)"
                 )))
             }
         },
@@ -264,6 +267,14 @@ fn decode_chunk(
         ZarrCompressor::Gzip => undo_gzip(raw)?,
         ZarrCompressor::Blosc => super::blosc::blosc_decompress(raw)?,
         ZarrCompressor::Zstd => super::zstd::zstd_decompress(raw)?,
+        ZarrCompressor::Lz4 => {
+            if raw.len() < 4 {
+                return Err(err("zarr lz4 chunk missing its size header"));
+            }
+            let size =
+                u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+            super::lz4::lz4_decompress_block(&raw[4..], size)?
+        }
         ZarrCompressor::None => raw.to_vec(),
     };
     let item = descr_item_size(&meta.descr)?;

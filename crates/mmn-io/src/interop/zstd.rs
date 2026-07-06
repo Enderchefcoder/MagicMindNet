@@ -78,24 +78,40 @@ impl<'a> BackwardBits<'a> {
         })
     }
 
-    fn bit(&mut self) -> u64 {
-        // Callers check `remaining` (reads past the start return zeros,
-        // matching zstd's defined behavior for the final state updates).
-        if self.remaining == 0 {
-            return 0;
-        }
-        self.remaining -= 1;
-        let byte = self.bytes[self.remaining / 8];
-        ((byte >> (self.remaining % 8)) & 1) as u64
+    /// Bits `[start, start + n)` as an integer (ascending index = ascending
+    /// weight), via one unaligned word load.
+    #[inline]
+    fn window(&self, start: usize, n: usize) -> u64 {
+        debug_assert!(n <= 56);
+        let byte0 = start / 8;
+        let shift = start % 8;
+        let word = if byte0 + 8 <= self.bytes.len() {
+            // Hot path: direct unaligned little-endian load.
+            u64::from_le_bytes(self.bytes[byte0..byte0 + 8].try_into().unwrap())
+        } else {
+            let mut padded = [0u8; 8];
+            let available = self.bytes.len() - byte0;
+            padded[..available].copy_from_slice(&self.bytes[byte0..]);
+            u64::from_le_bytes(padded)
+        };
+        (word >> shift) & ((1u64 << n) - 1)
     }
 
-    /// Read `n` bits; the first bit read is the most significant.
+    /// Read `n` bits; the first bit read is the most significant. Reads
+    /// past the stream start return zeros (zstd's defined behavior for
+    /// final state updates).
     fn read(&mut self, n: usize) -> u64 {
-        let mut value = 0u64;
-        for _ in 0..n {
-            value = (value << 1) | self.bit();
+        if n == 0 {
+            return 0;
         }
-        value
+        if self.remaining >= n {
+            self.remaining -= n;
+            self.window(self.remaining, n)
+        } else {
+            let real = self.remaining;
+            self.remaining = 0;
+            self.window(0, real) << (n - real)
+        }
     }
 }
 
@@ -343,19 +359,33 @@ fn huffman_decode_stream(
     stream: &[u8],
     out_len: usize,
 ) -> Result<Vec<u8>, MmnError> {
-    let mut bits = BackwardBits::new(stream)?;
+    let bits = BackwardBits::new(stream)?;
+    let table_log = table.table_log;
     let mut out = Vec::with_capacity(out_len);
-    // Peek table_log bits (short final codes borrow zero padding).
-    let mut window = bits.read(table.table_log) as usize;
+    // Peek `table_log` bits at `pos`; positions below the stream start
+    // borrow zero padding (short final codes per the spec).
+    let read_window = |pos: isize| -> usize {
+        if pos >= 0 {
+            bits.window(pos as usize, table_log) as usize
+        } else {
+            let borrow = (-pos) as usize;
+            if borrow >= table_log {
+                0
+            } else {
+                (bits.window(0, table_log - borrow) as usize) << borrow
+            }
+        }
+    };
+    let mut pos = bits.remaining as isize - table_log as isize;
+    let mut window = read_window(pos);
     loop {
         let (symbol, nb_bits) = table.entries[window];
         out.push(symbol);
         if out.len() == out_len {
             break;
         }
-        let consume = nb_bits as usize;
-        window = ((window << consume) | bits.read(consume) as usize)
-            & ((1 << table.table_log) - 1);
+        pos -= nb_bits as isize;
+        window = read_window(pos);
     }
     Ok(out)
 }

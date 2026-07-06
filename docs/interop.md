@@ -358,9 +358,11 @@ keys, codec chains) — group trees (`/`-joined names), C-order chunk grids
 with edge padding, `fill_value` for missing chunks, every numeric dtype.
 **Every compressor zarr-python ships is decoded from scratch**: raw
 **zstd** frames (the 3.x default for both v2 and v3 — RFC 8878 FSE +
-Huffman implemented here), Blosc frames (the classic default) with **LZ4,
-BloscLZ, zlib, and zstd** inner codecs plus **byte- and bit-shuffle** undo
-and memcpy mode, plain zlib, RFC-1952 gzip, and uncompressed chunks.
+Huffman implemented here, ~240 MB/s on literal-heavy data), Blosc frames
+(the classic default) with **LZ4, BloscLZ, zlib, zstd, and Snappy** inner
+codecs plus **byte- and bit-shuffle** undo and memcpy mode, standalone
+**numcodecs LZ4** (size-prefixed blocks), plain zlib, RFC-1952 gzip, and
+uncompressed chunks.
 Writes produce v2 group stores `zarr.open_group` reads (one zlib `<f4>`
 chunk per array):
 

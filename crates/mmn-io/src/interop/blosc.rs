@@ -88,7 +88,13 @@ fn decode_stream(
             }
             Ok(out)
         }
-        2 => Err(err("blosc snappy codec not supported")),
+        2 => {
+            let out = super::snappy::snappy_decompress(src)?;
+            if out.len() != expected {
+                return Err(err("blosc snappy stream length mismatch"));
+            }
+            Ok(out)
+        }
         other => Err(err(format!("blosc codec id {other} unknown"))),
     }
 }
