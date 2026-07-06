@@ -10,8 +10,8 @@ use crate::checkpoint_util::{
 use mmn_core::{MmnError, Tensor};
 use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
 use crate::hf_tensor_codec::{hf_err, is_hf_binary_bytes, tensor_bytes_f32, tensor_from_view};
-use safetensors::tensor::{Dtype, TensorView};
-use safetensors::{serialize, SafeTensors};
+use crate::st_codec::{Dtype, TensorView};
+use crate::st_codec::{serialize, SafeTensors};
 use std::collections::HashMap;
 use std::fs;
 

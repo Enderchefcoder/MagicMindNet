@@ -9,6 +9,7 @@ mod hf_classifier_safetensors;
 mod hf_safetensors;
 mod hf_tensor_codec;
 mod interop;
+mod st_codec;
 mod tensor_merge;
 
 pub use chatbot_io::{
@@ -43,6 +44,10 @@ pub use interop::zip::{
     crc32, is_zip_bytes, read_zip, read_zip_entry, write_zip, write_zip_stored, zip_entry_names,
 };
 pub use interop::NamedArray;
+pub use st_codec::{
+    serialize as serialize_safetensors, Dtype as StDtype, SafeTensors as SafeTensorsFile,
+    TensorView as StTensorView,
+};
 pub use hf_classifier_safetensors::{
     export_hf_classifier_safetensors, hf_classifier_name_to_mmn, import_hf_classifier_safetensors,
     import_hf_classifier_safetensors_bytes, HF_CLASSIFIER_FORMAT,

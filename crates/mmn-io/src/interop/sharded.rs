@@ -8,7 +8,7 @@ use crate::hf_tensor_codec::{hf_err, tensor_from_view};
 use mmn_core::{MmnError, Tensor};
 use mmn_models::Chatbot;
 use ndarray::{ArrayD, IxDyn};
-use safetensors::SafeTensors;
+use crate::st_codec::SafeTensors;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
@@ -120,8 +120,8 @@ pub fn import_sharded(index_path: &str) -> Result<Chatbot, MmnError> {
 mod tests {
     use super::*;
     use crate::interop::torch_pt::write_torch_arrays;
-    use safetensors::tensor::{Dtype, TensorView};
-    use safetensors::serialize;
+    use crate::st_codec::{Dtype, TensorView};
+    use crate::st_codec::serialize;
     use std::path::PathBuf;
 
     fn tmp_dir(name: &str) -> PathBuf {

@@ -5,7 +5,7 @@ use crate::interop::gguf::is_gguf_bytes;
 use crate::interop::torch_pt::is_legacy_torch_bytes;
 use crate::interop::zip::{is_zip_bytes, zip_entry_names};
 use mmn_core::MmnError;
-use safetensors::SafeTensors;
+use crate::st_codec::SafeTensors;
 use std::fs;
 
 /// Model family stored in a checkpoint file.

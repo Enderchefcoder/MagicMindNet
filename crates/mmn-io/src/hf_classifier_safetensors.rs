@@ -7,8 +7,8 @@ use crate::checkpoint_util::{
 use crate::hf_tensor_codec::{hf_err, tensor_bytes_f32, tensor_from_view};
 use mmn_core::{MmnError, Tensor};
 use mmn_models::Classifier;
-use safetensors::tensor::{Dtype, TensorView};
-use safetensors::{serialize, SafeTensors};
+use crate::st_codec::{Dtype, TensorView};
+use crate::st_codec::{serialize, SafeTensors};
 use std::collections::HashMap;
 use std::fs;
 
