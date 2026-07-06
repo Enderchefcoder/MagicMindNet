@@ -36,11 +36,16 @@ fn err(message: impl Into<String>) -> MmnError {
     }
 }
 
-/// LSB-first bit reader over a byte slice.
+/// Fast-path lookup table width: codes up to this many bits decode in one
+/// table hit; longer codes fall back to the canonical bit-by-bit walk.
+const ROOT_BITS: u32 = 10;
+
+/// LSB-first bit reader with a 64-bit accumulator (allows cheap `peek`).
 struct BitReader<'a> {
     data: &'a [u8],
     byte_pos: usize,
-    bit_pos: u32,
+    bit_buf: u64,
+    bit_count: u32,
 }
 
 impl<'a> BitReader<'a> {
@@ -48,55 +53,89 @@ impl<'a> BitReader<'a> {
         Self {
             data,
             byte_pos: 0,
-            bit_pos: 0,
+            bit_buf: 0,
+            bit_count: 0,
         }
     }
 
-    fn take_bit(&mut self) -> Result<u32, MmnError> {
-        let byte = *self
-            .data
-            .get(self.byte_pos)
-            .ok_or_else(|| err("deflate stream truncated"))?;
-        let bit = (byte >> self.bit_pos) & 1;
-        self.bit_pos += 1;
-        if self.bit_pos == 8 {
-            self.bit_pos = 0;
+    #[inline]
+    fn refill(&mut self) {
+        while self.bit_count <= 56 && self.byte_pos < self.data.len() {
+            self.bit_buf |= (self.data[self.byte_pos] as u64) << self.bit_count;
             self.byte_pos += 1;
+            self.bit_count += 8;
         }
-        Ok(bit as u32)
     }
 
-    fn take_bits(&mut self, n: u32) -> Result<u32, MmnError> {
-        let mut out = 0u32;
-        for i in 0..n {
-            out |= self.take_bit()? << i;
+    /// Peek up to `n` bits; bits past the end of the stream read as zero
+    /// (consuming them still errors).
+    #[inline]
+    fn peek_bits(&mut self, n: u32) -> u32 {
+        self.refill();
+        (self.bit_buf & ((1u64 << n) - 1)) as u32
+    }
+
+    #[inline]
+    fn consume(&mut self, n: u32) -> Result<(), MmnError> {
+        if n > self.bit_count {
+            return Err(err("deflate stream truncated"));
         }
+        self.bit_buf >>= n;
+        self.bit_count -= n;
+        Ok(())
+    }
+
+    #[inline]
+    fn take_bit(&mut self) -> Result<u32, MmnError> {
+        self.refill();
+        let bit = (self.bit_buf & 1) as u32;
+        self.consume(1)?;
+        Ok(bit)
+    }
+
+    #[inline]
+    fn take_bits(&mut self, n: u32) -> Result<u32, MmnError> {
+        if n == 0 {
+            return Ok(0);
+        }
+        let out = self.peek_bits(n);
+        self.consume(n)?;
         Ok(out)
     }
 
     fn align_to_byte(&mut self) {
-        if self.bit_pos != 0 {
-            self.bit_pos = 0;
-            self.byte_pos += 1;
-        }
+        let extra = self.bit_count % 8;
+        self.bit_buf >>= extra;
+        self.bit_count -= extra;
     }
 
-    fn take_bytes(&mut self, n: usize) -> Result<&'a [u8], MmnError> {
+    fn take_bytes(&mut self, n: usize) -> Result<Vec<u8>, MmnError> {
+        debug_assert_eq!(self.bit_count % 8, 0);
+        let mut out = Vec::with_capacity(n);
+        // Drain buffered whole bytes first, then copy directly.
+        while out.len() < n && self.bit_count >= 8 {
+            out.push((self.bit_buf & 0xFF) as u8);
+            self.bit_buf >>= 8;
+            self.bit_count -= 8;
+        }
+        let remaining = n - out.len();
         let end = self
             .byte_pos
-            .checked_add(n)
+            .checked_add(remaining)
             .filter(|&e| e <= self.data.len())
             .ok_or_else(|| err("deflate stored block truncated"))?;
-        let slice = &self.data[self.byte_pos..end];
+        out.extend_from_slice(&self.data[self.byte_pos..end]);
         self.byte_pos = end;
-        Ok(slice)
+        Ok(out)
     }
 }
 
-/// Canonical Huffman decoding table (counts-per-length + length-ordered symbols).
+/// Canonical Huffman decoder with a one-hit lookup table for short codes.
 struct Huffman {
     counts: [u16; MAX_BITS + 1],
     symbols: Vec<u16>,
+    /// `table[peeked_bits] = (symbol << 4) | code_len`, 0 = fall back.
+    table: Vec<u16>,
 }
 
 impl Huffman {
@@ -120,10 +159,55 @@ impl Huffman {
                 offsets[len as usize] += 1;
             }
         }
-        Ok(Self { counts, symbols })
+        let mut huffman = Self {
+            counts,
+            symbols,
+            table: Vec::new(),
+        };
+        huffman.build_table();
+        Ok(huffman)
     }
 
+    /// Fill the fast table: for every symbol with a code of `len <= ROOT_BITS`
+    /// bits, every table slot whose low bits match the (bit-reversed) code
+    /// resolves in a single peek.
+    fn build_table(&mut self) {
+        self.table = vec![0u16; 1 << ROOT_BITS];
+        let mut first = 0u32; // first canonical code of the current length
+        let mut index = 0usize; // index into `symbols`
+        for len in 1..=MAX_BITS {
+            let count = self.counts[len] as u32;
+            if len as u32 <= ROOT_BITS {
+                for i in 0..count {
+                    let code = first + i;
+                    let symbol = self.symbols[index + i as usize];
+                    let reversed = (code.reverse_bits() >> (32 - len as u32)) as usize;
+                    let step = 1usize << len;
+                    let mut slot = reversed;
+                    while slot < (1 << ROOT_BITS) {
+                        self.table[slot] = (symbol << 4) | len as u16;
+                        slot += step;
+                    }
+                }
+            }
+            index += count as usize;
+            first = (first + count) << 1;
+        }
+    }
+
+    #[inline]
     fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, MmnError> {
+        let peeked = reader.peek_bits(ROOT_BITS) as usize;
+        let entry = self.table[peeked];
+        if entry != 0 {
+            reader.consume((entry & 0x0F) as u32)?;
+            return Ok(entry >> 4);
+        }
+        self.decode_slow(reader)
+    }
+
+    /// Bit-by-bit canonical walk for codes longer than `ROOT_BITS`.
+    fn decode_slow(&self, reader: &mut BitReader<'_>) -> Result<u16, MmnError> {
         let mut code = 0i32;
         let mut first = 0i32;
         let mut index = 0i32;
@@ -260,7 +344,7 @@ pub fn inflate(data: &[u8]) -> Result<Vec<u8>, MmnError> {
                 if len != !nlen {
                     return Err(err("deflate stored block LEN/NLEN mismatch"));
                 }
-                out.extend_from_slice(reader.take_bytes(len as usize)?);
+                out.extend_from_slice(&reader.take_bytes(len as usize)?);
             }
             1 => {
                 let (litlen, dist) = fixed_tables()?;
