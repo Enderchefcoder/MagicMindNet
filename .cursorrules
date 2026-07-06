@@ -288,6 +288,10 @@
 [X] Wave 14b: save_arrays numpy tobytes fast path (write_arrays_bytes, byte-identical, ~2x)
 [X] Wave 14c: FIXED the diffusion flake — Diffusion::new_with_seed + seeded Conv2d/VAE/UNet ctors; denoise loss tests seeded (seed 11), 3x stable
 [X] 549 Rust / 995 pytest; clippy 0 (workspace); ruff clean
+[X] Wave 15a: ZIP64 read — EOCD64 + locator + 0x0001 extras; validated vs zipfile force_zip64 + hand-built archive; covers >4GB npz/pt
+[X] Wave 15b: gzip HDF5 WRITE — chunk B-tree v1 must be padded to libhdf5 default indexed-K=32 allocation (addr-overflow otherwise); v1 deflate pipeline; zlib wrap; h5py full circle
+[X] 552 Rust / 1000 pytest; clippy 0; ruff clean
+Lesson: libhdf5 reads B-tree/SNOD nodes at FIXED allocation sizes derived from superblock Ks — every from-scratch HDF5 writer node must pad to that size (group btree, SNOD, and chunk btree alike).
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
