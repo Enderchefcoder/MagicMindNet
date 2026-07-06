@@ -25,6 +25,13 @@ pub fn gguf_name_to_mmn(name: &str) -> Option<String> {
         "position_embd.weight" => return Some("pos_embed".into()),
         // Final-norm has no MMN equivalent (blocks carry their own norms).
         "output_norm.weight" | "output_norm.bias" => return None,
+        // MMN vision prefix tensors (mmproj-style `v.` namespace).
+        "v.patch_proj.weight" => return Some("vision_patch_proj".into()),
+        "v.patch_conv.weight" => return Some("vision_patch_conv".into()),
+        "v.cross_attn_q.weight" => return Some("vision_cross_attn.q".into()),
+        "v.cross_attn_k.weight" => return Some("vision_cross_attn.k".into()),
+        "v.cross_attn_v.weight" => return Some("vision_cross_attn.v".into()),
+        "v.cross_attn_out.weight" => return Some("vision_cross_attn.out".into()),
         _ => {}
     }
     let rest = name.strip_prefix("blk.")?;
@@ -54,6 +61,12 @@ pub fn mmn_name_to_gguf(key: &str) -> Option<String> {
         "embed" => return Some("token_embd.weight".into()),
         "lm_head" => return Some("output.weight".into()),
         "pos_embed" => return Some("position_embd.weight".into()),
+        "vision_patch_proj" => return Some("v.patch_proj.weight".into()),
+        "vision_patch_conv" => return Some("v.patch_conv.weight".into()),
+        "vision_cross_attn.q" => return Some("v.cross_attn_q.weight".into()),
+        "vision_cross_attn.k" => return Some("v.cross_attn_k.weight".into()),
+        "vision_cross_attn.v" => return Some("v.cross_attn_v.weight".into()),
+        "vision_cross_attn.out" => return Some("v.cross_attn_out.weight".into()),
         _ => {}
     }
     let rest = key.strip_prefix("blocks.")?;
@@ -148,7 +161,12 @@ fn gguf_meta_to_mmn(file: &GgufFile, tensors: &HashMap<String, Tensor>) -> serde
     if let Some(seed) = meta_u64(file, &format!("{arch}.seed")) {
         meta["seed"] = serde_json::json!(seed);
     }
-    meta["vision"] = serde_json::json!(false);
+    let vision = file
+        .metadata
+        .get(&format!("{arch}.vision"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(|| tensors.contains_key("vision_patch_proj"));
+    meta["vision"] = serde_json::json!(vision);
     meta
 }
 
@@ -276,6 +294,9 @@ fn chatbot_gguf_metadata(model: &Chatbot) -> Vec<(String, GgufValue)> {
     if let Some(seed) = model.init_seed {
         meta.push(("mmn.seed".to_string(), GgufValue::U64(seed)));
     }
+    if model.vision {
+        meta.push(("mmn.vision".to_string(), GgufValue::Bool(true)));
+    }
     meta
 }
 
@@ -292,11 +313,6 @@ pub fn export_gguf_with_tokenizer(
     quant: &str,
     tokenizer: Option<&mmn_data::UnigramEncoder>,
 ) -> Result<(), MmnError> {
-    if model.vision {
-        return Err(err(
-            "GGUF export does not support vision models yet; use safetensors or npz",
-        ));
-    }
     let ggml_type = match quant {
         "f32" | "F32" => GgmlType::F32,
         "f16" | "F16" => GgmlType::F16,
@@ -310,6 +326,8 @@ pub fn export_gguf_with_tokenizer(
         "q4_k" | "Q4_K" => GgmlType::Q4K,
         "q5_k" | "Q5_K" => GgmlType::Q5K,
         "q6_k" | "Q6_K" => GgmlType::Q6K,
+        "iq4_nl" | "IQ4_NL" => GgmlType::Iq4Nl,
+        "iq4_xs" | "IQ4_XS" => GgmlType::Iq4Xs,
         other => {
             return Err(err(format!(
                 "GGUF export quant {other:?} not supported (use \"f32\", \"f16\", \"q8_0\", \"q4_0\", \"q4_k\", \"q5_k\", or \"q6_k\")"
@@ -498,6 +516,39 @@ mod tests {
         assert_eq!(back.decode(&back.encode(text)), text);
         assert_eq!(back.encode(text), enc.encode(text));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn vision_model_gguf_roundtrips() {
+        let model = Chatbot::new_with_seed(true, None, 64, Some(1), Some(16), Some(9));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_vis_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "f32").unwrap();
+        let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+        assert!(loaded.vision);
+        assert!(loaded.vision_patch_proj.is_some());
+        let a = model.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
+        let b = loaded.vision_patch_proj.as_ref().unwrap().weight.data[[0, 0]];
+        assert!((a - b).abs() < 1e-6);
+        if model.vision_cross_attn.is_some() {
+            assert!(loaded.vision_cross_attn.is_some());
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn iq4_exports_roundtrip_close() {
+        let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(256), Some(15));
+        let dir = std::env::temp_dir();
+        for quant in ["iq4_nl", "iq4_xs"] {
+            let path = dir.join(format!("mmn_gguf_{quant}_{}.gguf", std::process::id()));
+            export_gguf(&model, path.to_str().unwrap(), quant).unwrap();
+            let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+            let a = model.embed.weight.data[[1, 2]];
+            let b = loaded.embed.weight.data[[1, 2]];
+            assert!((a - b).abs() < 0.2, "{quant}: {a} vs {b}");
+            let _ = fs::remove_file(&path);
+        }
     }
 
     #[test]
