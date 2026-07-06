@@ -277,6 +277,10 @@
 [X] Wave 10b: from-scratch msgpack codec (all wire types) + flax.rs pytree bridge (ExtType 1/3, dtype.name incl bfloat16); ai.load_flax/save_flax; crossval vs pip msgpack
 [X] Wave 11: arrays_auto.rs — ai.load_arrays content detection (gguf/pt/pt-legacy/npz/keras/npy/h5/safetensors/flax/onnx/tf-checkpoint), ai.save_arrays extension inference, GGUF as plain array container (read_gguf_arrays dequantizes everything)
 [X] 524 Rust / 952 pytest; clippy 0; ruff clean; msgpack+safetensors added to dev extras
+[X] Wave 12a: GGUF v1 (u32 counts) + legacy GGML/GGMF/GGJT reader incl. original f32-scale q4_0/q4_1 pair-packed blocks (pre-GGJT-v2) vs modern GGJT v2/v3 blocks
+[X] Wave 12b: TFLite from-scratch flatbuffer walker (Model schema, inline + TF>=2.13 out-of-band buffers, per-tensor/per-channel int8 dequant); committed simple.tflite fixture + live TF conversion tests
+[X] Wave 12c: TorchScript constants.pkl archives read as constants.N; ai.load("model.ggjt") adapts legacy llama names to Chatbot and generates
+[X] 540 Rust / 964 pytest; clippy 0; ruff clean
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
