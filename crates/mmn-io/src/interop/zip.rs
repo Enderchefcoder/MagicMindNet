@@ -20,16 +20,23 @@ fn err(message: impl Into<String>) -> MmnError {
     }
 }
 
-/// CRC-32 (IEEE 802.3, reflected polynomial 0xEDB88320) — table computed on demand.
+/// CRC-32 (IEEE 802.3, reflected polynomial 0xEDB88320).
+///
+/// The lookup table is built once and cached; the hot loop is a plain
+/// table-driven byte scan.
 pub fn crc32(data: &[u8]) -> u32 {
-    let mut table = [0u32; 256];
-    for (i, slot) in table.iter_mut().enumerate() {
-        let mut c = i as u32;
-        for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+    static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut table = [0u32; 256];
+        for (i, slot) in table.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *slot = c;
         }
-        *slot = c;
-    }
+        table
+    });
     let mut crc = 0xFFFF_FFFFu32;
     for &byte in data {
         crc = table[((crc ^ byte as u32) & 0xFF) as usize] ^ (crc >> 8);
