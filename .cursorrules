@@ -33,6 +33,9 @@
 - ggml classic-quant encoders round by truncation after +0.5 ((int8_t)(x+0.5f)), NOT round_ties_even; matching this makes our blocks byte-identical to gguf-py's quantize.
 - HDF5 chunk B-tree keys carry rank+1 dims (trailing element-size); chunk data is filtered per chunk with a filter mask; gzip filter = zlib wrapper (2-byte header + deflate + big-endian adler32).
 - Test float roundtrips with power-of-two denominators — 1/89 isn't f32-representable and 'exact equality' tests fail for storage reasons, not codec bugs.
+- libhdf5 reads group B-tree/SNOD nodes at their FULL fixed allocation (btree 24+(2K+1)*8+2K*8=544 with K_internal=16; SNOD 8+2*K_leaf*40=328 with K_leaf=4) — writers must pad nodes or h5py errors with 'addr overflow'.
+- HDF5 f32 datatype bit fields per h5py: [0x11, 0x20, 0x1F, 0x00] (v1 float, normalized-msb, sign loc 31) + offset0/prec32/exp23,8/man0,23/bias127; include a v2 fill-value message (02 02 02 01 + size 0).
+- TF bundle writer needs SORTED keys ('' header first) — LevelDB tables are ordered; BundleHeaderProto field3 = VersionDef{producer=1}.
 
 # Scratchpad
 
@@ -244,6 +247,13 @@
 [X] Byte-exact classic quant encoders Q4_1/Q5_0/Q5_1/TQ2_0 (ggml truncating rounding); gguf-py re-quantization fixed-point verified; gguf-q4_1/q5_0/q5_1 exports
 [X] Fast inflate: 10-bit Huffman LUT over 64-bit accumulator; take_bytes buffered
 [X] 473 Rust / 862 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 6 — writers for HDF5/TF-ckpt/ONNX (bidirectional everything)
+[X] HDF5 writer: superblock v0, fixed-alloc B-tree(544B)/SNOD(328B) nodes (libhdf5 requires full node allocation!), heap free-lists, h5py-exact f32 datatype; h5py.File reads output
+[X] TF ckpt v2 writer: sorted LevelDB table + masked crc32c + footer; tf.train.load_checkpoint reads output; full circle TF->us->TF bit-exact
+[X] ONNX writer: proto emit helpers; passes onnx.checker.check_model
+[X] MXFP4 + TQ1_0 reference-exact encoders; parallel HDF5 chunk decompression
+[X] 483 Rust / 876 pytest; clippy 0; smoke OK
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses

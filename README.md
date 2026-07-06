@@ -146,7 +146,7 @@ flowchart TB
 | **Generation** | KV cache, top-k/top-p/min-p, repetition/frequency/presence penalties, stop strings, sliding context |
 | **RL / SPIN** | Toy alignment loops on small models |
 | **IO** | Universal `ai.load(path)` auto-detects model family + format; `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
-| **Global formats** | **GGUF read/write from scratch** (no llama.cpp): reads **every current GGML tensor type**, encodes classic quants **byte-identical to the reference** plus k-quants (`gguf-q4_k`/`q5_k`/`q6_k` — the reference Python package can't even do that), all cross-validated against llama.cpp's `gguf` package; embedded SentencePiece **and gpt2 byte-BPE** tokenizers. **PyTorch** zip + legacy `.pt` + **sharded `*.index.json`**. **NumPy `.npy`/`.npz`** with from-scratch DEFLATE both ways. **TensorFlow**: Keras `.h5`/`.keras` (incl. gzip/shuffle chunks) **and checkpoint v2** with zero TF/h5py deps, validated against real TF 2.21. **ONNX** initializer reading via a from-scratch protobuf walker — [docs/interop.md](docs/interop.md) |
+| **Global formats** | **GGUF read/write from scratch** (no llama.cpp): reads **every current GGML tensor type**, encodes classic quants **byte-identical to the reference** plus k-quants (`gguf-q4_k`/`q5_k`/`q6_k` — the reference Python package can't even do that), all cross-validated against llama.cpp's `gguf` package; embedded SentencePiece **and gpt2 byte-BPE** tokenizers. **PyTorch** zip + legacy `.pt` + **sharded `*.index.json`**. **NumPy `.npy`/`.npz`** with from-scratch DEFLATE both ways. **TensorFlow**: Keras `.h5`/`.keras` (incl. gzip/shuffle chunks) **and checkpoint v2, read AND write** — h5py and `tf.train.load_checkpoint` open our output — with zero TF/h5py deps, validated against real TF 2.21. **ONNX** read + write via a from-scratch protobuf walker (passes `onnx.checker`) — [docs/interop.md](docs/interop.md) |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
@@ -313,8 +313,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **473**
-- pytest: **862**
+- Rust `#[test]`: **483**
+- pytest: **876**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

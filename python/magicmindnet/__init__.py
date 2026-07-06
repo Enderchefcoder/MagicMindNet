@@ -69,9 +69,12 @@ from magicmindnet.interop import (
     load_onnx,
     load_pt,
     load_tf_checkpoint,
+    save_h5,
     save_npy,
     save_npz,
+    save_onnx,
     save_pt,
+    save_tf_checkpoint,
 )
 from magicmindnet.unigram_io import load_unigram_sidecar
 from magicmindnet.vision import (
@@ -153,9 +156,12 @@ __all__ = [
     "quantize_classifier_model",
     "quantize_diffusion",
     "quantize_diffusion_model",
+    "save_h5",
     "save_npy",
     "save_npz",
+    "save_onnx",
     "save_pt",
+    "save_tf_checkpoint",
     "VISION_PATCH_DIM",
     "VISION_RGB_CHANNELS",
     "VISION_RGB_DIM",

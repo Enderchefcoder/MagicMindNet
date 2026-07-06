@@ -36,7 +36,7 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
 | IO | **`load`** (universal), `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
-| Array IO | `save_npy`, `load_npy`, `save_npz`, `load_npz`, `save_pt`, `load_pt`, `load_h5`, `load_keras`, `load_tf_checkpoint`, `load_onnx` (NumPy/PyTorch/TF/ONNX interchange, none of those packages needed) |
+| Array IO | `save_npy`/`load_npy`, `save_npz`/`load_npz`, `save_pt`/`load_pt`, `save_h5`/`load_h5`, `load_keras`, `save_tf_checkpoint`/`load_tf_checkpoint`, `save_onnx`/`load_onnx` (NumPy/PyTorch/TF/ONNX interchange, none of those packages needed) |
 | GGUF tools | `gguf_info`, `load_gguf_tokenizer`, `load_gguf_bpe_tokenizer` |
 | Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
@@ -389,6 +389,10 @@ weights = ai.load_h5("model.weights.h5")       # HDF5 without h5py (incl. gzip c
 weights = ai.load_keras("model.keras")         # Keras v3 archive
 arrays = ai.load_tf_checkpoint("ckpt")         # TF checkpoint v2, no TF needed
 weights = ai.load_onnx("model.onnx")           # ONNX initializers, no onnx needed
+
+ai.save_h5("out.h5", weights)                  # h5py-readable
+ai.save_tf_checkpoint("out", arrays)           # tf.train.load_checkpoint-readable
+ai.save_onnx("out.onnx", weights)              # passes onnx.checker
 
 info = ai.gguf_info("model.gguf")              # header-only inspection
 tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab

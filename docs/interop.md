@@ -15,10 +15,10 @@ numpy/torch/h5py dependency.
 | Sharded HF checkpoint | `*.index.json` | ✅ | — | weight_map + shard readers |
 | NumPy archive | `.npz` | ✅ | ✅ (stored or deflate) | from-scratch ZIP + NPY codec |
 | NumPy array | `.npy` | ✅ | ✅ | from-scratch NPY codec |
-| HDF5 / Keras weights | `.h5` / `.weights.h5` | ✅ | — | from-scratch HDF5 reader |
+| HDF5 / Keras weights | `.h5` / `.weights.h5` | ✅ | ✅ | from-scratch HDF5 reader + writer |
 | Keras v3 archive | `.keras` | ✅ | — | ZIP + HDF5 reader |
-| TensorFlow checkpoint v2 | `.index` + `.data-…` | ✅ | — | from-scratch LevelDB table + protobuf |
-| ONNX model weights | `.onnx` | ✅ | — | from-scratch protobuf walker |
+| TensorFlow checkpoint v2 | `.index` + `.data-…` | ✅ | ✅ | from-scratch LevelDB table + protobuf |
+| ONNX model weights | `.onnx` | ✅ | ✅ | from-scratch protobuf walker + writer |
 | Architecture stub | `.bin` | ✅ | ✅ | `mmn-bin-v1` JSON |
 
 `ai.load(path)` detects checkpoint formats automatically by magic bytes and
@@ -100,7 +100,8 @@ also accepts HF-style token lists + merge rules directly.
 
 The writer encodes every practical target — classic quants **byte-identical
 to the reference implementation** (`gguf-q4_0` / `q4_1` / `q5_0` / `q5_1` /
-`q8_0`, ggml's exact truncating rounding), plus TQ2_0 ternary blocks, plus
+`q8_0`, ggml's exact truncating rounding), plus TQ1_0/TQ2_0 ternary blocks
+and MXFP4 (reference-exact codebook + E8M0 scale selection), plus
 **k-quants** (`gguf-q4_k` / `q5_k` / `q6_k`) via from-scratch ports of ggml's
 reference quantization searches (`make_qx_quants` iscale refinement,
 `make_qkx2_quants` joint scale+min least squares, round-half-to-even
@@ -157,7 +158,14 @@ and **shuffle filter** (byte transpose) are undone per chunk, so
 ```python
 weights = ai.load_h5("model.weights.h5")   # {"dense/kernel": [[...]], ...}
 weights = ai.load_keras("model.keras")     # Keras v3 zip archive
+ai.save_h5("out.h5", weights)              # h5py opens this natively
 ```
+
+The **writer** emits superblock v0, symbol-table groups (fixed-allocation
+B-tree v1 + SNOD nodes as libhdf5 expects), local heaps with free-list
+descriptors, and contiguous F32 datasets with h5py's exact IEEE-float
+datatype encoding. Names with `/` create nested groups. `h5py.File` reads the
+output directly (verified in tests).
 
 **Validated against real TensorFlow output**: committed fixtures under
 `tests/fixtures/tf/` were written by TensorFlow 2.21 Keras (`model.save` and
@@ -176,7 +184,14 @@ checksums:
 ```python
 arrays = ai.load_tf_checkpoint("ckpt")        # or "ckpt.index"
 # {"w": [[...]], "b": [...]}  (/.ATTRIBUTES/VARIABLE_VALUE stripped)
+
+ai.save_tf_checkpoint("out", arrays)          # tf.train.load_checkpoint reads it
 ```
+
+The **writer** builds the sorted LevelDB table (data/metaindex/index blocks
+with masked-CRC32C trailers and the 48-byte footer) plus the raw data shard;
+`tf.train.load_checkpoint` reads the output, and a full-circle test
+(TF write → our read → our write → TF read) passes bit-for-bit.
 
 All numeric `DataType`s decode to f32 (float/double/half/bfloat16, all int
 widths, bool); the object-graph metadata entry is skipped. Fixtures written
@@ -192,10 +207,11 @@ external-data models rejected with a re-export hint:
 
 ```python
 weights = ai.load_onnx("model.onnx")   # {"w": [[...]], "b": [...]}
+ai.save_onnx("out.onnx", weights)      # passes onnx.checker.check_model
 ```
 
-Validated against models built and saved by the official `onnx` package
-(importorskip in tests).
+Validated against models built and saved by the official `onnx` package;
+our writer's output loads with `onnx.load` and passes the official checker.
 
 ## NumPy `.npy` / `.npz` — also a TensorFlow bridge
 
@@ -239,8 +255,9 @@ recognize files by content, not extension:
 
 ## Performance notes
 
-- GGUF tensor dequantization, PyTorch storage decoding, **and ZIP entry
-  inflation** fan out across `available_parallelism` threads.
+- GGUF tensor dequantization, PyTorch storage decoding, ZIP entry inflation,
+  **and HDF5 chunk decompression** fan out across `available_parallelism`
+  threads.
 - `gguf_info` / `load_gguf_tokenizer` parse the header only, growing the read
   buffer geometrically instead of loading the tensor data.
 - The CRC-32 table is computed once per process (`OnceLock`); IQ codebook

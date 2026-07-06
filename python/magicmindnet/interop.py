@@ -38,9 +38,12 @@ __all__ = [
     "load_onnx",
     "load_pt",
     "load_tf_checkpoint",
+    "save_h5",
     "save_npy",
     "save_npz",
+    "save_onnx",
     "save_pt",
+    "save_tf_checkpoint",
 ]
 
 
@@ -153,6 +156,39 @@ def load_onnx(path):
     ``{name: nested lists}``.
     """
     return {name: _nest(shape, flat) for name, shape, flat in _native.read_onnx(path)}
+
+
+def save_onnx(path, arrays):
+    """Write named arrays as an ``.onnx`` model (``onnx.load``-compatible)."""
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_onnx(path, packed)
+
+
+def save_h5(path, arrays):
+    """Write named arrays as an HDF5 file (h5py/Keras-readable, no h5py needed).
+
+    Names with ``/`` create nested groups (e.g. ``"dense/kernel"``).
+    """
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_h5(path, packed)
+
+
+def save_tf_checkpoint(path, arrays):
+    """Write a TF checkpoint v2 (``tf.train.load_checkpoint``-compatible).
+
+    Emits ``{path}.index`` and ``{path}.data-00000-of-00001`` from scratch.
+    """
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_tf_checkpoint(path, packed)
 
 
 def load_tf_checkpoint(path):

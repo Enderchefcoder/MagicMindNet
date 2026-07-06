@@ -2,6 +2,27 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 6: writers for HDF5 / TF checkpoint / ONNX — every ecosystem bidirectional)
+- **HDF5 writer** (`ai.save_h5`): superblock v0, symbol-table groups with the
+  fixed-allocation B-tree v1 + SNOD node sizes libhdf5 requires, local heaps with
+  free-list descriptors, contiguous F32 datasets with h5py's exact IEEE-float
+  datatype encoding, nested groups via `/` names — **`h5py.File` reads the output
+  natively** (verified incl. 30-dataset multi-SNOD groups)
+- **TF checkpoint v2 writer** (`ai.save_tf_checkpoint`): sorted LevelDB table
+  (data/metaindex/index blocks, masked-CRC32C trailers, 48-byte footer) + raw data
+  shard — **`tf.train.load_checkpoint` reads the output**; full-circle test
+  (TF write → our read → our write → TF read) passes bit-for-bit
+- **ONNX writer** (`ai.save_onnx`): ModelProto with ir_version/opset/graph
+  initializers via shared protobuf emit helpers — **passes
+  `onnx.checker.check_model`** and loads with `onnx.load`
+- **Reference-exact MXFP4 and TQ1_0 encoders** (E8M0 scale selection + FP4
+  codebook nearest; 5-trits-per-byte ternary packing) joining the byte-exact
+  classic-quant encoder set; GGUF writer now covers TQ1_0/MXFP4 targets
+- **Parallel HDF5 chunk decompression** (gzip inflation across cores)
+- Tests: +12 Rust (writer roundtrips, multi-SNOD, ternary-exact encode) and
+  +11 pytest (`test_interop_wave6_py`: h5py/tf/onnx read our writers,
+  full-circle TF, encoder reference-decode equality)
+
 ### Added (interop wave 5: ONNX, chunked HDF5, byte-exact encoders, fast inflate)
 - **ONNX reader** (`ai.load_onnx`): from-scratch protobuf wire-format walker
   (shared `interop/proto.rs`) extracting every graph initializer — packed/repeated

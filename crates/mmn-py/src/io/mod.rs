@@ -480,6 +480,24 @@ pub fn read_onnx(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_onnx_arrays(path).map_err(mmn_err_to_py)
 }
 
+/// Write named arrays as an ONNX model (`onnx.load`-compatible).
+#[pyfunction]
+pub fn write_onnx(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_onnx_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Write a TF checkpoint v2 (`tf.train.load_checkpoint`-compatible).
+#[pyfunction]
+pub fn write_tf_checkpoint(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_tf_checkpoint_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays as an HDF5 file (h5py/Keras-readable).
+#[pyfunction]
+pub fn write_h5(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_h5_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
 /// Write named arrays as a `torch.load`-compatible `.pt` state dict.
 #[pyfunction]
 pub fn write_pt(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
