@@ -148,6 +148,27 @@ def test_gguf_arrays_roundtrip_and_official_load(tmp_path):
     )
 
 
+@pytest.mark.parametrize("dtype", ["f16", "q8_0", "q4_k"])
+def test_save_gguf_arrays_dtype_official_reads(tmp_path, dtype):
+    gguf = pytest.importorskip("gguf")
+    path = str(tmp_path / f"arrays_{dtype}.gguf")
+    # 256-wide rows satisfy every block-multiple requirement.
+    values = [[(i % 17) / 8.0 - 1.0 for i in range(256)] for _ in range(2)]
+    ai.save_gguf_arrays(path, {"w": values}, dtype=dtype)
+    ours = ai.load_gguf_arrays(path)["w"]
+    reader = gguf.GGUFReader(path)
+    tensor = next(t for t in reader.tensors if t.name == "w")
+    official = gguf.dequantize(tensor.data, tensor.tensor_type).reshape(2, 256)
+    np.testing.assert_allclose(np.array(ours, dtype=np.float32), official, atol=1e-6)
+    tolerance = {"f16": 1e-3, "q8_0": 0.02, "q4_k": 0.2}[dtype]
+    np.testing.assert_allclose(official, np.array(values, dtype=np.float32), atol=tolerance)
+
+
+def test_save_gguf_arrays_bad_dtype_errors(tmp_path):
+    with pytest.raises((ValueError, RuntimeError), match="not supported"):
+        ai.save_gguf_arrays(str(tmp_path / "x.gguf"), {"w": [1.0]}, dtype="q9_z")
+
+
 def test_load_gguf_arrays_dequantizes_quantized_model(tmp_path):
     # A quantized chatbot checkpoint is also a plain GGUF tensor container.
     bot = ai.Chatbot(vocab_size=64, n_layer=1, d_model=64)

@@ -17,6 +17,137 @@ pub(crate) struct MmnJsonCheckpoint {
     pub tensors: TensorMap,
 }
 
+/// Append a JSON string literal (tensor names never need escaping in
+/// practice, but escape control/quote/backslash to stay valid JSON).
+fn push_json_string(out: &mut String, s: &str) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Append a byte as 1-3 decimal digits (the hot loop of serialization).
+#[inline]
+fn push_byte_decimal(out: &mut String, v: u8) {
+    // SAFETY-free fast path: manual digit expansion beats fmt machinery.
+    if v >= 100 {
+        out.push((b'0' + v / 100) as char);
+        out.push((b'0' + (v / 10) % 10) as char);
+        out.push((b'0' + v % 10) as char);
+    } else if v >= 10 {
+        out.push((b'0' + v / 10) as char);
+        out.push((b'0' + v % 10) as char);
+    } else {
+        out.push((b'0' + v) as char);
+    }
+}
+
+/// Serialize one tensor entry as `{"data":[...],"dtype":"...","shape":[...]}`.
+fn write_entry(out: &mut String, entry: &TensorEntry) {
+    out.push_str("{\"data\":[");
+    let mut first = true;
+    for &b in &entry.data {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        push_byte_decimal(out, b);
+    }
+    out.push_str("],\"dtype\":");
+    push_json_string(out, &entry.dtype);
+    out.push_str(",\"shape\":[");
+    let mut first = true;
+    for &d in &entry.shape {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str(&d.to_string());
+    }
+    out.push_str("]}");
+}
+
+/// Serialize a `{format, meta, tensors}` checkpoint — hand-rolled writer
+/// with per-tensor parallelism (serde's generic number formatting was the
+/// bottleneck on multi-megabyte byte arrays). Output is byte-identical to
+/// the previous serde output: same field order, no whitespace.
+pub(crate) fn write_checkpoint(
+    format: &str,
+    meta: &serde_json::Value,
+    tensors: &TensorMap,
+) -> String {
+    let entries: Vec<(&String, &TensorEntry)> = tensors.iter().collect();
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(entries.len().max(1));
+    let fragments: Vec<String> = if workers <= 1 || entries.len() <= 1 {
+        entries
+            .iter()
+            .map(|(name, entry)| {
+                let mut frag = String::with_capacity(entry.data.len() * 4 + 64);
+                push_json_string(&mut frag, name);
+                frag.push(':');
+                write_entry(&mut frag, entry);
+                frag
+            })
+            .collect()
+    } else {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let mut collected: Vec<(usize, String)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut done = Vec::new();
+                        loop {
+                            let idx = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some((name, entry)) = entries.get(idx) else {
+                                break;
+                            };
+                            let mut frag =
+                                String::with_capacity(entry.data.len() * 4 + 64);
+                            push_json_string(&mut frag, name);
+                            frag.push(':');
+                            write_entry(&mut frag, entry);
+                            done.push((idx, frag));
+                        }
+                        done
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("checkpoint serialize worker panicked"))
+                .collect()
+        });
+        collected.sort_by_key(|(idx, _)| *idx);
+        collected.into_iter().map(|(_, frag)| frag).collect()
+    };
+    let total: usize = fragments.iter().map(|f| f.len()).sum();
+    let mut out = String::with_capacity(total + 256);
+    out.push_str("{\"format\":");
+    push_json_string(&mut out, format);
+    out.push_str(",\"meta\":");
+    out.push_str(&meta.to_string());
+    out.push_str(",\"tensors\":{");
+    for (i, frag) in fragments.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(frag);
+    }
+    out.push_str("}}");
+    out
+}
+
 /// Parse a checkpoint, using the fast scanner when it accepts the input and
 /// generic serde otherwise (serde also produces the user-facing error).
 pub(crate) fn parse_checkpoint(text: &str) -> Result<MmnJsonCheckpoint, serde_json::Error> {
@@ -274,17 +405,18 @@ impl<'a> Scanner<'a> {
         })
     }
 
-    /// Parse the `"tensors"` object.
-    fn tensors(&mut self) -> Option<TensorMap> {
+    /// Collect `(name, entry span)` pairs from the `"tensors"` object
+    /// without parsing entry bodies (those parse in parallel afterwards).
+    fn tensor_entry_spans(&mut self) -> Option<Vec<(String, (usize, usize))>> {
         self.skip_ws();
         self.eat(b'{')?;
-        let mut map = TensorMap::new();
+        let mut spans = Vec::new();
         loop {
             self.skip_ws();
             match self.peek()? {
                 b'}' => {
                     self.pos += 1;
-                    return Some(map);
+                    return Some(spans);
                 }
                 b',' => {
                     self.pos += 1;
@@ -296,10 +428,78 @@ impl<'a> Scanner<'a> {
             let key = self.string()?;
             self.skip_ws();
             self.eat(b':')?;
-            let entry = self.tensor_entry()?;
-            map.insert(key, entry);
+            let span = self.value_span()?;
+            spans.push((key, span));
         }
     }
+}
+
+/// Parse one tensor entry from its span; the span must be fully consumed.
+fn parse_entry_span(bytes: &[u8], span: (usize, usize)) -> Option<TensorEntry> {
+    let mut s = Scanner {
+        bytes: &bytes[..span.1],
+        pos: span.0,
+    };
+    let entry = s.tensor_entry()?;
+    s.skip_ws();
+    if s.pos != span.1 {
+        return None;
+    }
+    Some(entry)
+}
+
+/// Parse all tensor entries, fanning the digit-parsing work (which
+/// dominates load time) across available cores.
+fn parse_entries_parallel(
+    bytes: &[u8],
+    spans: Vec<(String, (usize, usize))>,
+) -> Option<TensorMap> {
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(spans.len().max(1));
+    if workers <= 1 || spans.len() <= 1 {
+        let mut map = TensorMap::new();
+        for (key, span) in spans {
+            map.insert(key, parse_entry_span(bytes, span)?);
+        }
+        return Some(map);
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<Vec<(usize, Option<TensorEntry>)>> = std::thread::scope(|scope| {
+        let spans = &spans;
+        let next = &next;
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(move || {
+                    let mut done = Vec::new();
+                    loop {
+                        let idx = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some((_, span)) = spans.get(idx) else {
+                            break;
+                        };
+                        done.push((idx, parse_entry_span(bytes, *span)));
+                    }
+                    done
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("checkpoint parse worker panicked"))
+            .collect()
+    });
+    let mut parsed: Vec<Option<TensorEntry>> = (0..spans.len()).map(|_| None).collect();
+    for chunk in results {
+        for (idx, entry) in chunk {
+            parsed[idx] = Some(entry?);
+        }
+    }
+    let mut map = TensorMap::new();
+    for ((key, _), entry) in spans.into_iter().zip(parsed) {
+        map.insert(key, entry.expect("all indexes visited"));
+    }
+    Some(map)
 }
 
 /// Extract the top-level `"format"` string without materializing tensor
@@ -395,7 +595,7 @@ fn parse_checkpoint_fast(text: &str) -> Option<MmnJsonCheckpoint> {
     s.eat(b'{')?;
     let mut format: Option<String> = None;
     let mut meta = serde_json::Value::Null;
-    let mut tensors = TensorMap::new();
+    let mut spans: Vec<(String, (usize, usize))> = Vec::new();
     loop {
         s.skip_ws();
         match s.peek()? {
@@ -422,7 +622,7 @@ fn parse_checkpoint_fast(text: &str) -> Option<MmnJsonCheckpoint> {
                 let (start, end) = s.value_span()?;
                 meta = serde_json::from_slice(&s.bytes[start..end]).ok()?;
             }
-            "tensors" => tensors = s.tensors()?,
+            "tensors" => spans = s.tensor_entry_spans()?,
             _ => {
                 s.value_span()?;
             }
@@ -432,6 +632,7 @@ fn parse_checkpoint_fast(text: &str) -> Option<MmnJsonCheckpoint> {
     if s.pos != s.bytes.len() {
         return None;
     }
+    let tensors = parse_entries_parallel(text.as_bytes(), spans)?;
     Some(MmnJsonCheckpoint {
         format,
         meta,
@@ -494,5 +695,56 @@ mod tests {
         let text = r#"{"format":"mmn-safetensors-v1","meta":{},"tensors":{"a\"b":{"data":[7],"dtype":"F32","shape":[]}}}"#;
         let ckpt = parse_checkpoint_fast(text).expect("escaped key should parse");
         assert_eq!(ckpt.tensors["a\"b"].data, vec![7]);
+    }
+
+    /// The hand-rolled serializer must be byte-identical to serde's output
+    /// for the same `{format, meta, tensors}` layout.
+    #[test]
+    fn writer_is_byte_identical_to_serde() {
+        #[derive(serde::Serialize)]
+        struct Wrapper<'a> {
+            format: &'a str,
+            meta: &'a serde_json::Value,
+            tensors: &'a TensorMap,
+        }
+        let mut tensors = TensorMap::new();
+        tensors.insert(
+            "embed".to_string(),
+            TensorEntry {
+                data: (0u16..600).map(|i| (i % 256) as u8).collect(),
+                dtype: "F32".to_string(),
+                shape: vec![30, 5],
+            },
+        );
+        tensors.insert(
+            "b\"quoted".to_string(),
+            TensorEntry {
+                data: vec![],
+                dtype: "F32".to_string(),
+                shape: vec![0],
+            },
+        );
+        let meta = serde_json::json!({"vocab_size": 8, "seed": 3, "use_rope": true});
+        let ours = write_checkpoint("mmn-safetensors-v1", &meta, &tensors);
+        let via_serde = serde_json::to_string(&Wrapper {
+            format: "mmn-safetensors-v1",
+            meta: &meta,
+            tensors: &tensors,
+        })
+        .unwrap();
+        assert_eq!(ours, via_serde);
+        // And the fast parser reads its own writer's output.
+        let back = parse_checkpoint(&ours).unwrap();
+        assert_eq!(back.tensors["embed"].data.len(), 600);
+        assert_eq!(back.tensors["embed"].shape, vec![30, 5]);
+    }
+
+    #[test]
+    fn parallel_entry_parse_rejects_corrupt_entry() {
+        // Second tensor has an overflowing byte: the whole fast path must
+        // reject so serde produces the user-facing error.
+        let text = r#"{"format":"mmn-safetensors-v1","meta":{},"tensors":{"a":{"data":[1,2,3,4],"dtype":"F32","shape":[1]},"b":{"data":[999],"dtype":"F32","shape":[1]}}}"#;
+        assert!(parse_checkpoint_fast(text).is_none());
+        assert!(parse_checkpoint(text).is_err());
     }
 }

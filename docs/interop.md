@@ -441,8 +441,12 @@ recognize files by content, not extension:
   codes) — the classic zlib fast path, from scratch.
 - The default `mmn-safetensors-v1` JSON checkpoint parses through a
   **hand-rolled structural scanner** (typed `TensorEntry` structs, tight
-  digit loops for the byte arrays, serde only as validation fallback):
-  save ~337 ms → ~60 ms, load ~487 ms → ~80 ms for a 1.3M-param model.
+  digit loops for the byte arrays, serde only as validation fallback) and
+  serializes through a **hand-rolled parallel writer** (manual digit
+  expansion, per-tensor fragments across cores, byte-identical to serde's
+  output). Tensor entries also **parse in parallel** (spans located
+  structurally first). Net effect on a 1.3M-param model: save ~337 ms →
+  **~50 ms**, load ~487 ms → **~30 ms** in-process.
 - Checkpoint **detection** reads only the top-level `format` /
   `weight_map` keys structurally instead of `Value`-parsing multi-megabyte
   JSON (~208 ms → ~25 ms on the same model).

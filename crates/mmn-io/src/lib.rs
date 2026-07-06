@@ -42,7 +42,7 @@ pub use interop::npz_chatbot::{
 };
 pub use interop::arrays_auto::{
     detect_array_format, read_arrays_auto, read_gguf_arrays, read_gguf_arrays_bytes,
-    write_gguf_arrays, ArrayFormat,
+    write_gguf_arrays, write_gguf_arrays_dtype, ArrayFormat,
 };
 pub use interop::ggml_legacy::{
     import_ggml_legacy_chatbot, import_ggml_legacy_chatbot_bytes, is_ggml_legacy_bytes,

@@ -366,13 +366,19 @@ def load_gguf_arrays(path):
     }
 
 
-def save_gguf_arrays(path, arrays):
-    """Write named arrays as a GGUF file (F32 tensors, gguf-py readable)."""
+def save_gguf_arrays(path, arrays, dtype="f32"):
+    """Write named arrays as a GGUF file (gguf-py readable).
+
+    ``dtype`` selects the GGML tensor type: ``"f32"`` (default), ``"f16"``,
+    classic quants (``"q4_0"``..``"q8_0"``), k-quants (``"q2_k"``..
+    ``"q6_k"``), or ``"iq4_nl"``/``"iq4_xs"``. Quantized types require rows
+    to be multiples of the block size (32 or 256).
+    """
     packed = []
     for name, array in arrays.items():
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
-    _native.write_gguf_arrays(path, packed)
+    _native.write_gguf_arrays(path, packed, dtype)
 
 
 def load_arrays(path, numpy=False):

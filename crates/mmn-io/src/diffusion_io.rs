@@ -10,14 +10,6 @@ use std::fs;
 const DIFFUSION_FORMAT: &str = "mmn-diffusion-v1";
 const LATENT_SPATIAL: usize = 8;
 
-/// Typed on-disk layout of `mmn-diffusion-v1` (alphabetical field order
-/// matches serde_json `Value` output, keeping files byte-identical).
-#[derive(serde::Serialize)]
-struct DiffusionCheckpoint {
-    format: Option<String>,
-    meta: serde_json::Value,
-    tensors: TensorMap,
-}
 
 pub fn export_diffusion(model: &Diffusion, path: &str) -> Result<(), MmnError> {
     let mut map = TensorMap::new();
@@ -49,17 +41,11 @@ pub fn export_diffusion(model: &Diffusion, path: &str) -> Result<(), MmnError> {
         "unet_up".to_string(),
         tensor_to_entry(&model.unet.up.weight),
     );
-    let wrapper = DiffusionCheckpoint {
-        format: Some(DIFFUSION_FORMAT.to_string()),
-        meta: serde_json::json!({
-            "latent_channels": model.latent_channels,
-            "spatial": LATENT_SPATIAL,
-        }),
-        tensors: map,
-    };
-    let text = serde_json::to_string(&wrapper).map_err(|e| MmnError::Other {
-        message: e.to_string(),
-    })?;
+    let meta = serde_json::json!({
+        "latent_channels": model.latent_channels,
+        "spatial": LATENT_SPATIAL,
+    });
+    let text = crate::mmn_json::write_checkpoint(DIFFUSION_FORMAT, &meta, &map);
     write_file_create_parents(path, text)?;
     Ok(())
 }

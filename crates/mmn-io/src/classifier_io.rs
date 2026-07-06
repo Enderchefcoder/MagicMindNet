@@ -10,14 +10,6 @@ use std::fs;
 /// Hidden width for `Classifier` backbone/head (must match `mmn_models::Classifier`).
 const CLASSIFIER_HIDDEN: usize = 128;
 
-/// Typed on-disk layout of `mmn-classifier-v1` (alphabetical field order
-/// matches serde_json `Value` output, keeping files byte-identical).
-#[derive(serde::Serialize)]
-struct ClassifierCheckpoint {
-    format: Option<String>,
-    meta: serde_json::Value,
-    tensors: TensorMap,
-}
 
 pub fn export_classifier(model: &Classifier, path: &str) -> Result<(), MmnError> {
     let mut map = TensorMap::new();
@@ -33,14 +25,7 @@ pub fn export_classifier(model: &Classifier, path: &str) -> Result<(), MmnError>
     if let Some(seed) = model.init_seed {
         meta["seed"] = serde_json::json!(seed);
     }
-    let wrapper = ClassifierCheckpoint {
-        format: Some("mmn-classifier-v1".to_string()),
-        meta,
-        tensors: map,
-    };
-    let text = serde_json::to_string(&wrapper).map_err(|e| MmnError::Other {
-        message: e.to_string(),
-    })?;
+    let text = crate::mmn_json::write_checkpoint("mmn-classifier-v1", &meta, &map);
     write_file_create_parents(path, text)?;
     Ok(())
 }

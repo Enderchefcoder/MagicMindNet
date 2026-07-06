@@ -42,13 +42,45 @@ pub fn read_gguf_arrays(path: &str) -> Result<Vec<NamedArray>, MmnError> {
 
 /// Write named f32 arrays as a GGUF file (F32 tensors, no extra metadata).
 pub fn write_gguf_arrays(path: &str, arrays: &[NamedArray]) -> Result<(), MmnError> {
+    write_gguf_arrays_dtype(path, arrays, "f32")
+}
+
+/// Write named arrays as a GGUF file in any encodable GGML type
+/// (`f32`/`f16`, classic quants, k-quants, `iq4_nl`/`iq4_xs`, ...). Rows
+/// must satisfy the type's block-multiple requirement.
+pub fn write_gguf_arrays_dtype(
+    path: &str,
+    arrays: &[NamedArray],
+    dtype: &str,
+) -> Result<(), MmnError> {
+    let ggml_type = match dtype.to_ascii_lowercase().as_str() {
+        "f32" => GgmlType::F32,
+        "f16" => GgmlType::F16,
+        "q8_0" => GgmlType::Q8_0,
+        "q4_0" => GgmlType::Q4_0,
+        "q4_1" => GgmlType::Q4_1,
+        "q5_0" => GgmlType::Q5_0,
+        "q5_1" => GgmlType::Q5_1,
+        "q2_k" => GgmlType::Q2K,
+        "q3_k" => GgmlType::Q3K,
+        "q4_k" => GgmlType::Q4K,
+        "q5_k" => GgmlType::Q5K,
+        "q6_k" => GgmlType::Q6K,
+        "iq4_nl" => GgmlType::Iq4Nl,
+        "iq4_xs" => GgmlType::Iq4Xs,
+        other => {
+            return Err(err(format!(
+                "gguf write dtype {other:?} not supported (f32/f16, q4_0..q8_0, q2_k..q6_k, iq4_nl/iq4_xs)"
+            )))
+        }
+    };
     let tensors: Vec<GgufWriteTensor<'_>> = arrays
         .iter()
         .map(|(name, shape, values)| GgufWriteTensor {
             name: name.clone(),
             shape: shape.clone(),
             values,
-            ggml_type: GgmlType::F32,
+            ggml_type,
         })
         .collect();
     let bytes = write_gguf(&[], &tensors)?;

@@ -8,14 +8,6 @@ use mmn_core::MmnError;
 use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
 use std::fs;
 
-/// Typed on-disk layout of `mmn-safetensors-v1` (fields in the alphabetical
-/// order serde_json's `Value` objects used, keeping output byte-identical).
-#[derive(serde::Serialize)]
-struct MmnCheckpoint {
-    format: Option<String>,
-    meta: serde_json::Value,
-    tensors: TensorMap,
-}
 
 /// Relative paths to tokenizer sidecars written beside a chatbot checkpoint.
 #[derive(Clone, Copy, Default)]
@@ -108,14 +100,7 @@ pub fn export_safetensors<'a>(
     if let Some(uni_path) = tokenizer_sidecars.unigram {
         meta["unigram_checkpoint"] = serde_json::json!(uni_path);
     }
-    let wrapper = MmnCheckpoint {
-        format: Some("mmn-safetensors-v1".to_string()),
-        meta,
-        tensors: map,
-    };
-    let text = serde_json::to_string(&wrapper).map_err(|e| MmnError::Other {
-        message: e.to_string(),
-    })?;
+    let text = crate::mmn_json::write_checkpoint("mmn-safetensors-v1", &meta, &map);
     write_file_create_parents(path, text)?;
     Ok(())
 }

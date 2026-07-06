@@ -45,6 +45,12 @@
 - **Half-precision safetensors writes**: `ai.save_safetensors(..., dtype="f16")`
   / `"bf16"` (HF conventions); dtype verified by the official package, BF16
   roundtrips through our reader
+- **Default-format serializer rewrite**: hand-rolled parallel JSON writer
+  (manual digit expansion, per-tensor fragments, byte-identical to serde) and
+  parallel tensor-entry parsing — save ~60 ms → ~50 ms, load ~55 ms → **~30 ms**
+  on 1.3M params (cumulative vs the original serde `Value` path: 337→50 / 487→30)
+- **GGUF array writes in any encodable type**: `ai.save_gguf_arrays(...,
+  dtype="f16"/"q8_0"/"q4_k"/...)` — verified against gguf-py's `dequantize`
 
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp

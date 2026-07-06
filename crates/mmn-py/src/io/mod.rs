@@ -513,10 +513,11 @@ pub fn read_gguf_arrays(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_gguf_arrays(path).map_err(mmn_err_to_py)
 }
 
-/// Write named f32 arrays as a GGUF file (F32 tensors).
+/// Write named arrays as a GGUF file in any encodable GGML type.
 #[pyfunction]
-pub fn write_gguf_arrays(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
-    mmn_io::write_gguf_arrays(path, &arrays).map_err(mmn_err_to_py)
+#[pyo3(signature = (path, arrays, dtype = "f32"))]
+pub fn write_gguf_arrays(path: &str, arrays: Vec<NamedArray>, dtype: &str) -> PyResult<()> {
+    mmn_io::write_gguf_arrays_dtype(path, &arrays, dtype).map_err(mmn_err_to_py)
 }
 
 /// Detect and read any supported tensor container; returns
