@@ -45,6 +45,15 @@ enum ZarrCompressor {
     Lz4,
 }
 
+/// v3 `sharding_indexed` configuration: outer chunk files hold a grid of
+/// inner chunks plus a trailing/leading (offset, nbytes) index.
+struct ShardingMeta {
+    inner_chunks: Vec<usize>,
+    inner_compressor: ZarrCompressor,
+    index_at_end: bool,
+    index_has_crc: bool,
+}
+
 struct ZarrayMeta {
     shape: Vec<usize>,
     chunks: Vec<usize>,
@@ -55,6 +64,34 @@ struct ZarrayMeta {
     separator: char,
     /// v3 default chunk-key encoding prefixes keys with `c<sep>`.
     chunk_prefix: bool,
+    sharding: Option<ShardingMeta>,
+}
+
+/// Parse a v3 codec chain into a compressor stage (shared by array codecs,
+/// shard inner codecs, and shard index codecs).
+fn parse_v3_codec_chain(codecs: &[serde_json::Value]) -> Result<(ZarrCompressor, bool), MmnError> {
+    let mut compressor = ZarrCompressor::None;
+    let mut has_crc = false;
+    for codec in codecs {
+        match codec["name"].as_str().unwrap_or("") {
+            "bytes" => {
+                if codec["configuration"]["endian"].as_str() == Some("big") {
+                    return Err(err("zarr v3 big-endian bytes codec not supported"));
+                }
+            }
+            "gzip" => compressor = ZarrCompressor::Gzip,
+            "zlib" => compressor = ZarrCompressor::Zlib,
+            "blosc" => compressor = ZarrCompressor::Blosc,
+            "zstd" => compressor = ZarrCompressor::Zstd,
+            "crc32c" => has_crc = true,
+            other => {
+                return Err(err(format!(
+                    "zarr v3 codec {other:?} not supported (bytes/gzip/blosc/zstd/crc32c/sharding_indexed)"
+                )))
+            }
+        }
+    }
+    Ok((compressor, has_crc))
 }
 
 /// Map a Zarr v3 `data_type` name to the npy descr this crate decodes.
@@ -143,25 +180,36 @@ fn parse_zarr_v3(path: &Path, v: &serde_json::Value) -> Result<ZarrayMeta, MmnEr
             .as_str()
             .ok_or_else(|| err("zarr v3 missing data_type"))?,
     )?;
-    // Codec chain: `bytes` (endian) followed by at most one compressor.
+    // Codec chain: sharding wraps an inner chain; otherwise `bytes`
+    // (endian) followed by at most one compressor.
+    let empty: Vec<serde_json::Value> = Vec::new();
+    let codecs = v["codecs"].as_array().unwrap_or(&empty);
     let mut compressor = ZarrCompressor::None;
-    for codec in v["codecs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
-        match codec["name"].as_str().unwrap_or("") {
-            "bytes" => {
-                if codec["configuration"]["endian"].as_str() == Some("big") {
-                    return Err(err("zarr v3 big-endian bytes codec not supported"));
-                }
-            }
-            "gzip" => compressor = ZarrCompressor::Gzip,
-            "zlib" => compressor = ZarrCompressor::Zlib,
-            "blosc" => compressor = ZarrCompressor::Blosc,
-            "zstd" => compressor = ZarrCompressor::Zstd,
-            other => {
-                return Err(err(format!(
-                    "zarr v3 codec {other:?} not supported (bytes/gzip/blosc/zstd)"
-                )))
-            }
+    let mut sharding = None;
+    if codecs.len() == 1 && codecs[0]["name"].as_str() == Some("sharding_indexed") {
+        let config = &codecs[0]["configuration"];
+        let inner_chunks = dims(&config["chunk_shape"], "shard chunk_shape")?;
+        if inner_chunks.len() != shape.len()
+            || inner_chunks.iter().zip(&chunks).any(|(&i, &c)| i == 0 || !c.is_multiple_of(i))
+        {
+            return Err(err("zarr v3 shard chunk_shape must evenly divide the shard"));
         }
+        let (inner_compressor, _) = parse_v3_codec_chain(
+            config["codecs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]),
+        )?;
+        let (_, index_has_crc) = parse_v3_codec_chain(
+            config["index_codecs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]),
+        )?;
+        let index_at_end = config["index_location"].as_str().unwrap_or("end") == "end";
+        sharding = Some(ShardingMeta {
+            inner_chunks,
+            inner_compressor,
+            index_at_end,
+            index_has_crc,
+        });
+    } else {
+        let (parsed, _) = parse_v3_codec_chain(codecs)?;
+        compressor = parsed;
     }
     let separator = v["chunk_key_encoding"]["configuration"]["separator"]
         .as_str()
@@ -179,6 +227,7 @@ fn parse_zarr_v3(path: &Path, v: &serde_json::Value) -> Result<ZarrayMeta, MmnEr
         order_c: true,
         separator,
         chunk_prefix,
+        sharding,
     })
 }
 
@@ -213,7 +262,7 @@ fn parse_zarray(path: &Path) -> Result<ZarrayMeta, MmnError> {
     };
     let shape = dims("shape")?;
     let chunks = dims("chunks")?;
-    if chunks.len() != shape.len() || chunks.contains(&0) {
+    if chunks.len() != shape.len() || (!shape.is_empty() && chunks.contains(&0)) {
         return Err(err("zarr chunks/shape rank mismatch"));
     }
     let descr = v["dtype"]
@@ -253,7 +302,118 @@ fn parse_zarray(path: &Path) -> Result<ZarrayMeta, MmnError> {
         order_c,
         separator,
         chunk_prefix: false,
+        sharding: None,
     })
+}
+
+/// Decompress one payload with a given compressor stage.
+fn decompress_payload(
+    compressor: &ZarrCompressor,
+    raw: &[u8],
+) -> Result<Vec<u8>, MmnError> {
+    Ok(match compressor {
+        ZarrCompressor::Zlib => undo_deflate(raw)?,
+        ZarrCompressor::Gzip => undo_gzip(raw)?,
+        ZarrCompressor::Blosc => super::blosc::blosc_decompress(raw)?,
+        ZarrCompressor::Zstd => super::zstd::zstd_decompress(raw)?,
+        ZarrCompressor::Lz4 => {
+            if raw.len() < 4 {
+                return Err(err("zarr lz4 chunk missing its size header"));
+            }
+            let size = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+            super::lz4::lz4_decompress_block(&raw[4..], size)?
+        }
+        ZarrCompressor::None => raw.to_vec(),
+    })
+}
+
+/// Decode one v3 shard file into whole-shard f32 values: read the
+/// (offset, nbytes) index, decode present inner chunks, scatter them into
+/// the shard grid, fill the rest with `fill_value`.
+fn decode_shard(
+    meta: &ZarrayMeta,
+    sharding: &ShardingMeta,
+    raw: &[u8],
+) -> Result<Vec<f32>, MmnError> {
+    let rank = meta.chunks.len();
+    let inner_grid: Vec<usize> = meta
+        .chunks
+        .iter()
+        .zip(&sharding.inner_chunks)
+        .map(|(&shard, &inner)| shard / inner)
+        .collect();
+    let n_inner: usize = inner_grid.iter().product::<usize>().max(1);
+    let index_len = n_inner * 16 + if sharding.index_has_crc { 4 } else { 0 };
+    if raw.len() < index_len {
+        return Err(err("zarr shard smaller than its index"));
+    }
+    let index = if sharding.index_at_end {
+        &raw[raw.len() - index_len..]
+    } else {
+        &raw[..index_len]
+    };
+    if sharding.index_has_crc {
+        let body = &index[..index.len() - 4];
+        let stored = u32::from_le_bytes(index[index.len() - 4..].try_into().unwrap());
+        if super::tf_checkpoint::crc32c(body) != stored {
+            return Err(err("zarr shard index CRC-32C mismatch"));
+        }
+    }
+    let shard_numel: usize = meta.chunks.iter().product();
+    let inner_numel: usize = sharding.inner_chunks.iter().product();
+    let item = descr_item_size(&meta.descr)?;
+    let mut out = vec![meta.fill_value; shard_numel];
+    // Shard-local row-major strides.
+    let mut strides = vec![1usize; rank];
+    for i in (0..rank.saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * meta.chunks[i + 1];
+    }
+    let mut grid_coords = vec![0usize; rank];
+    for inner_index in 0..n_inner {
+        let offset = u64::from_le_bytes(index[inner_index * 16..inner_index * 16 + 8].try_into().unwrap());
+        let nbytes = u64::from_le_bytes(index[inner_index * 16 + 8..inner_index * 16 + 16].try_into().unwrap());
+        if offset != u64::MAX || nbytes != u64::MAX {
+            let payload = raw
+                .get(offset as usize..(offset + nbytes) as usize)
+                .ok_or_else(|| err("zarr shard inner chunk out of bounds"))?;
+            let bytes = decompress_payload(&sharding.inner_compressor, payload)?;
+            if bytes.len() != inner_numel * item {
+                return Err(err(format!(
+                    "zarr inner chunk has {} bytes, expected {}",
+                    bytes.len(),
+                    inner_numel * item
+                )));
+            }
+            let values: Vec<f32> = bytes
+                .chunks_exact(item)
+                .map(|c| decode_element(&meta.descr, c))
+                .collect::<Result<_, _>>()?;
+            // Scatter the inner chunk into the shard buffer.
+            let mut local = vec![0usize; rank];
+            for value in values.iter().take(inner_numel.max(1)) {
+                let mut flat = 0usize;
+                for d in 0..rank {
+                    flat += (grid_coords[d] * sharding.inner_chunks[d] + local[d]) * strides[d];
+                }
+                out[flat] = *value;
+                for d in (0..rank).rev() {
+                    local[d] += 1;
+                    if local[d] < sharding.inner_chunks[d] {
+                        break;
+                    }
+                    local[d] = 0;
+                }
+            }
+        }
+        for d in (0..rank).rev() {
+            grid_coords[d] += 1;
+            if grid_coords[d] < inner_grid[d] {
+                break;
+            }
+            grid_coords[d] = 0;
+        }
+    }
+    Ok(out)
 }
 
 /// Decode one chunk file into f32 values (chunk-local C order).
@@ -262,6 +422,13 @@ fn decode_chunk(
     raw: &[u8],
     chunk_numel: usize,
 ) -> Result<Vec<f32>, MmnError> {
+    if let Some(sharding) = &meta.sharding {
+        let values = decode_shard(meta, sharding, raw)?;
+        if values.len() != chunk_numel {
+            return Err(err("zarr shard size mismatch"));
+        }
+        return Ok(values);
+    }
     let bytes = match meta.compressor {
         ZarrCompressor::Zlib => undo_deflate(raw)?,
         ZarrCompressor::Gzip => undo_gzip(raw)?,
@@ -325,8 +492,13 @@ fn read_zarr_array(path: &Path) -> Result<(Vec<usize>, Vec<f32>), MmnError> {
                 .join(&meta.separator.to_string())
         };
         if meta.chunk_prefix {
-            // v3 default chunk-key encoding: keys live under "c<sep>...".
-            name = format!("c{}{}", meta.separator, name);
+            // v3 default chunk-key encoding: keys live under "c<sep>...";
+            // rank-0 arrays use the bare "c" key.
+            name = if rank == 0 {
+                "c".to_string()
+            } else {
+                format!("c{}{}", meta.separator, name)
+            };
         }
         let chunk_path = path.join(&name);
         if chunk_path.is_file() {
@@ -432,15 +604,22 @@ fn zlib_compress(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// RFC-1952 gzip framing (the v3 `gzip` codec's on-disk form).
+fn gzip_compress(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255];
+    out.extend_from_slice(&deflate(data));
+    out.extend_from_slice(&super::zip::crc32(data).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out
+}
+
 /// Write one array as a Zarr v2 directory (single whole-array chunk,
 /// `<f4`, zlib compression) that zarr-python opens.
 fn write_zarr_array(dir: &Path, shape: &[usize], values: &[f32]) -> Result<(), MmnError> {
     fs::create_dir_all(dir).map_err(|e| err(e.to_string()))?;
-    let chunks: Vec<usize> = if shape.is_empty() {
-        vec![1]
-    } else {
-        shape.to_vec()
-    };
+    // Rank-0 arrays use empty chunks and a single "0" chunk file (the
+    // zarr-python convention).
+    let chunks: Vec<usize> = shape.to_vec();
     let shape_json: Vec<usize> = shape.to_vec();
     let meta = serde_json::json!({
         "chunks": chunks,
@@ -463,16 +642,78 @@ fn write_zarr_array(dir: &Path, shape: &[usize], values: &[f32]) -> Result<(), M
     fs::write(dir.join(chunk_name), zlib_compress(&raw)).map_err(|e| err(e.to_string()))
 }
 
-/// Write named arrays as a Zarr v2 group store (one array per `/`-nested
-/// member) that `zarr.open_group` reads.
-pub fn write_zarr_arrays(path: &str, arrays: &[NamedArray]) -> Result<(), MmnError> {
+/// Write one array as a Zarr v3 directory: `zarr.json` array node plus a
+/// single gzip-compressed whole-array chunk under `c/`.
+fn write_zarr_array_v3(dir: &Path, shape: &[usize], values: &[f32]) -> Result<(), MmnError> {
+    fs::create_dir_all(dir).map_err(|e| err(e.to_string()))?;
+    // Rank-0 arrays use an empty chunk_shape and the bare chunk key "c".
+    let chunks: Vec<usize> = shape.to_vec();
+    let meta = serde_json::json!({
+        "zarr_format": 3,
+        "node_type": "array",
+        "shape": shape,
+        "data_type": "float32",
+        "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": chunks}},
+        "chunk_key_encoding": {"name": "default", "configuration": {"separator": "/"}},
+        "fill_value": 0.0,
+        "codecs": [
+            {"name": "bytes", "configuration": {"endian": "little"}},
+            {"name": "gzip", "configuration": {"level": 4}},
+        ],
+        "attributes": {},
+    });
+    fs::write(dir.join("zarr.json"), serde_json::to_string_pretty(&meta).unwrap())
+        .map_err(|e| err(e.to_string()))?;
+    let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    if shape.is_empty() {
+        // Rank-0: the chunk key is the bare "c" file.
+        return fs::write(dir.join("c"), gzip_compress(&raw)).map_err(|e| err(e.to_string()));
+    }
+    let mut chunk_dir = dir.join("c");
+    for _ in 0..shape.len() - 1 {
+        chunk_dir = chunk_dir.join("0");
+    }
+    fs::create_dir_all(&chunk_dir).map_err(|e| err(e.to_string()))?;
+    fs::write(chunk_dir.join("0"), gzip_compress(&raw)).map_err(|e| err(e.to_string()))
+}
+
+/// Write named arrays as a Zarr group store (one array per `/`-nested
+/// member) that `zarr.open_group` reads. `zarr_format` selects v2
+/// (zlib-compressed chunks) or v3 (`zarr.json` nodes, gzip codec).
+pub fn write_zarr_arrays_format(
+    path: &str,
+    arrays: &[NamedArray],
+    zarr_format: u8,
+) -> Result<(), MmnError> {
     if arrays.is_empty() {
         return Err(err("zarr writer needs at least one array"));
     }
+    if zarr_format != 2 && zarr_format != 3 {
+        return Err(err(format!(
+            "zarr_format {zarr_format} not supported (2 or 3)"
+        )));
+    }
     let root = Path::new(path);
     fs::create_dir_all(root).map_err(|e| err(e.to_string()))?;
-    fs::write(root.join(".zgroup"), "{\"zarr_format\": 2}")
-        .map_err(|e| err(e.to_string()))?;
+    let group_marker = |dir: &Path| -> Result<(), MmnError> {
+        if zarr_format == 2 {
+            let marker = dir.join(".zgroup");
+            if !marker.is_file() {
+                fs::write(&marker, "{\"zarr_format\": 2}").map_err(|e| err(e.to_string()))?;
+            }
+        } else {
+            let marker = dir.join("zarr.json");
+            if !marker.is_file() {
+                fs::write(
+                    &marker,
+                    "{\"zarr_format\": 3, \"node_type\": \"group\", \"attributes\": {}}",
+                )
+                .map_err(|e| err(e.to_string()))?;
+            }
+        }
+        Ok(())
+    };
+    group_marker(root)?;
     for (name, shape, values) in arrays {
         let numel: usize = shape.iter().product();
         if numel != values.len() {
@@ -484,7 +725,6 @@ pub fn write_zarr_arrays(path: &str, arrays: &[NamedArray]) -> Result<(), MmnErr
         let mut dir = root.to_path_buf();
         for part in name.split('/').filter(|p| !p.is_empty()) {
             dir = dir.join(part);
-            // Intermediate group markers keep zarr-python's tree walk happy.
         }
         // Mark every intermediate directory as a group.
         let mut cursor = root.to_path_buf();
@@ -492,14 +732,21 @@ pub fn write_zarr_arrays(path: &str, arrays: &[NamedArray]) -> Result<(), MmnErr
         for part in &parts[..parts.len().saturating_sub(1)] {
             cursor = cursor.join(part);
             fs::create_dir_all(&cursor).map_err(|e| err(e.to_string()))?;
-            let marker = cursor.join(".zgroup");
-            if !marker.is_file() {
-                fs::write(&marker, "{\"zarr_format\": 2}").map_err(|e| err(e.to_string()))?;
-            }
+            group_marker(&cursor)?;
         }
-        write_zarr_array(&dir, shape, values)?;
+        if zarr_format == 2 {
+            write_zarr_array(&dir, shape, values)?;
+        } else {
+            write_zarr_array_v3(&dir, shape, values)?;
+        }
     }
     Ok(())
+}
+
+/// Write named arrays as a Zarr v2 group store (one array per `/`-nested
+/// member) that `zarr.open_group` reads.
+pub fn write_zarr_arrays(path: &str, arrays: &[NamedArray]) -> Result<(), MmnError> {
+    write_zarr_arrays_format(path, arrays, 2)
 }
 
 #[cfg(test)]

@@ -23,6 +23,19 @@
   cramjam-written fixtures + a hand-built blosc-snappy container
 - **Standalone numcodecs LZ4 codec** in zarr v2 (4-byte size prefix + block),
   live-validated
+- **Zarr v3 sharding codec** (`sharding_indexed`): shard files decode their
+  (offset, nbytes) inner-chunk index (CRC-32C verified, start/end locations),
+  inner codec chains (gzip/zstd/...), sparse shards via `fill_value` —
+  live-validated against zarr-python sharded stores incl. the zstd default
+- **Zarr v3 writing**: `ai.save_zarr(..., zarr_format=3)` emits `zarr.json`
+  array/group nodes with gzip-codec chunks under `c/` — `zarr.open_group`
+  reads the output
+- **Randomized cross-writer hardening** (`test_interop_fuzz_roundtrip_py`):
+  seeded random shapes (rank 0-3), nested names, extreme f32 values, and
+  scalars roundtrip through all nine array writers; the pass flushed out and
+  fixed three real bugs (zarr rank-0 chunk-key conventions in both writers,
+  a missing zarr branch in the numpy save fast path, and a msgpack→flax
+  format alias)
 
 ### Added (interop wave 13: numpy arrays in any pickle — PaddlePaddle, sklearn)
 - **Generic pickle array IO** (`ai.load_pickle_arrays` / `ai.save_pickle_arrays`):

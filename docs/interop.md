@@ -362,7 +362,11 @@ Huffman implemented here, ~240 MB/s on literal-heavy data), Blosc frames
 (the classic default) with **LZ4, BloscLZ, zlib, zstd, and Snappy** inner
 codecs plus **byte- and bit-shuffle** undo and memcpy mode, standalone
 **numcodecs LZ4** (size-prefixed blocks), plain zlib, RFC-1952 gzip, and
-uncompressed chunks.
+uncompressed chunks. The **v3 sharding codec** (`sharding_indexed`) reads
+too: CRC-32C-verified inner-chunk indexes, nested codec chains, and sparse
+shards falling back to `fill_value`. Writing supports both revisions —
+`ai.save_zarr(path, arrays, zarr_format=3)` emits `zarr.json` nodes with
+gzip chunks.
 Writes produce v2 group stores `zarr.open_group` reads (one zlib `<f4>`
 chunk per array):
 

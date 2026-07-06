@@ -165,6 +165,50 @@ def test_blosc_zstd_inner_codec_reads(tmp_path):
     np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
 
 
+def test_zarr_v3_sharded_store_reads(tmp_path):
+    from zarr.codecs import GzipCodec
+
+    store = str(tmp_path / "sharded.zarr")
+    values = np.arange(96, dtype=np.float32).reshape(8, 12)
+    z = zarr.create_array(store=store, shape=(8, 12), chunks=(2, 3), shards=(4, 6),
+                          dtype="float32", compressors=[GzipCodec(level=5)])
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_zarr_v3_sharded_zstd_default_reads(tmp_path):
+    store = str(tmp_path / "sharded_zstd.zarr")
+    values = ((np.arange(60_000, dtype=np.float32) % 97) / 7.0).reshape(200, 300)
+    z = zarr.create_array(store=store, shape=(200, 300), chunks=(25, 50),
+                          shards=(100, 150), dtype="float32")
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_zarr_v3_sparse_shard_uses_fill_value(tmp_path):
+    from zarr.codecs import GzipCodec
+
+    store = str(tmp_path / "sparse.zarr")
+    z = zarr.create_array(store=store, shape=(8, 8), chunks=(2, 2), shards=(8, 8),
+                          dtype="float32", compressors=[GzipCodec()], fill_value=7.0)
+    z[0:2, 0:2] = np.ones((2, 2), dtype=np.float32)
+    loaded = np.array(ai.load_zarr(store)[""], dtype=np.float32)
+    assert loaded[0, 0] == 1.0
+    assert loaded[7, 7] == 7.0
+
+
+def test_zarr_v3_write_opens_with_zarr_python(tmp_path):
+    store = str(tmp_path / "ours_v3.zarr")
+    data = {"layer/kernel": [[1.0, -2.0], [3.5, 0.25]], "bias": [0.5, -0.5]}
+    ai.save_zarr(store, data, zarr_format=3)
+    g = zarr.open_group(store, mode="r")
+    np.testing.assert_allclose(g["layer/kernel"][:], data["layer/kernel"])
+    np.testing.assert_allclose(g["bias"][:], data["bias"])
+    assert ai.load_zarr(store) == data
+
+
 def test_lz4_standalone_codec_reads(tmp_path):
     from numcodecs import LZ4
 

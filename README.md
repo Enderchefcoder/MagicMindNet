@@ -314,7 +314,7 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
 - Rust `#[test]`: **580**
-- pytest: **1055**
+- pytest: **1088**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

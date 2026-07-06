@@ -247,17 +247,18 @@ def load_zarr(path):
     return {name: _nest(shape, flat) for name, shape, flat in _native.read_zarr(path)}
 
 
-def save_zarr(path, arrays):
-    """Write named arrays as a Zarr v2 group store.
+def save_zarr(path, arrays, zarr_format=2):
+    """Write named arrays as a Zarr group store.
 
     ``/`` in names creates nested groups; each array stores as one
-    zlib-compressed ``<f4`` chunk. ``zarr.open_group(path)`` reads it.
+    compressed ``float32`` chunk (v2: zlib, v3: gzip codec).
+    ``zarr.open_group(path)`` reads either revision.
     """
     packed = []
     for name, array in arrays.items():
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
-    _native.write_zarr(path, packed)
+    _native.write_zarr(path, packed, zarr_format)
 
 
 def load_safetensors(path):
@@ -493,6 +494,8 @@ def save_arrays(path, arrays, format=None):
         "pickle": save_pickle_arrays,
         "zarr": save_zarr,
     }
+    # Common alias: the flax container IS msgpack.
+    inferred = {"msgpack": "flax"}.get(inferred, inferred)
     if inferred not in savers:
         raise ValueError(
             f"save_arrays cannot infer a format for {path!r}; pass format= one of "

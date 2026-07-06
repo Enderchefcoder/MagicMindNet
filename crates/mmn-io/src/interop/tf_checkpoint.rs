@@ -24,7 +24,7 @@ fn err(message: impl Into<String>) -> MmnError {
 
 /// CRC32-C (Castagnoli, reflected 0x82F63B78) — used by LevelDB tables and
 /// TensorFlow bundle entries, stored in "masked" form.
-fn crc32c(data: &[u8]) -> u32 {
+pub(crate) fn crc32c(data: &[u8]) -> u32 {
     static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
     let table = TABLE.get_or_init(|| {
         let mut table = [0u32; 256];

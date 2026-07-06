@@ -581,6 +581,7 @@ pub fn write_arrays_bytes(
             mmn_io::write_tf_checkpoint_arrays(path, &arrays).map_err(mmn_err_to_py)
         }
         "pickle" => mmn_io::write_pickle_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "zarr" => mmn_io::write_zarr_arrays(path, &arrays).map_err(mmn_err_to_py),
         other => Err(PyValueError::new_err(format!(
             "write_arrays_bytes: unknown format {other:?}"
         ))),
@@ -625,10 +626,11 @@ pub fn read_zarr(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_zarr_arrays(path).map_err(mmn_err_to_py)
 }
 
-/// Write named f32 arrays as a Zarr v2 group store (zlib chunks).
+/// Write named f32 arrays as a Zarr group store (v2 zlib or v3 gzip).
 #[pyfunction]
-pub fn write_zarr(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
-    mmn_io::write_zarr_arrays(path, &arrays).map_err(mmn_err_to_py)
+#[pyo3(signature = (path, arrays, zarr_format = 2))]
+pub fn write_zarr(path: &str, arrays: Vec<NamedArray>, zarr_format: u8) -> PyResult<()> {
+    mmn_io::write_zarr_arrays_format(path, &arrays, zarr_format).map_err(mmn_err_to_py)
 }
 
 /// Write a sharded safetensors checkpoint (HF weight_map index + shards).
