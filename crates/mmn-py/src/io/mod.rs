@@ -526,6 +526,18 @@ pub fn read_tflite(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_tflite_arrays(path).map_err(mmn_err_to_py)
 }
 
+/// Collect every numpy array in a pickle file (pdparams/sklearn/dicts).
+#[pyfunction]
+pub fn read_pickle_arrays(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_pickle_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named f32 arrays as a numpy-deserializable pickle dict.
+#[pyfunction]
+pub fn write_pickle_arrays(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_pickle_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
 /// Read a legacy GGML/GGMF/GGJT file; returns
 /// `(container_name, hparams, vocab_tokens, arrays)`.
 #[pyfunction]

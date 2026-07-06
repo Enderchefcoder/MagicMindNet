@@ -28,6 +28,9 @@ pub enum PickleValue {
     Global(String, String),
     /// Result of REDUCE: `callable(*args)` left symbolic.
     Reduce(Box<PickleValue>, Box<PickleValue>),
+    /// Result of BUILD on a symbolic object: `obj.__setstate__(state)`.
+    /// numpy arrays carry their shape/dtype/data in this state.
+    Build(Box<PickleValue>, Box<PickleValue>),
     /// Persistent-ID reference (torch storage descriptors).
     PersId(Box<PickleValue>),
     /// Internal stack marker; never appears in results.
@@ -89,6 +92,13 @@ impl<'a> Vm<'a> {
     fn u32(&mut self) -> Result<u32, MmnError> {
         let b = self.take(4)?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn u64(&mut self) -> Result<u64, MmnError> {
+        let b = self.take(8)?;
+        Ok(u64::from_le_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
     }
 
     fn line(&mut self) -> Result<String, MmnError> {
@@ -352,10 +362,34 @@ impl<'a> Vm<'a> {
                     self.stack
                         .push(reduce_value(callable, args));
                 }
+                0x81 => {
+                    // NEWOBJ: cls.__new__(cls, *args) — symbolic like REDUCE.
+                    let args = self.pop()?;
+                    let cls = self.pop()?;
+                    self.stack.push(reduce_value(cls, args));
+                }
+                0x92 => {
+                    // NEWOBJ_EX: cls.__new__(cls, *args, **kwargs).
+                    let _kwargs = self.pop()?;
+                    let args = self.pop()?;
+                    let cls = self.pop()?;
+                    self.stack.push(reduce_value(cls, args));
+                }
                 b'b' => {
-                    // BUILD: apply state to object — state is irrelevant for
-                    // reading tensors, keep the object.
-                    let _state = self.pop()?;
+                    // BUILD: keep the state when the object is symbolic
+                    // (numpy ndarrays/dtypes store their payload there);
+                    // for concrete containers the items were already set.
+                    let state = self.pop()?;
+                    let obj = self.pop()?;
+                    match obj {
+                        symbolic @ (PickleValue::Reduce(..) | PickleValue::Global(..)) => {
+                            self.stack.push(PickleValue::Build(
+                                Box::new(symbolic),
+                                Box::new(state),
+                            ));
+                        }
+                        concrete => self.stack.push(concrete),
+                    }
                 }
                 b'Q' => {
                     let pid = self.pop()?;
@@ -387,6 +421,12 @@ impl<'a> Vm<'a> {
                     self.memo_get(idx)?;
                 }
                 0x8f => self.stack.push(PickleValue::Dict(Vec::new())), // EMPTY_SET as dict-ish
+                0x96 => {
+                    // BYTEARRAY8 (protocol 5): u64 length + raw data.
+                    let len = self.u64()? as usize;
+                    let data = self.take(len)?.to_vec();
+                    self.stack.push(PickleValue::Bytes(data));
+                }
                 other => {
                     return Err(err(format!(
                         "pickle opcode 0x{other:02x} ({}) not supported",
@@ -493,6 +533,27 @@ impl PickleWriter {
         self.out
             .extend_from_slice(&(s.len() as u32).to_le_bytes());
         self.out.extend_from_slice(s.as_bytes());
+    }
+
+    pub fn none(&mut self) {
+        self.out.push(b'N');
+    }
+
+    pub fn bytes(&mut self, data: &[u8]) {
+        if data.len() <= 255 {
+            self.out.push(b'C'); // SHORT_BINBYTES
+            self.out.push(data.len() as u8);
+        } else {
+            self.out.push(b'B'); // BINBYTES
+            self.out
+                .extend_from_slice(&(data.len() as u32).to_le_bytes());
+        }
+        self.out.extend_from_slice(data);
+    }
+
+    /// BUILD: apply the state on top of the stack to the object below it.
+    pub fn build(&mut self) {
+        self.out.push(b'b');
     }
 
     pub fn global(&mut self, module: &str, name: &str) {

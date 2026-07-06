@@ -123,6 +123,12 @@ fn ints_from_tuple(value: &PickleValue, what: &str) -> Result<Vec<usize>, MmnErr
 }
 
 fn tensor_stub_from_reduce(value: &PickleValue) -> Result<Option<TensorStub>, MmnError> {
+    // Torch may BUILD hook/metadata state onto a rebuilt tensor; the reduce
+    // call underneath still describes the tensor.
+    let value = match value {
+        PickleValue::Build(inner, _) => inner.as_ref(),
+        other => other,
+    };
     let PickleValue::Reduce(callable, args) = value else {
         return Ok(None);
     };

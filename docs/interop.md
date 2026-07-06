@@ -334,10 +334,28 @@ ai.detect_arrays_format("anything.bin")     # "gguf" / "pt" / "npz" / ...
 dequantizes to f32, also exposed as `ai.load_gguf_arrays` /
 `ai.save_gguf_arrays`), legacy GGML/GGMF/GGJT, TFLite, PyTorch zip + legacy
 `.pt` + TorchScript archives (`constants.pkl`), `.npy`/`.npz`, HDF5/Keras,
-safetensors, Flax msgpack, ONNX, and TF checkpoint v2 prefixes.
-`save_arrays` infers from `.npz`, `.pt`/`.pth`, `.h5`/`.hdf5`, `.onnx`,
-`.safetensors`, `.msgpack`, `.gguf`, or an explicit `format=` (including
-`"tf-checkpoint"`).
+safetensors, Flax msgpack, ONNX, generic numpy pickles, and TF checkpoint
+v2 prefixes. `save_arrays` infers from `.npz`, `.pt`/`.pth`, `.h5`/`.hdf5`,
+`.onnx`, `.safetensors`, `.msgpack`, `.gguf`, `.pkl`/`.pickle`/`.pdparams`,
+or an explicit `format=` (including `"tf-checkpoint"`).
+
+## Generic pickles — PaddlePaddle, scikit-learn, plain ndarray dicts
+
+The pickle VM reconstructs numpy arrays wherever they appear in a pickled
+object graph: `_reconstruct` + `BUILD` states (protocols 2-4, including the
+protocol-2 `_codecs.encode` latin-1 byte encoding), protocol-5
+`_frombuffer` reduces, numpy scalars, big-endian dtypes, Fortran order,
+and `NEWOBJ`-built objects whose `__dict__` holds arrays (sklearn-style
+estimators — `coef_`/`intercept_` surface under their attribute paths):
+
+```python
+params = ai.load_pickle_arrays("model.pdparams")   # PaddlePaddle state dict
+coefs = ai.load_pickle_arrays("sklearn_model.pkl") # {"coef_": ..., ...}
+ai.save_pickle_arrays("out.pkl", {"w": [[1.0]]})   # pickle.load + numpy reads it
+```
+
+Cross-validated against CPython `pickle` + numpy in both directions across
+protocols 2-5.
 
 ## Universal detection
 

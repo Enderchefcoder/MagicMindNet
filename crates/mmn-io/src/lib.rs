@@ -54,6 +54,10 @@ pub use interop::msgpack::{
     decode as decode_msgpack, encode as encode_msgpack, Value as MsgpackValue,
 };
 pub use interop::onnx::{read_onnx_arrays, write_onnx_arrays};
+pub use interop::pickle_arrays::{
+    read_pickle_arrays, read_pickle_arrays_bytes, write_pickle_arrays,
+    write_pickle_arrays_bytes,
+};
 pub use interop::st_arrays::{
     read_safetensors_arrays, read_safetensors_arrays_bytes, write_safetensors_arrays,
     write_safetensors_arrays_bytes,

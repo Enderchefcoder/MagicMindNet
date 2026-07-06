@@ -41,6 +41,7 @@ __all__ = [
     "load_npy",
     "load_npz",
     "load_onnx",
+    "load_pickle_arrays",
     "load_pt",
     "load_safetensors",
     "load_tf_checkpoint",
@@ -52,6 +53,7 @@ __all__ = [
     "save_npy",
     "save_npz",
     "save_onnx",
+    "save_pickle_arrays",
     "save_pt",
     "save_safetensors",
     "save_tf_checkpoint",
@@ -257,6 +259,34 @@ def load_tf_checkpoint(path):
     }
 
 
+def load_pickle_arrays(path):
+    """Collect every numpy array in a pickle file into ``{path: nested lists}``.
+
+    Works on PaddlePaddle ``.pdparams`` state dicts, scikit-learn model
+    pickles (``coef_``/``intercept_`` fields surface under their attribute
+    paths), and plain pickled dicts/lists of ndarrays — no numpy install
+    needed. Names are dotted object-graph paths; numpy scalars come back as
+    0-d values. Fortran-ordered arrays convert to C order.
+    """
+    return {
+        name: _nest(shape, flat)
+        for name, shape, flat in _native.read_pickle_arrays(path)
+    }
+
+
+def save_pickle_arrays(path, arrays):
+    """Write named arrays as a pickled ``{name: ndarray}`` dict.
+
+    The output deserializes with plain ``pickle.load`` on any machine with
+    numpy installed (F32 C-order arrays).
+    """
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_pickle_arrays(path, packed)
+
+
 def load_tflite(path):
     """Read every weight in a ``.tflite`` model into ``{name: nested lists}``.
 
@@ -335,8 +365,9 @@ def save_arrays(path, arrays, format=None):
     """Write named arrays to any supported container.
 
     The format comes from the extension (``.npz``, ``.pt``/``.pth``, ``.h5``/
-    ``.hdf5``, ``.onnx``, ``.safetensors``, ``.msgpack``, ``.gguf``) or an
-    explicit ``format=`` (also accepts ``"tf-checkpoint"`` and ``"flax"``).
+    ``.hdf5``, ``.onnx``, ``.safetensors``, ``.msgpack``, ``.gguf``, ``.pkl``/
+    ``.pickle``/``.pdparams``) or an explicit ``format=`` (also accepts
+    ``"tf-checkpoint"``, ``"flax"``, and ``"pickle"``).
     """
     inferred = format
     if inferred is None:
@@ -351,6 +382,9 @@ def save_arrays(path, arrays, format=None):
             (".safetensors", "safetensors"),
             (".msgpack", "flax"),
             (".gguf", "gguf"),
+            (".pkl", "pickle"),
+            (".pickle", "pickle"),
+            (".pdparams", "pickle"),
         ):
             if lower.endswith(suffix):
                 inferred = name
@@ -364,6 +398,7 @@ def save_arrays(path, arrays, format=None):
         "flax": save_flax,
         "gguf": save_gguf_arrays,
         "tf-checkpoint": save_tf_checkpoint,
+        "pickle": save_pickle_arrays,
     }
     if inferred not in savers:
         raise ValueError(

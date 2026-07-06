@@ -27,6 +27,7 @@ pub mod ggml_legacy;
 pub mod tflite;
 pub mod msgpack;
 pub mod onnx;
+pub mod pickle_arrays;
 pub mod st_arrays;
 pub mod pickle;
 pub mod proto;

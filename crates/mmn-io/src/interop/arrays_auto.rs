@@ -71,6 +71,9 @@ pub enum ArrayFormat {
     Onnx,
     TfCheckpoint,
     Tflite,
+    /// Generic pickle holding numpy arrays (PaddlePaddle `.pdparams`,
+    /// sklearn model pickles, plain pickled ndarray dicts).
+    Pickle,
 }
 
 impl ArrayFormat {
@@ -89,6 +92,7 @@ impl ArrayFormat {
             ArrayFormat::Onnx => "onnx",
             ArrayFormat::TfCheckpoint => "tf-checkpoint",
             ArrayFormat::Tflite => "tflite",
+            ArrayFormat::Pickle => "pickle",
         }
     }
 }
@@ -165,6 +169,11 @@ pub fn detect_array_format(path: &str, bytes: &[u8]) -> Result<ArrayFormat, MmnE
     if super::torch_pt::is_legacy_torch_bytes(bytes) {
         return Ok(ArrayFormat::LegacyTorch);
     }
+    // Generic pickle (protocol 2-5 PROTO prefix, checked after the torch
+    // legacy magic): PaddlePaddle .pdparams, sklearn pickles, ndarray dicts.
+    if bytes.len() >= 2 && bytes[0] == 0x80 && (2..=5).contains(&bytes[1]) {
+        return Ok(ArrayFormat::Pickle);
+    }
     if looks_like_flax_msgpack(bytes) {
         return Ok(ArrayFormat::FlaxMsgpack);
     }
@@ -209,6 +218,7 @@ pub fn read_arrays_auto(path: &str) -> Result<(ArrayFormat, Vec<NamedArray>), Mm
         }
         ArrayFormat::Safetensors => super::st_arrays::read_safetensors_arrays_bytes(&bytes)?,
         ArrayFormat::FlaxMsgpack => super::flax::read_flax_arrays_bytes(&bytes)?,
+        ArrayFormat::Pickle => super::pickle_arrays::read_pickle_arrays_bytes(&bytes)?,
         ArrayFormat::Onnx => super::onnx::read_onnx_arrays_bytes(&bytes)?,
         ArrayFormat::TfCheckpoint => super::tf_checkpoint::read_tf_checkpoint_arrays(path)?,
     };

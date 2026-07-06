@@ -2,6 +2,23 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 13: numpy arrays in any pickle — PaddlePaddle, sklearn)
+- **Generic pickle array IO** (`ai.load_pickle_arrays` / `ai.save_pickle_arrays`):
+  the pickle VM now reconstructs numpy ndarrays anywhere in a pickled object
+  graph — `_reconstruct`+`BUILD` states (protocols 2-4 incl. the protocol-2
+  `_codecs.encode` latin-1 byte path), protocol-5 `_frombuffer` reduces,
+  numpy scalars, big-endian dtypes, Fortran-order conversion, and
+  `NEWOBJ`-built objects whose `__dict__` holds arrays (sklearn estimators)
+- Covers **PaddlePaddle `.pdparams`** state dicts and scikit-learn model pickles;
+  names are dotted object-graph paths
+- Writer emits pickles plain `pickle.load` + numpy deserializes (F32 C-order)
+- Pickle VM: `BUILD` now keeps state on symbolic objects, `NEWOBJ`/`NEWOBJ_EX`
+  and protocol-5 `BYTEARRAY8` opcodes supported (torch stub extraction
+  unwraps `Build` transparently)
+- `ai.load_arrays` / `save_arrays` detect and write generic pickles
+  (`.pkl`/`.pickle`/`.pdparams`)
+- Cross-validated against CPython `pickle` + numpy both directions, protocols 2-5
+
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp
   containers, including the original f32-scale Q4_0/Q4_1 block layouts with

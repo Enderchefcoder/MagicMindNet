@@ -159,7 +159,7 @@ fn parse_shape(header: &str) -> Result<Vec<usize>, MmnError> {
         .collect()
 }
 
-fn decode_element(descr: &str, chunk: &[u8]) -> Result<f32, MmnError> {
+pub(crate) fn decode_element(descr: &str, chunk: &[u8]) -> Result<f32, MmnError> {
     let big_endian = descr.starts_with('>');
     let code = &descr[1..];
     let val = |le: &[u8]| -> Vec<u8> {
@@ -193,7 +193,7 @@ fn decode_element(descr: &str, chunk: &[u8]) -> Result<f32, MmnError> {
     })
 }
 
-fn descr_item_size(descr: &str) -> Result<usize, MmnError> {
+pub(crate) fn descr_item_size(descr: &str) -> Result<usize, MmnError> {
     let code = descr.get(1..).unwrap_or("");
     code.get(1..)
         .and_then(|n| n.parse::<usize>().ok())
