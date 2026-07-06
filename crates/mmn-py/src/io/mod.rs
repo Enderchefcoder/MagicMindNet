@@ -520,6 +520,29 @@ pub fn read_arrays_auto(path: &str) -> PyResult<(String, Vec<NamedArray>)> {
     Ok((format.as_str().to_string(), arrays))
 }
 
+/// One tensor as `(name, shape, little-endian f32 bytes)`.
+type NamedByteArray = (String, Vec<usize>, Py<pyo3::types::PyBytes>);
+
+/// Like `read_arrays_auto` but values come back as little-endian f32 bytes
+/// (the numpy fast path: `np.frombuffer` instead of building float lists).
+#[pyfunction]
+pub fn read_arrays_auto_bytes(
+    py: Python<'_>,
+    path: &str,
+) -> PyResult<(String, Vec<NamedByteArray>)> {
+    let (format, arrays) = mmn_io::read_arrays_auto(path).map_err(mmn_err_to_py)?;
+    let mut out = Vec::with_capacity(arrays.len());
+    for (name, shape, values) in arrays {
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        out.push((
+            name,
+            shape,
+            pyo3::types::PyBytes::new(py, &bytes).into(),
+        ));
+    }
+    Ok((format.as_str().to_string(), out))
+}
+
 /// Read every weight tensor in a TFLite flatbuffer model.
 #[pyfunction]
 pub fn read_tflite(path: &str) -> PyResult<Vec<NamedArray>> {

@@ -328,7 +328,13 @@ Beyond the per-format helpers, one pair of calls covers everything:
 arrays = ai.load_arrays("anything.bin")     # detects the container by content
 ai.save_arrays("out.safetensors", arrays)   # writer picked from the extension
 ai.detect_arrays_format("anything.bin")     # "gguf" / "pt" / "npz" / ...
+
+weights = ai.load_arrays("big.gguf", numpy=True)  # float32 ndarrays, ~12x faster
 ```
+
+With numpy installed, `numpy=True` skips Python list building entirely
+(decoded bytes go straight through `np.frombuffer`): ~80 ms → ~7 ms for a
+1.3M-value file.
 
 `load_arrays` recognizes GGUF v1-v3 (any quantization — everything
 dequantizes to f32, also exposed as `ai.load_gguf_arrays` /

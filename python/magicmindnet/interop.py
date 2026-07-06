@@ -27,6 +27,13 @@ import json
 
 from magicmindnet import _native
 
+# numpy is an optional dependency: only the load_arrays(numpy=True) fast
+# path needs it, so the import failure is deferred to that call.
+try:
+    import numpy as _np
+except ImportError:  # pragma: no cover - depends on the environment
+    _np = None
+
 __all__ = [
     "detect_arrays_format",
     "gguf_info",
@@ -337,15 +344,32 @@ def save_gguf_arrays(path, arrays):
     _native.write_gguf_arrays(path, packed)
 
 
-def load_arrays(path):
+def load_arrays(path, numpy=False):
     """Load *any* supported weights file into ``{name: nested lists}``.
 
-    Detects the container by content: GGUF, PyTorch ``.pt`` (zip + legacy),
-    ``.npy``/``.npz``, HDF5/Keras, safetensors, Flax msgpack, ONNX, and TF
-    checkpoint v2 prefixes. Single-array ``.npy`` files come back under the
-    name ``"arr"``. Returns the same shape of dict as the per-format
-    ``load_*`` helpers; use :func:`detect_arrays_format` for the format tag.
+    Detects the container by content: GGUF (v1-v3) and legacy GGML/GGJT,
+    PyTorch ``.pt`` (zip + legacy + TorchScript), ``.npy``/``.npz``,
+    HDF5/Keras, TFLite, safetensors, Flax msgpack, ONNX, generic numpy
+    pickles, and TF checkpoint v2 prefixes. Single-array ``.npy`` files come
+    back under the name ``"arr"``. Returns the same shape of dict as the
+    per-format ``load_*`` helpers; use :func:`detect_arrays_format` for the
+    format tag.
+
+    ``numpy=True`` returns float32 ``numpy.ndarray`` values built straight
+    from the decoded bytes (``np.frombuffer``) — roughly an order of
+    magnitude faster than nested lists for multi-megabyte models. Requires
+    numpy to be installed.
     """
+    if numpy:
+        if _np is None:
+            raise ValueError(
+                "load_arrays(numpy=True) requires numpy to be installed"
+            )
+        _, arrays = _native.read_arrays_auto_bytes(path)
+        return {
+            name: _np.frombuffer(buf, dtype="<f4").reshape(shape).copy()
+            for name, shape, buf in arrays
+        }
     _, arrays = _native.read_arrays_auto(path)
     return {name: _nest(shape, flat) for name, shape, flat in arrays}
 

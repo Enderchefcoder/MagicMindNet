@@ -76,6 +76,24 @@ def test_load_arrays_rejects_junk(tmp_path):
         ai.load_arrays(str(path))
 
 
+def test_load_arrays_numpy_fast_path(tmp_path):
+    path = str(tmp_path / "arrays.safetensors")
+    ai.save_arrays(path, DATA)
+    arrays = ai.load_arrays(path, numpy=True)
+    assert isinstance(arrays["w"], np.ndarray)
+    assert arrays["w"].dtype == np.float32
+    assert arrays["w"].flags.writeable
+    np.testing.assert_allclose(arrays["w"], DATA["w"])
+    np.testing.assert_allclose(arrays["b"], DATA["b"])
+    # Both paths agree across a second format too.
+    gguf_path = str(tmp_path / "arrays.gguf")
+    ai.save_arrays(gguf_path, DATA)
+    fast = ai.load_arrays(gguf_path, numpy=True)
+    slow = ai.load_arrays(gguf_path)
+    for name in DATA:
+        np.testing.assert_allclose(fast[name], np.array(slow[name], dtype=np.float32))
+
+
 def test_gguf_arrays_roundtrip_and_official_load(tmp_path):
     path = str(tmp_path / "arrays.gguf")
     ai.save_gguf_arrays(path, DATA)

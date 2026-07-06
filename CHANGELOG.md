@@ -18,6 +18,9 @@
 - `ai.load_arrays` / `save_arrays` detect and write generic pickles
   (`.pkl`/`.pickle`/`.pdparams`)
 - Cross-validated against CPython `pickle` + numpy both directions, protocols 2-5
+- **`ai.load_arrays(path, numpy=True)` fast path**: decoded bytes go straight to
+  `np.frombuffer` float32 ndarrays instead of nested lists — ~80 ms → ~7 ms for a
+  1.3M-value file (numpy optional, plain lists remain the default)
 
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp
