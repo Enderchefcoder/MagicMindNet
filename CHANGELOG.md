@@ -2,6 +2,25 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 7: zero format dependencies, complete k-quant encoder set)
+- **From-scratch safetensors codec** (`st_codec.rs`) replaces the external
+  `safetensors` crate — header JSON + offset validation + aligned serialization;
+  the dependency is gone from the tree entirely, making the whole format layer
+  zero-external-libraries. Cross-validated: the official `safetensors` Python
+  package opens our files (`safe_open` + metadata) and we import its
+  `safetensors.numpy.save_file` output
+- **Complete k-quant encoder set**: Q2_K (MAD-variant scale/min search), Q3_K
+  (`make_q3_quants` iterative RMSE refinement with the 6-bit scale shuffle), and
+  Q8_K join Q4_K/Q5_K/Q6_K; new `gguf-q2_k` / `gguf-q3_k` export formats; blocks
+  decode identically in gguf-py; reconstruction error forms a strict Q2→Q8
+  quality ladder
+- **Parallel GGUF tensor payload encoding** in the writer (quantization searches
+  dominate k-quant export time)
+- Tests: +9 Rust (encoder roundtrips, quality ladder, st_codec roundtrips/corrupt
+  inputs) and +8 pytest (`test_interop_wave7_py`: official-package cross-reads in
+  both directions, loss parity through the new container, reference-decode
+  identity for Q2_K/Q3_K)
+
 ### Added (interop wave 6: writers for HDF5 / TF checkpoint / ONNX — every ecosystem bidirectional)
 - **HDF5 writer** (`ai.save_h5`): superblock v0, symbol-table groups with the
   fixed-allocation B-tree v1 + SNOD node sizes libhdf5 requires, local heaps with

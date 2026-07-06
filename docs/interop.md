@@ -2,13 +2,16 @@
 
 MagicMindNet reads and writes the major model/array formats of the wider ML
 ecosystem. **Every codec is implemented from scratch in the Rust core** — no
-llama.cpp, no libtorch, no zlib, no HDF5 library, and no Python-side
-numpy/torch/h5py dependency.
+llama.cpp, no libtorch, no zlib, no HDF5/LevelDB/protobuf libraries, and
+since wave 7 **not even the `safetensors` crate**: the container codec
+(`st_codec.rs`) is from scratch too, so the entire format layer carries zero
+external format dependencies. No Python-side numpy/torch/h5py/tensorflow/onnx
+packages are needed either.
 
 | Format | Extension | Read | Write | Implementation |
 | --- | --- | --- | --- | --- |
 | MMN JSON safetensors | `.mmn` | ✅ | ✅ | `mmn-safetensors-v1` wrapper |
-| HF binary safetensors | `.safetensors` | ✅ | ✅ | `safetensors` container |
+| HF binary safetensors | `.safetensors` | ✅ | ✅ | from-scratch container codec |
 | GGUF (llama.cpp ecosystem) | `.gguf` | ✅ | ✅ (F32/F16/Q8_0/Q4_0/**Q4_K/Q5_K/Q6_K**) | from-scratch container + codecs |
 | PyTorch state dict (zip, ≥1.6) | `.pt` / `.pth` | ✅ | ✅ | from-scratch ZIP + pickle VM |
 | PyTorch legacy (pre-1.6) | `.pt` / `.pth` | ✅ | — | pickle-stream + raw storages |
@@ -101,15 +104,17 @@ also accepts HF-style token lists + merge rules directly.
 The writer encodes every practical target — classic quants **byte-identical
 to the reference implementation** (`gguf-q4_0` / `q4_1` / `q5_0` / `q5_1` /
 `q8_0`, ggml's exact truncating rounding), plus TQ1_0/TQ2_0 ternary blocks
-and MXFP4 (reference-exact codebook + E8M0 scale selection), plus
-**k-quants** (`gguf-q4_k` / `q5_k` / `q6_k`) via from-scratch ports of ggml's
-reference quantization searches (`make_qx_quants` iscale refinement,
-`make_qkx2_quants` joint scale+min least squares, round-half-to-even
-`nearest_int`). The reference llama.cpp Python package cannot encode k-quants
-at all; ours produces blocks it decodes identically (verified as a
-re-quantization fixed point), with Q6_K reconstruction under 2% relative
-RMSE. Per the ggml spec, quantization is **row-wise**: tensors whose fastest
-dimension is not a block multiple stay F32 automatically.
+and MXFP4 (reference-exact codebook + E8M0 scale selection), plus **the full
+k-quant family** (`gguf-q2_k` through `q6_k`, plus Q8_K) via from-scratch
+ports of ggml's reference quantization searches (`make_qx_quants` iscale
+refinement, `make_q3_quants` iterative RMSE refinement, `make_qkx2_quants`
+joint scale+min least squares in both squared-error and MAD variants,
+round-half-to-even `nearest_int`). The reference llama.cpp Python package
+cannot encode k-quants at all; ours produces blocks it decodes identically,
+with a monotone quality ladder (Q2_K → Q8_K reconstruction error strictly
+improves). Per the ggml spec, quantization is **row-wise**: tensors whose
+fastest dimension is not a block multiple stay F32 automatically. Tensor
+payload encoding runs **in parallel across cores**.
 
 Limitations: vision chatbots cannot be exported to GGUF (use safetensors or
 npz).

@@ -36,6 +36,8 @@
 - libhdf5 reads group B-tree/SNOD nodes at their FULL fixed allocation (btree 24+(2K+1)*8+2K*8=544 with K_internal=16; SNOD 8+2*K_leaf*40=328 with K_leaf=4) — writers must pad nodes or h5py errors with 'addr overflow'.
 - HDF5 f32 datatype bit fields per h5py: [0x11, 0x20, 0x1F, 0x00] (v1 float, normalized-msb, sign loc 31) + offset0/prec32/exp23,8/man0,23/bias127; include a v2 fill-value message (02 02 02 01 + size 0).
 - TF bundle writer needs SORTED keys ('' header first) — LevelDB tables are ordered; BundleHeaderProto field3 = VersionDef{producer=1}.
+- safetensors container: u64 header_len + JSON {name: {dtype, shape, data_offsets}} (+ __metadata__ string map); pad header with spaces so 8+len is 8-aligned; offsets validated against shape*dtype_size.
+- Q3_K packs scale l>>4 high bits as scales[8 + j%4] |= high << (2*(j/4)); Q2_K uses use_mad=true qkx2 with weights=|x|.
 
 # Scratchpad
 
@@ -254,6 +256,12 @@
 [X] ONNX writer: proto emit helpers; passes onnx.checker.check_model
 [X] MXFP4 + TQ1_0 reference-exact encoders; parallel HDF5 chunk decompression
 [X] 483 Rust / 876 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 7 — zero format deps, complete k-quant encoders
+[X] From-scratch st_codec.rs replaces the safetensors crate (drop-in API: SafeTensors/TensorView/Dtype/serialize); dep removed from Cargo.lock; official safetensors pkg cross-reads both ways
+[X] Q2_K (MAD qkx2), Q3_K (make_q3_quants iterative + 6-bit scale shuffle), Q8_K encoders; gguf-q2_k/q3_k exports; strict Q2->Q8 quality ladder test
+[X] Parallel GGUF tensor payload encoding
+[X] 492 Rust / 884 pytest; clippy 0; smoke OK
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses
