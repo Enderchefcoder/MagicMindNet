@@ -152,24 +152,70 @@ fn gguf_meta_to_mmn(file: &GgufFile, tensors: &HashMap<String, Tensor>) -> serde
     meta
 }
 
+/// Dequantize one mapped tensor into an MMN `Tensor`.
+fn dequantized_tensor(
+    file: &super::gguf::GgufFile,
+    info: &super::gguf::GgufTensorInfo,
+) -> Result<Tensor, MmnError> {
+    let (shape, values) = file.tensor_f32(info)?;
+    let arr = ArrayD::from_shape_vec(IxDyn(&shape), values)
+        .map_err(|e| err(format!("GGUF tensor {}: {e}", info.name)))?;
+    Ok(Tensor::from_array(arr, true))
+}
+
 /// Import a GGUF model file into a `Chatbot` (dequantizing as needed).
+///
+/// Tensors dequantize in parallel across available cores — large quantized
+/// checkpoints decode block-by-block, which is embarrassingly parallel.
 pub fn import_gguf_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
     let file = read_gguf(bytes)?;
-    let mut tensors: HashMap<String, Tensor> = HashMap::new();
-    for info in &file.tensors {
-        let Some(mmn_key) = gguf_name_to_mmn(&info.name) else {
-            continue;
-        };
-        let (shape, values) = file.tensor_f32(info)?;
-        let arr = ArrayD::from_shape_vec(IxDyn(&shape), values).map_err(|e| {
-            err(format!("GGUF tensor {}: {e}", info.name))
-        })?;
-        tensors.insert(mmn_key, Tensor::from_array(arr, true));
-    }
-    if tensors.is_empty() {
+    let mapped: Vec<(String, &super::gguf::GgufTensorInfo)> = file
+        .tensors
+        .iter()
+        .filter_map(|info| gguf_name_to_mmn(&info.name).map(|key| (key, info)))
+        .collect();
+    if mapped.is_empty() {
         return Err(err(
             "GGUF file contains no recognizable model tensors (expected llama.cpp names like token_embd.weight, blk.0.attn_q.weight)",
         ));
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(mapped.len());
+    let mut tensors: HashMap<String, Tensor> = HashMap::with_capacity(mapped.len());
+    if workers <= 1 {
+        for (key, info) in &mapped {
+            tensors.insert(key.clone(), dequantized_tensor(&file, info)?);
+        }
+    } else {
+        let chunk_size = mapped.len().div_ceil(workers);
+        let results: Vec<Result<Vec<(String, Tensor)>, MmnError>> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = mapped
+                    .chunks(chunk_size)
+                    .map(|chunk| {
+                        let file = &file;
+                        scope.spawn(move || {
+                            chunk
+                                .iter()
+                                .map(|(key, info)| {
+                                    dequantized_tensor(file, info).map(|t| (key.clone(), t))
+                                })
+                                .collect()
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("gguf dequant worker panicked"))
+                    .collect()
+            });
+        for chunk in results {
+            for (key, tensor) in chunk? {
+                tensors.insert(key, tensor);
+            }
+        }
     }
     let meta = gguf_meta_to_mmn(&file, &tensors);
     chatbot_from_external_tensors(tensors, meta)
@@ -233,8 +279,19 @@ fn chatbot_gguf_metadata(model: &Chatbot) -> Vec<(String, GgufValue)> {
     meta
 }
 
-/// Export a `Chatbot` as a GGUF v3 file (`quant`: "f32" or "q8_0").
+/// Export a `Chatbot` as a GGUF v3 file (`quant`: "f32", "f16", "q8_0", "q4_0").
 pub fn export_gguf(model: &Chatbot, path: &str, quant: &str) -> Result<(), MmnError> {
+    export_gguf_with_tokenizer(model, path, quant, None)
+}
+
+/// Export a `Chatbot` as GGUF with an embedded SentencePiece-style vocabulary
+/// (`tokenizer.ggml.model = "llama"`), making the file self-contained.
+pub fn export_gguf_with_tokenizer(
+    model: &Chatbot,
+    path: &str,
+    quant: &str,
+    tokenizer: Option<&mmn_data::UnigramEncoder>,
+) -> Result<(), MmnError> {
     if model.vision {
         return Err(err(
             "GGUF export does not support vision models yet; use safetensors or npz",
@@ -242,10 +299,12 @@ pub fn export_gguf(model: &Chatbot, path: &str, quant: &str) -> Result<(), MmnEr
     }
     let ggml_type = match quant {
         "f32" | "F32" => GgmlType::F32,
+        "f16" | "F16" => GgmlType::F16,
         "q8_0" | "Q8_0" => GgmlType::Q8_0,
+        "q4_0" | "Q4_0" => GgmlType::Q4_0,
         other => {
             return Err(err(format!(
-                "GGUF export quant {other:?} not supported (use \"f32\" or \"q8_0\")"
+                "GGUF export quant {other:?} not supported (use \"f32\", \"f16\", \"q8_0\", or \"q4_0\")"
             )));
         }
     };
@@ -269,18 +328,23 @@ pub fn export_gguf(model: &Chatbot, path: &str, quant: &str) -> Result<(), MmnEr
     let tensors: Vec<GgufWriteTensor<'_>> = standardized
         .iter()
         .map(|(name, shape, values)| {
-            // Row (32-elem-aligned) tensors quantize; small vectors stay F32.
-            let use_quant = ggml_type == GgmlType::Q8_0
-                && values.len().is_multiple_of(super::gguf_quant::QK);
+            // Block-quantized tensors need 32-element alignment; small vectors
+            // (layernorm gammas/betas on tiny models) stay F32.
+            let (block_elems, _) = ggml_type.block_layout();
+            let use_quant = ggml_type != GgmlType::F32
+                && values.len().is_multiple_of(block_elems);
             GgufWriteTensor {
                 name: name.clone(),
                 shape: shape.clone(),
                 values,
-                ggml_type: if use_quant { GgmlType::Q8_0 } else { GgmlType::F32 },
+                ggml_type: if use_quant { ggml_type } else { GgmlType::F32 },
             }
         })
         .collect();
-    let meta = chatbot_gguf_metadata(model);
+    let mut meta = chatbot_gguf_metadata(model);
+    if let Some(encoder) = tokenizer {
+        meta.extend(super::gguf_info::unigram_to_gguf_metadata(encoder));
+    }
     let bytes = write_gguf(&meta, &tensors)?;
     write_file_create_parents(path, bytes)
 }
@@ -352,6 +416,64 @@ mod tests {
         let model = Chatbot::new(false, None, 32, Some(1), Some(8));
         let e = export_gguf(&model, "/tmp/never.gguf", "q4_k").unwrap_err();
         assert!(e.message().contains("not supported"));
+    }
+
+    #[test]
+    fn gguf_f16_roundtrip_close() {
+        let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(6));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_f16_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "f16").unwrap();
+        let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+        let a = model.embed.weight.data[[2, 3]];
+        let b = loaded.embed.weight.data[[2, 3]];
+        assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn gguf_q4_0_roundtrip_close() {
+        let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(32), Some(8));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_q40_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "q4_0").unwrap();
+        let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+        let a = model.embed.weight.data[[1, 2]];
+        let b = loaded.embed.weight.data[[1, 2]];
+        assert!((a - b).abs() < 0.25, "{a} vs {b}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn embedded_tokenizer_roundtrips_through_gguf() {
+        let model = Chatbot::new_with_seed(false, None, 512, Some(1), Some(16), Some(4));
+        let enc = mmn_data::UnigramEncoder::train(&["hello world", "hello there"], 300);
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_embtok_{}.gguf", std::process::id()));
+        export_gguf_with_tokenizer(&model, path.to_str().unwrap(), "f32", Some(&enc)).unwrap();
+        let back = super::super::gguf_info::import_gguf_tokenizer(path.to_str().unwrap()).unwrap();
+        assert_eq!(back.piece_count(), enc.piece_count());
+        let text = "hello world";
+        assert_eq!(back.decode(&back.encode(text)), text);
+        assert_eq!(back.encode(text), enc.encode(text));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn parallel_dequant_matches_model_shape() {
+        // Multi-block model exercises the multi-worker path (many tensors).
+        let model = Chatbot::new_with_seed(false, None, 64, Some(4), Some(16), Some(2));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_par_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "f32").unwrap();
+        let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.shape.n_layer, 4);
+        for i in 0..4 {
+            let a = model.blocks[i].ffn.weight.data[[0, 0]];
+            let b = loaded.blocks[i].ffn.weight.data[[0, 0]];
+            assert!((a - b).abs() < 1e-6, "block {i}");
+        }
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

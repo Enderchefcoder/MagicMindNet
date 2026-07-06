@@ -4,7 +4,7 @@
 //! key/values, tensor infos, and the aligned tensor-data section. No
 //! llama.cpp or ggml code is used anywhere.
 
-use super::gguf_quant::{dequantize, quantize_q8_0, GgmlType};
+use super::gguf_quant::{dequantize, encode_f16, quantize_q4_0, quantize_q8_0, GgmlType};
 use mmn_core::MmnError;
 use std::collections::HashMap;
 
@@ -172,7 +172,7 @@ impl<'a> Reader<'a> {
     fn string(&mut self) -> Result<String, MmnError> {
         let len = self.u64()? as usize;
         if len > self.bytes.len() {
-            return Err(err("GGUF string length exceeds file size"));
+            return Err(err("GGUF file truncated (string length exceeds buffer)"));
         }
         let bytes = self.take(len)?;
         String::from_utf8(bytes.to_vec()).map_err(|e| err(format!("GGUF string not UTF-8: {e}")))
@@ -202,7 +202,7 @@ impl<'a> Reader<'a> {
                 let elem_type = self.u32()?;
                 let count = self.u64()? as usize;
                 if count > self.bytes.len() {
-                    return Err(err("GGUF array count exceeds file size"));
+                    return Err(err("GGUF file truncated (array count exceeds buffer)"));
                 }
                 let mut items = Vec::with_capacity(count.min(1 << 20));
                 for _ in 0..count {
@@ -218,8 +218,17 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Parse a GGUF byte buffer (header, metadata, tensor infos, data section).
-pub fn read_gguf(bytes: &[u8]) -> Result<GgufFile, MmnError> {
+/// Header portion of a GGUF file: everything before the tensor data section.
+pub struct GgufHeader {
+    pub version: u32,
+    pub metadata: HashMap<String, GgufValue>,
+    pub tensors: Vec<GgufTensorInfo>,
+    pub alignment: usize,
+    pub data_start: usize,
+}
+
+/// Parse just the GGUF header (magic, metadata KV, tensor infos).
+pub fn parse_gguf_header(bytes: &[u8]) -> Result<GgufHeader, MmnError> {
     if bytes.len() < 4 || &bytes[..4] != GGUF_MAGIC {
         return Err(err("not a GGUF file (missing GGUF magic)"));
     }
@@ -232,8 +241,8 @@ pub fn read_gguf(bytes: &[u8]) -> Result<GgufFile, MmnError> {
     }
     let tensor_count = r.u64()? as usize;
     let kv_count = r.u64()? as usize;
-    if tensor_count > bytes.len() || kv_count > bytes.len() {
-        return Err(err("GGUF header counts exceed file size"));
+    if tensor_count > 1 << 24 || kv_count > 1 << 24 {
+        return Err(err("GGUF header counts unreasonably large"));
     }
     let mut metadata = HashMap::with_capacity(kv_count);
     for _ in 0..kv_count {
@@ -270,15 +279,64 @@ pub fn read_gguf(bytes: &[u8]) -> Result<GgufFile, MmnError> {
         });
     }
     let data_start = r.pos.div_ceil(alignment) * alignment;
-    if data_start > bytes.len() {
-        return Err(err("GGUF data section start beyond end of file"));
-    }
-    Ok(GgufFile {
+    Ok(GgufHeader {
         version,
         metadata,
         tensors,
         alignment,
-        data: bytes[data_start..].to_vec(),
+        data_start,
+    })
+}
+
+/// Read only the GGUF header from disk, loading the file incrementally so
+/// multi-gigabyte models are not pulled into memory for inspection.
+pub fn read_gguf_header_file(path: &str) -> Result<GgufHeader, MmnError> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| err(format!("cannot read GGUF {path}: {e}")))?;
+    let file_len = file
+        .metadata()
+        .map(|m| m.len() as usize)
+        .unwrap_or(usize::MAX);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = 4usize << 20;
+    loop {
+        let target = buf.len().saturating_add(chunk).min(file_len);
+        let old_len = buf.len();
+        buf.resize(target, 0);
+        let mut filled = old_len;
+        while filled < target {
+            let n = file
+                .read(&mut buf[filled..target])
+                .map_err(|e| err(format!("cannot read GGUF {path}: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        buf.truncate(filled);
+        match parse_gguf_header(&buf) {
+            Ok(header) => return Ok(header),
+            Err(e) if filled < file_len && e.message().contains("truncated") => {
+                chunk *= 2;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Parse a GGUF byte buffer (header, metadata, tensor infos, data section).
+pub fn read_gguf(bytes: &[u8]) -> Result<GgufFile, MmnError> {
+    let header = parse_gguf_header(bytes)?;
+    if header.data_start > bytes.len() {
+        return Err(err("GGUF data section start beyond end of file"));
+    }
+    Ok(GgufFile {
+        version: header.version,
+        metadata: header.metadata,
+        tensors: header.tensors,
+        alignment: header.alignment,
+        data: bytes[header.data_start..].to_vec(),
     })
 }
 
@@ -360,10 +418,12 @@ pub fn write_gguf(
                 .iter()
                 .flat_map(|v| v.to_le_bytes())
                 .collect::<Vec<u8>>(),
+            GgmlType::F16 => encode_f16(t.values),
             GgmlType::Q8_0 => quantize_q8_0(t.values)?,
+            GgmlType::Q4_0 => quantize_q4_0(t.values)?,
             other => {
                 return Err(err(format!(
-                    "GGUF writer encodes F32 or Q8_0, not {other:?}"
+                    "GGUF writer encodes F32, F16, Q8_0, or Q4_0, not {other:?}"
                 )));
             }
         };
