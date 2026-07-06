@@ -2,6 +2,37 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 3: complete GGML quant matrix, BPE vocabs, sharded HF, deflate)
+- **The IQ codebook-grid family, complete**: IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S,
+  IQ3_XXS, IQ3_S dequantize from scratch — QuIP#-style lattice codebooks ship as
+  compact 2-/4-bit-packed tables (`gguf_iq_grids.rs`) decoded once at runtime; the
+  sign-parity table is generated, not embedded. Plus **NVFP4** (unsigned-E4M3-scaled
+  FP4, ggml's newest type). Every GGML tensor type that exists in current ggml now
+  loads
+- **Reference cross-validation**: all 24 quant codecs verified against llama.cpp's
+  official `gguf` Python package — identical dequantization on random payloads,
+  agreement on reference-quantized float data, and our GGUF exports parse in the
+  reference `GGUFReader`. New `_native.dequantize_ggml(type, bytes, numel)` API;
+  `gguf` added to dev extras
+- **GPT-2 byte-level BPE** (`Gpt2BpeEncoder` in mmn-data): from-scratch
+  bytes↔unicode bijection, ranked-merge BPE, approximate GPT-2 pretokenization;
+  `ai.load_gguf_bpe_tokenizer(path)` extracts gpt2-model GGUF vocabs (GPT-2 /
+  Llama-3 / Qwen style) with model-aligned ids; `Gpt2BpeEncoder.from_vocab` accepts
+  HF vocab+merges directly; `TextEncoderRef::Gpt2` wires it into train/generate
+  plumbing
+- **Sharded HF checkpoints**: `ai.load("pytorch_model.bin.index.json")` /
+  `model.safetensors.index.json` resolve `weight_map` shards relative to the index
+  (safetensors and torch shard formats mix freely); new
+  `CheckpointKind::ChatbotSharded` detection
+- **From-scratch DEFLATE compressor** (fixed-Huffman + 32-deep hash-chain LZ77):
+  `ai.save_npz(path, arrays, compress=True)` mirrors `np.savez_compressed`,
+  cross-checked against CPython's `zlib`; incompressible entries stay stored
+- **Performance**: PyTorch storage decode parallelized across cores (matching GGUF
+  dequant); IQ grids cached in `OnceLock`
+- Tests: +25 Rust (IQ layouts/dispatch, grids, deflate roundtrips incl. LCG
+  incompressible data, sharded st/pt indexes, gpt2 BPE) and +43 pytest
+  (`test_interop_quant_crossval_py`, `test_interop_wave3_py`)
+
 ### Added (interop wave 2: full quant coverage, HDF5, legacy torch, GGUF tokenizers)
 - **Every practical GGML quantization**: Q2_K / Q3_K / Q5_K / Q8_K join Q4_K/Q6_K
   (full k-quant family); IQ4_NL / IQ4_XS non-linear lookup quants; TQ1_0 / TQ2_0

@@ -37,7 +37,8 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
 | IO | **`load`** (universal), `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
 | Array IO | `save_npy`, `load_npy`, `save_npz`, `load_npz`, `save_pt`, `load_pt`, `load_h5`, `load_keras` (NumPy/PyTorch/TF interchange, no numpy/torch/h5py needed) |
-| GGUF tools | `gguf_info`, `load_gguf_tokenizer` |
+| GGUF tools | `gguf_info`, `load_gguf_tokenizer`, `load_gguf_bpe_tokenizer` |
+| Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
 | Resource | `limit`, `limit_percent` |
 | Errors | `CPUError`, `CUDAError`, `DataMismatchError`, `DataMissingRowError`, `ModelMismatchError` |
@@ -338,9 +339,10 @@ raise `ValueError` naming the actual family when handed the wrong file.
 | `export(bot, "pt", path)` | PyTorch state dict | `torch.load`-compatible; `_mmn_meta` entry |
 | `import_model("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary; strict tensor validation |
 | `import_model("hf-safetensors", [path])` | `mmn-hf-safetensors-v1` | Binary HF safetensors only |
-| `import_model("gguf", [path])` | GGUF v2/v3 | Parallel dequant: Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1, Q2_K–Q8_K, IQ4_NL/IQ4_XS, TQ1_0/TQ2_0, MXFP4, F16/BF16 |
+| `import_model("gguf", [path])` | GGUF v2/v3 | Parallel dequant of **every current GGML type**: classic quants, Q2_K–Q8_K, IQ1_S/M, IQ2_XXS/XS/S, IQ3_XXS/S, IQ4_NL/XS, TQ1_0/TQ2_0, MXFP4, NVFP4, F16/BF16 — cross-validated against llama.cpp's `gguf` package |
 | `import_model("npz", [path])` | NumPy `.npz` | MMN or HF tensor names; stored or deflate entries |
 | `import_model("pt", [path])` | PyTorch `.pt`/`.pth` | From-scratch pickle VM; zip and legacy pre-1.6 formats; HF llama-style state dicts adapt |
+| `import_model("sharded", [index])` | HF `*.index.json` | `weight_map` shards (safetensors or torch), resolved next to the index |
 | `export_classifier(clf, "safetensors", path)` | `mmn-classifier-v1` | backbone + head (JSON) |
 | `export_classifier(clf, "hf-safetensors", path)` | `mmn-hf-classifier-v1` | backbone + head (binary HF) |
 | `import_classifier("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary |
@@ -387,6 +389,9 @@ weights = ai.load_keras("model.keras")         # Keras v3 archive
 
 info = ai.gguf_info("model.gguf")              # header-only inspection
 tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab
+bpe = ai.load_gguf_bpe_tokenizer("llama3.gguf")  # gpt2-style byte-level BPE
+ai.save_npz("small.npz", arrays, compress=True)  # from-scratch DEFLATE
+bot = ai.load("pytorch_model.bin.index.json")  # sharded HF checkpoints
 ```
 
 Details: [interop.md](interop.md).

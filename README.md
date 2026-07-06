@@ -146,7 +146,7 @@ flowchart TB
 | **Generation** | KV cache, top-k/top-p/min-p, repetition/frequency/presence penalties, stop strings, sliding context |
 | **RL / SPIN** | Toy alignment loops on small models |
 | **IO** | Universal `ai.load(path)` auto-detects model family + format; `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
-| **Global formats** | **GGUF read/write from scratch** (no llama.cpp): classic quants, full k-quant family Q2_K–Q8_K, IQ4_NL/IQ4_XS, ternary TQ1_0/TQ2_0, MXFP4; parallel dequant; header-only `gguf_info`; embedded SentencePiece tokenizers (`load_gguf_tokenizer`, self-contained exports). **PyTorch `.pt`** state dicts (from-scratch pickle VM, zip + legacy pre-1.6, `torch.load`-compatible export). **NumPy `.npy`/`.npz`** (numpy-free codec + DEFLATE inflate). **HDF5/Keras** `.h5`/`.keras` reading without h5py — [docs/interop.md](docs/interop.md) |
+| **Global formats** | **GGUF read/write from scratch** (no llama.cpp): **every current GGML tensor type** — classic quants, Q2_K–Q8_K, the complete IQ codebook family, TQ1_0/TQ2_0, MXFP4, NVFP4 — cross-validated against llama.cpp's reference `gguf` package; parallel dequant; header-only `gguf_info`; embedded SentencePiece **and gpt2 byte-BPE** tokenizers. **PyTorch** zip + legacy `.pt` + **sharded `*.index.json`** checkpoints. **NumPy `.npy`/`.npz`** incl. a from-scratch DEFLATE **compressor** (`compress=True`). **HDF5/Keras** `.h5`/`.keras` reading without h5py — [docs/interop.md](docs/interop.md) |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
@@ -313,8 +313,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **427**
-- pytest: **796**
+- Rust `#[test]`: **451**
+- pytest: **839**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

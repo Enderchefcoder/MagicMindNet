@@ -31,13 +31,23 @@ Quantized tensors are dequantized by from-scratch block codecs:
 - **K-quants (full family):** Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K
   (the Q4_K_M / Q3_K_M / Q5_K_M pairings used by most published models)
 - **Non-linear lookup quants:** IQ4_NL, IQ4_XS
+- **Codebook-grid IQ family (complete):** IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS,
+  IQ2_S, IQ3_XXS, IQ3_S — the QuIP#-style lattice codebooks ship as compact
+  packed tables decoded once at runtime
 - **Ternary BitNet quants:** TQ1_0, TQ2_0
-- **MXFP4** (E8M0-scaled FP4 blocks, as used by gpt-oss)
+- **MXFP4** (E8M0-scaled FP4 blocks, as used by gpt-oss) and **NVFP4**
+  (unsigned-E4M3-scaled FP4, the newest ggml addition)
 - **Floats/ints:** F32, F16, BF16, F64, I8/I16/I32/I64
 
-Removed ggml type ids (Q4_2/Q4_3, repacked `Q4_0_x_x`) and the codebook-grid
-IQ1/IQ2/IQ3 families are rejected with actionable messages. Large checkpoints
-dequantize **in parallel across all cores**.
+Removed ggml type ids (Q4_2/Q4_3, repacked `Q4_0_x_x`) are rejected with
+actionable messages. Large checkpoints dequantize **in parallel across all
+cores**.
+
+**Every codec is cross-validated against llama.cpp's reference `gguf`
+Python package** (`tests/test_interop_quant_crossval_py.py`): identical
+outputs on random block payloads for all 24 types, agreement on
+reference-quantized float data, and our GGUF files parse in the reference
+`GGUFReader`. Raw payloads are also exposed as `ai._native.dequantize_ggml`.
 
 Tensor names follow the llama.cpp convention (`token_embd.weight`,
 `blk.N.attn_q.weight`, `blk.N.ffn_gate.weight`, …) and are mapped onto the
@@ -77,9 +87,14 @@ tok = ai.load_gguf_tokenizer("packed.gguf")
 print(bot.chat("hello", unigram_encoder=tok))
 ```
 
+Byte-level BPE (`gpt2`) vocabularies — GPT-2, Llama-3, Qwen families — load
+via `ai.load_gguf_bpe_tokenizer(path)`, returning a `Gpt2BpeEncoder` (from-
+scratch bytes↔unicode table, ranked merges, approximate GPT-2
+pretokenization; ids follow the vocabulary order). `Gpt2BpeEncoder.from_vocab`
+also accepts HF-style token lists + merge rules directly.
+
 Limitations: vision chatbots cannot be exported to GGUF (use safetensors or
-npz); the writer emits F32/F16/Q8_0/Q4_0 tensors; BPE (`gpt2`) GGUF vocabs are
-inspectable via `gguf_info` but not yet convertible to an encoder.
+npz); the writer emits F32/F16/Q8_0/Q4_0 tensors.
 
 ## PyTorch `.pt` — no torch required
 
@@ -100,6 +115,12 @@ tensors = ai.load_pt("tensors.pt")
 The **legacy pre-1.6 format** (raw pickle stream with the
 `0x1950a86a20f9469cfc6c` magic, protocol/sys-info pickles, and appended raw
 storages) is auto-detected and read by the same APIs.
+
+**Sharded checkpoints** (`pytorch_model.bin.index.json` /
+`model.safetensors.index.json` + shard files, the Hugging Face layout for
+large models) load through `ai.load(index_path)`: the `weight_map` resolves
+shards relative to the index, mixing safetensors and torch shard formats
+freely.
 
 Exports include an `_mmn_meta` JSON entry so shape/seed/RoPE settings survive
 the roundtrip; external checkpoints without it infer architecture from tensor
@@ -125,7 +146,9 @@ The NPY codec handles format 1.0/2.0 headers, every common dtype
 (`f2/f4/f8`, signed/unsigned ints, bools, big-endian variants), and
 Fortran-ordered arrays. The ZIP layer reads DEFLATE-compressed entries via a
 from-scratch RFC 1951 decompressor, so `np.savez_compressed` archives load
-too.
+too — and writes them with a from-scratch **DEFLATE compressor**
+(fixed-Huffman + hash-chain LZ77): `ai.save_npz(path, arrays, compress=True)`
+mirrors `np.savez_compressed` and is verified against CPython's `zlib`.
 
 ```python
 bot.save("bot.npz", format="npz")   # numpy.load()-compatible checkpoint
@@ -153,17 +176,22 @@ recognize files by content, not extension:
 | `PK\x03\x04` + `data.pkl` entry | PyTorch state dict |
 | `PK\x03\x04` + `.npy` entries | NumPy npz checkpoint |
 | pickle PROTO + torch legacy magic | Legacy PyTorch checkpoint |
+| JSON with `weight_map` | Sharded HF checkpoint index |
 | safetensors binary header | HF safetensors (chatbot or classifier) |
 | `{` JSON | MMN JSON formats (`mmn-safetensors-v1`, …) |
 
 ## Performance notes
 
-- GGUF tensor dequantization fans out across `available_parallelism` threads.
+- GGUF tensor dequantization **and** PyTorch storage decoding fan out across
+  `available_parallelism` threads.
 - `gguf_info` / `load_gguf_tokenizer` parse the header only, growing the read
   buffer geometrically instead of loading the tensor data.
-- The CRC-32 table is computed once per process (`OnceLock`).
+- The CRC-32 table is computed once per process (`OnceLock`); IQ codebook
+  grids decode once into `OnceLock` caches.
 - Unigram Viterbi encoding indexes pieces in a hash map — O(n·window)
   lookups even for 32k+ piece GGUF vocabularies (was a linear vocab scan).
+- The DEFLATE compressor uses hash-chain LZ77 (32-deep chains, 32 KiB
+  window) with fixed-Huffman blocks; entries that don't shrink stay stored.
 
 ## Tensor ops (mmn-core)
 
