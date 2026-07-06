@@ -17,6 +17,7 @@ pub mod gguf_quant;
 pub mod gguf_quant_iq;
 pub mod gguf_quant_k_encode;
 pub mod hdf5;
+pub mod hdf5_write;
 pub mod inflate;
 pub mod npy;
 pub mod npz_chatbot;

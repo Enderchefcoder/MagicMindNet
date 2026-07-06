@@ -442,11 +442,38 @@ fn assemble_chunked(
         strides[i] = strides[i + 1] * dims[i + 1];
     }
     let chunk_numel: usize = chunk_shape.iter().product();
-    for chunk in &chunks {
+    // Decompress chunks in parallel (gzip inflation dominates load time).
+    let decode_one = |chunk: &ChunkRef| -> Result<Vec<u8>, MmnError> {
         let raw = bytes
             .get(chunk.addr..chunk.addr + chunk.size)
             .ok_or_else(|| err(format!("hdf5 dataset {name}: chunk out of bounds")))?;
-        let data = undo_filters(raw, filters, chunk.filter_mask, elem_size)?;
+        undo_filters(raw, filters, chunk.filter_mask, elem_size)
+    };
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(chunks.len().max(1));
+    let decoded: Vec<Vec<u8>> = if workers <= 1 || chunks.len() <= 1 {
+        chunks.iter().map(decode_one).collect::<Result<_, _>>()?
+    } else {
+        let chunk_size = chunks.len().div_ceil(workers);
+        let results: Vec<Result<Vec<Vec<u8>>, MmnError>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = chunks
+                .chunks(chunk_size)
+                .map(|group| scope.spawn(move || group.iter().map(decode_one).collect()))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("hdf5 chunk decode worker panicked"))
+                .collect()
+        });
+        let mut all = Vec::with_capacity(chunks.len());
+        for group in results {
+            all.extend(group?);
+        }
+        all
+    };
+    for (chunk, data) in chunks.iter().zip(decoded) {
         if data.len() < chunk_numel * elem_size {
             return Err(err(format!(
                 "hdf5 dataset {name}: chunk decoded to {} bytes, expected {}",
