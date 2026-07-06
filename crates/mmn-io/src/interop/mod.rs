@@ -23,6 +23,7 @@ pub mod npy;
 pub mod npz_chatbot;
 pub mod arrays_auto;
 pub mod blosc;
+pub mod blosclz;
 pub mod flax;
 pub mod ggml_legacy;
 pub mod lz4;

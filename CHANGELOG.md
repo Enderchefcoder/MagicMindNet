@@ -63,8 +63,18 @@
   compressor) decode completely — header flags, per-block starts, split
   byte-lane streams, byte shuffle, memcpy mode, LZ4 or zlib inner codecs —
   so default `Blosc(cname="lz4")` zarr stores read without any C library;
-  validated against numcodecs fixtures + live zarr-python stores;
-  blosclz/zstd/snappy/bit-shuffle rejected with codec-naming errors
+  validated against numcodecs fixtures + live zarr-python stores
+- **BloscLZ decoder** (numcodecs' own default codec): FastLZ-family token
+  stream with 255-run length extensions and far-distance escapes, verified
+  byte-for-byte against captured c-blosc output + live stores
+- **Bit-shuffle undo**: bitplane transpose (byte lane × bit × packed elements,
+  8·typesize-aligned region + raw tail) — `shuffle=Blosc.BITSHUFFLE` stores
+  read across lz4/blosclz/zlib inner codecs
+- **Zarr v3 reading**: `zarr.json` array/group nodes, regular chunk grids,
+  `c/`-prefixed chunk keys, `bytes` endian codec + `gzip` (RFC-1952 framing,
+  from-scratch CRC-checked) or `blosc` compressors, all v3 numeric data
+  types; live-validated including group trees; v3's zstd default rejected
+  with a codec-naming error
 
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp

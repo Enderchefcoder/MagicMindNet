@@ -22,6 +22,39 @@ const FLAG_BYTE_SHUFFLE: u8 = 0x1;
 const FLAG_MEMCPY: u8 = 0x2;
 const FLAG_BIT_SHUFFLE: u8 = 0x4;
 
+/// Undo the bitshuffle transform: input is grouped by byte lane then bit
+/// position (`T * 8` bitplanes of `n/8` bytes each, LSB-first within each
+/// packed byte); only the leading `n - n % (8 * T)`-element region is
+/// transformed, the remainder stays as-is.
+fn undo_bitshuffle(block: &[u8], typesize: usize) -> Vec<u8> {
+    let total = block.len();
+    if typesize == 0 || total == 0 {
+        return block.to_vec();
+    }
+    let transformed = total - total % (8 * typesize);
+    let mut out = vec![0u8; total];
+    if transformed > 0 {
+        let n = transformed / typesize; // elements in the transformed region
+        let packed = n / 8; // bytes per bitplane
+        for lane in 0..typesize {
+            for bit in 0..8 {
+                let plane_start = (lane * 8 + bit) * packed;
+                for byte_index in 0..packed {
+                    let packed_byte = block[plane_start + byte_index];
+                    for k in 0..8 {
+                        if packed_byte & (1 << k) != 0 {
+                            let element = byte_index * 8 + k;
+                            out[element * typesize + lane] |= 1 << bit;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out[transformed..].copy_from_slice(&block[transformed..]);
+    out
+}
+
 fn u32_at(bytes: &[u8], pos: usize) -> Result<u32, MmnError> {
     bytes
         .get(pos..pos + 4)
@@ -39,6 +72,7 @@ fn decode_stream(
         return Ok(src.to_vec());
     }
     match codec {
+        0 => super::blosclz::blosclz_decompress(src, expected),
         1 => lz4_decompress_block(src, expected), // lz4 / lz4hc
         3 => {
             let out = undo_deflate(src)?;
@@ -47,9 +81,6 @@ fn decode_stream(
             }
             Ok(out)
         }
-        0 => Err(err(
-            "blosc blosclz codec not supported (re-encode with cname='lz4' or 'zlib')",
-        )),
         2 => Err(err("blosc snappy codec not supported")),
         4 => Err(err(
             "blosc zstd codec not supported (re-encode with cname='lz4' or 'zlib')",
@@ -74,11 +105,6 @@ pub fn blosc_decompress(frame: &[u8]) -> Result<Vec<u8>, MmnError> {
             frame.len()
         )));
     }
-    if flags & FLAG_BIT_SHUFFLE != 0 {
-        return Err(err(
-            "blosc bit-shuffle is not supported (re-encode with shuffle=Blosc.SHUFFLE)",
-        ));
-    }
     if nbytes == 0 {
         return Ok(Vec::new());
     }
@@ -93,6 +119,7 @@ pub fn blosc_decompress(frame: &[u8]) -> Result<Vec<u8>, MmnError> {
     }
     let codec = (flags >> 5) & 0x7;
     let byte_shuffle = flags & FLAG_BYTE_SHUFFLE != 0 && typesize > 1;
+    let bit_shuffle = flags & FLAG_BIT_SHUFFLE != 0;
     let nblocks = nbytes.div_ceil(blocksize);
     // Decode one block assuming `nstreams` split streams.
     let decode_block = |bstart: usize, bsize: usize, nstreams: usize| -> Result<Vec<u8>, MmnError> {
@@ -124,7 +151,9 @@ pub fn blosc_decompress(frame: &[u8]) -> Result<Vec<u8>, MmnError> {
         } else {
             decode_block(bstart, bsize, 1)?
         };
-        if byte_shuffle {
+        if bit_shuffle {
+            block = undo_bitshuffle(&block, typesize.max(1));
+        } else if byte_shuffle {
             block = undo_shuffle(&block, typesize);
         }
         out.extend_from_slice(&block);
@@ -195,8 +224,35 @@ mod tests {
     fn truncated_and_unsupported_frames_error() {
         assert!(blosc_decompress(&[0u8; 8]).is_err());
         let mut frame = fixture("lz4_shuffle_f32.blosc");
-        frame[2] |= 0x4; // claim bit-shuffle
-        let e = blosc_decompress(&frame).err().unwrap();
-        assert!(e.message().contains("bit-shuffle"));
+        let len = frame.len();
+        frame.truncate(len - 10);
+        assert!(blosc_decompress(&frame).is_err());
+    }
+
+    #[test]
+    fn bitshuffle_undo_is_inverse_of_forward() {
+        // Forward bitshuffle per the bitshuffle library layout, then undo.
+        let typesize = 4usize;
+        let data: Vec<u8> = (0..64u8).collect(); // 16 elements of 4 bytes
+        let n = data.len() / typesize;
+        let packed = n / 8;
+        let mut shuffled = vec![0u8; data.len()];
+        for lane in 0..typesize {
+            for bit in 0..8 {
+                let plane_start = (lane * 8 + bit) * packed;
+                for element in 0..n {
+                    if data[element * typesize + lane] & (1 << bit) != 0 {
+                        shuffled[plane_start + element / 8] |= 1 << (element % 8);
+                    }
+                }
+            }
+        }
+        assert_eq!(undo_bitshuffle(&shuffled, typesize), data);
+        // Trailing remainder (not a multiple of 8*typesize) stays raw.
+        let mut with_tail = shuffled.clone();
+        with_tail.extend_from_slice(&[9, 8, 7]);
+        let out = undo_bitshuffle(&with_tail, typesize);
+        assert_eq!(&out[..64], &data[..]);
+        assert_eq!(&out[64..], &[9, 8, 7]);
     }
 }

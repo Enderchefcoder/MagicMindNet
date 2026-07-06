@@ -91,6 +91,63 @@ def test_zstd_compressed_store_rejected_clearly(tmp_path):
         ai.load_zarr(store)
 
 
+@pytest.mark.parametrize("cname", ["blosclz", "lz4"])
+@pytest.mark.parametrize("shuffle_name", ["SHUFFLE", "NOSHUFFLE", "BITSHUFFLE"])
+def test_blosclz_and_bitshuffle_stores_read(tmp_path, cname, shuffle_name):
+    from numcodecs import Blosc
+
+    store = str(tmp_path / f"b_{cname}_{shuffle_name}.zarr")
+    values = ((np.arange(30_000, dtype=np.float32) % 97) / 7.0)
+    z = zarr.create_array(
+        store=store, shape=values.shape, chunks=(8192,), dtype="<f4",
+        zarr_format=2,
+        compressors=Blosc(cname=cname, clevel=5, shuffle=getattr(Blosc, shuffle_name)),
+    )
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_zarr_v3_gzip_and_blosc_read(tmp_path):
+    from zarr.codecs import BloscCodec, GzipCodec
+
+    values = np.arange(24, dtype=np.float32).reshape(4, 6)
+    g_store = str(tmp_path / "v3_gzip.zarr")
+    z = zarr.create_array(store=g_store, shape=(4, 6), chunks=(2, 3),
+                          dtype="float32", compressors=[GzipCodec(level=5)])
+    z[:] = values
+    np.testing.assert_allclose(np.array(ai.load_zarr(g_store)[""], dtype=np.float32), values)
+    assert ai.detect_arrays_format(g_store) == "zarr"
+
+    b_store = str(tmp_path / "v3_blosc.zarr")
+    z2 = zarr.create_array(store=b_store, shape=(4, 6), chunks=(4, 6), dtype="float32",
+                           compressors=[BloscCodec(cname="lz4", clevel=5, shuffle="shuffle")])
+    z2[:] = values
+    np.testing.assert_allclose(np.array(ai.load_zarr(b_store)[""], dtype=np.float32), values)
+
+
+def test_zarr_v3_group_tree_reads(tmp_path):
+    from zarr.codecs import GzipCodec
+
+    store = str(tmp_path / "v3_group.zarr")
+    root = zarr.open_group(store, mode="w")
+    a = root.create_array("layer/kernel", shape=(2, 2), chunks=(2, 2),
+                          dtype="float32", compressors=[GzipCodec()])
+    a[:] = np.array([[1.5, -2.5], [0.25, 9.0]], dtype=np.float32)
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(
+        np.array(loaded["layer/kernel"], dtype=np.float32), [[1.5, -2.5], [0.25, 9.0]]
+    )
+
+
+def test_zarr_v3_zstd_rejected_clearly(tmp_path):
+    store = str(tmp_path / "v3_zstd.zarr")
+    z = zarr.create_array(store=store, shape=(4,), chunks=(4,), dtype="float32")
+    z[:] = np.ones(4, dtype=np.float32)
+    with pytest.raises((ValueError, RuntimeError), match="zstd"):
+        ai.load_zarr(store)
+
+
 def test_our_writer_opens_with_zarr_python(tmp_path):
     store = str(tmp_path / "ours.zarr")
     data = {"layer/kernel": [[1.0, -2.0], [3.5, 0.25]], "bias": [0.5, -0.5]}
@@ -126,16 +183,3 @@ def test_missing_chunks_use_fill_value(tmp_path):
     assert loaded[""] == [1.0, 2.0, 9.0, 9.0]
 
 
-def test_blosclz_codec_rejected_with_hint(tmp_path):
-    from numcodecs import Blosc
-
-    # blosclz (numcodecs' Blosc default cname) is the one blosc codec we
-    # don't decode; large repetitive chunks avoid memcpy mode.
-    store = str(tmp_path / "blosclz.zarr")
-    z = zarr.create_array(
-        store=store, shape=(10_000,), chunks=(10_000,), dtype="<f4",
-        zarr_format=2, compressors=Blosc(cname="blosclz", clevel=5, shuffle=Blosc.SHUFFLE),
-    )
-    z[:] = (np.arange(10_000, dtype=np.float32) % 97) / 7.0
-    with pytest.raises((ValueError, RuntimeError), match="blosclz"):
-        ai.load_zarr(store)
