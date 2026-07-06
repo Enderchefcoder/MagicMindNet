@@ -36,7 +36,7 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
 | IO | **`load`** (universal), `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
-| Array IO | `save_npy`, `load_npy`, `save_npz`, `load_npz`, `save_pt`, `load_pt`, `load_h5`, `load_keras` (NumPy/PyTorch/TF interchange, no numpy/torch/h5py needed) |
+| Array IO | `save_npy`, `load_npy`, `save_npz`, `load_npz`, `save_pt`, `load_pt`, `load_h5`, `load_keras`, `load_tf_checkpoint` (NumPy/PyTorch/TF interchange, no numpy/torch/h5py/tensorflow needed) |
 | GGUF tools | `gguf_info`, `load_gguf_tokenizer`, `load_gguf_bpe_tokenizer` |
 | Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
@@ -335,6 +335,7 @@ raise `ValueError` naming the actual family when handed the wrong file.
 | `export(bot, "bin", path)` | `mmn-bin-v1` | Architecture meta only |
 | `export(bot, "gguf", path)` | GGUF v3 (F32) | From-scratch container; llama.cpp tensor names; `unigram_encoder=` embeds the vocab |
 | `export(bot, "gguf-f16" \| "gguf-q8_0" \| "gguf-q4_0", path)` | GGUF v3 | Half-precision / block-quantized weights |
+| `export(bot, "gguf-q4_k" \| "gguf-q5_k" \| "gguf-q6_k", path)` | GGUF v3 | From-scratch k-quant encoders (row-wise; narrow tensors stay F32) |
 | `export(bot, "npz", path)` | NumPy `.npz` | `numpy.load`-compatible; `meta.json` entry |
 | `export(bot, "pt", path)` | PyTorch state dict | `torch.load`-compatible; `_mmn_meta` entry |
 | `import_model("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary; strict tensor validation |
@@ -386,6 +387,7 @@ tensors = ai.load_pt("state.pt")               # zip + legacy pre-1.6 formats
 
 weights = ai.load_h5("model.weights.h5")       # HDF5 without h5py
 weights = ai.load_keras("model.keras")         # Keras v3 archive
+arrays = ai.load_tf_checkpoint("ckpt")         # TF checkpoint v2, no TF needed
 
 info = ai.gguf_info("model.gguf")              # header-only inspection
 tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab

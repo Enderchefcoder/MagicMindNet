@@ -9,13 +9,15 @@ numpy/torch/h5py dependency.
 | --- | --- | --- | --- | --- |
 | MMN JSON safetensors | `.mmn` | ✅ | ✅ | `mmn-safetensors-v1` wrapper |
 | HF binary safetensors | `.safetensors` | ✅ | ✅ | `safetensors` container |
-| GGUF (llama.cpp ecosystem) | `.gguf` | ✅ | ✅ (F32/F16/Q8_0/Q4_0) | from-scratch container + dequant |
+| GGUF (llama.cpp ecosystem) | `.gguf` | ✅ | ✅ (F32/F16/Q8_0/Q4_0/**Q4_K/Q5_K/Q6_K**) | from-scratch container + codecs |
 | PyTorch state dict (zip, ≥1.6) | `.pt` / `.pth` | ✅ | ✅ | from-scratch ZIP + pickle VM |
 | PyTorch legacy (pre-1.6) | `.pt` / `.pth` | ✅ | — | pickle-stream + raw storages |
-| NumPy archive | `.npz` | ✅ | ✅ | from-scratch ZIP + NPY codec |
+| Sharded HF checkpoint | `*.index.json` | ✅ | — | weight_map + shard readers |
+| NumPy archive | `.npz` | ✅ | ✅ (stored or deflate) | from-scratch ZIP + NPY codec |
 | NumPy array | `.npy` | ✅ | ✅ | from-scratch NPY codec |
 | HDF5 / Keras weights | `.h5` / `.weights.h5` | ✅ | — | from-scratch HDF5 reader |
 | Keras v3 archive | `.keras` | ✅ | — | ZIP + HDF5 reader |
+| TensorFlow checkpoint v2 | `.index` + `.data-…` | ✅ | — | from-scratch LevelDB table + protobuf |
 | Architecture stub | `.bin` | ✅ | ✅ | `mmn-bin-v1` JSON |
 
 `ai.load(path)` detects checkpoint formats automatically by magic bytes and
@@ -93,8 +95,19 @@ scratch bytes↔unicode table, ranked merges, approximate GPT-2
 pretokenization; ids follow the vocabulary order). `Gpt2BpeEncoder.from_vocab`
 also accepts HF-style token lists + merge rules directly.
 
+### K-quant encoding
+
+The writer also **encodes k-quants** — `format="gguf-q4_k"` / `"gguf-q5_k"` /
+`"gguf-q6_k"` — via from-scratch ports of ggml's reference quantization
+searches (`make_qx_quants` iscale refinement, `make_qkx2_quants` joint
+scale+min least squares, round-half-to-even `nearest_int`). The reference
+llama.cpp Python package cannot encode k-quants at all; ours produces blocks
+it decodes identically, with Q6_K reconstruction under 2% relative RMSE.
+Per the ggml spec, quantization is **row-wise**: tensors whose fastest
+dimension is not a block multiple stay F32 automatically.
+
 Limitations: vision chatbots cannot be exported to GGUF (use safetensors or
-npz); the writer emits F32/F16/Q8_0/Q4_0 tensors.
+npz).
 
 ## PyTorch `.pt` — no torch required
 
@@ -140,6 +153,30 @@ weights = ai.load_h5("model.weights.h5")   # {"dense/kernel": [[...]], ...}
 weights = ai.load_keras("model.keras")     # Keras v3 zip archive
 ```
 
+**Validated against real TensorFlow output**: committed fixtures under
+`tests/fixtures/tf/` were written by TensorFlow 2.21 Keras (`model.save` and
+`save_weights`), and live tests (skipped unless `tensorflow` is installed)
+compare our reader against `model.get_weights()` exactly.
+
+## TensorFlow checkpoint v2 — `.index` + `.data` without TensorFlow
+
+`tf.train.Checkpoint` bundles are a LevelDB-style SSTable index
+(prefix-compressed key blocks, varint block handles, masked-CRC32C trailers)
+whose values are `BundleEntryProto` protobuf messages pointing into raw data
+shards. MagicMindNet parses all of it from scratch — including a from-scratch
+CRC-32C (Castagnoli) with TensorFlow's masking — and verifies per-tensor
+checksums:
+
+```python
+arrays = ai.load_tf_checkpoint("ckpt")        # or "ckpt.index"
+# {"w": [[...]], "b": [...]}  (/.ATTRIBUTES/VARIABLE_VALUE stripped)
+```
+
+All numeric `DataType`s decode to f32 (float/double/half/bfloat16, all int
+widths, bool); the object-graph metadata entry is skipped. Fixtures written
+by real TensorFlow are committed, and live tests compare against
+`tf.train.load_checkpoint` bit-for-bit.
+
 ## NumPy `.npy` / `.npz` — also a TensorFlow bridge
 
 The NPY codec handles format 1.0/2.0 headers, every common dtype
@@ -182,8 +219,8 @@ recognize files by content, not extension:
 
 ## Performance notes
 
-- GGUF tensor dequantization **and** PyTorch storage decoding fan out across
-  `available_parallelism` threads.
+- GGUF tensor dequantization, PyTorch storage decoding, **and ZIP entry
+  inflation** fan out across `available_parallelism` threads.
 - `gguf_info` / `load_gguf_tokenizer` parse the header only, growing the read
   buffer geometrically instead of loading the tensor data.
 - The CRC-32 table is computed once per process (`OnceLock`); IQ codebook

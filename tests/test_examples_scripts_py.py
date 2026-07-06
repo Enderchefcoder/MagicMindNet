@@ -87,6 +87,13 @@ def test_global_formats_roundtrip_example_runs(run_example):
     assert "from-scratch HDF5 parser" in proc.stdout
 
 
+def test_interop_benchmark_example_runs(run_example):
+    proc = run_example("interop_benchmark.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "interop benchmark ok" in proc.stdout
+    assert "gguf-q4_k" in proc.stdout
+
+
 def test_learned_pos_embed_roundtrip_example_runs(run_example):
     proc = run_example("learned_pos_embed_roundtrip.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

@@ -2,6 +2,31 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 4: k-quant encoders, TF checkpoint v2, real-TF validation)
+- **K-quant encoders** (`gguf-q4_k` / `gguf-q5_k` / `gguf-q6_k` exports): from-scratch
+  ports of ggml's reference quantization searches (`make_qx_quants` iscale
+  refinement, `make_qkx2_quants` joint scale+min least squares, round-half-to-even
+  `nearest_int`) — the reference llama.cpp Python package cannot encode k-quants at
+  all. Our blocks decode identically in gguf-py; Q6_K reconstruction < 2% relative
+  RMSE. Export now follows ggml's **row-wise quantization rule** (fastest dimension
+  must be a block multiple, else F32 fallback)
+- **TensorFlow checkpoint v2 reader** (`ai.load_tf_checkpoint("ckpt")`): from-scratch
+  LevelDB-table parsing (prefix-compressed blocks, varint handles, masked-CRC32C
+  trailers via a from-scratch CRC-32C/Castagnoli), minimal protobuf walk of
+  `BundleHeaderProto`/`BundleEntryProto`/`TensorShapeProto`, multi-shard data files,
+  per-tensor checksum verification, all numeric DataTypes → f32
+- **Real-TensorFlow validation**: committed fixtures written by TF 2.21
+  (`tests/fixtures/tf/`: `.keras`, `.weights.h5`, checkpoint index+data) exercise the
+  HDF5 and TF-checkpoint readers in CI without TensorFlow; live tests (importorskip)
+  compare against `model.get_weights()` / `tf.train.load_checkpoint` exactly
+- **Parallel ZIP inflation**: `read_zip` decompresses entries across cores
+  (compressed npz / pt archives)
+- `examples/interop_benchmark.py`: save/load timing + file sizes across all formats
+  (safetensors 5.1 MiB → Q4_K 0.7 MiB on the demo model); wired into smoke + pytest
+- Tests: +7 Rust (k-encode roundtrips/quality ordering, TF fixture, CRC corruption,
+  narrow-row F32 fallback) and +11 pytest (`test_interop_wave4_py`: k-quant
+  reference-decode identity + quality bounds, TF fixtures, live TF/Keras equality)
+
 ### Added (interop wave 3: complete GGML quant matrix, BPE vocabs, sharded HF, deflate)
 - **The IQ codebook-grid family, complete**: IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S,
   IQ3_XXS, IQ3_S dequantize from scratch — QuIP#-style lattice codebooks ship as

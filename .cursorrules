@@ -27,6 +27,9 @@
 - The official `gguf` pip package (gguf-py) has numpy dequant traits for all 24 GGML types incl. IQ grids (stored as 2-/4-bit-packed grid_hex) — ideal cross-validation oracle; its quantize only covers classic quants + TQ/MXFP4 (k-quants raise NotImplementedError).
 - IQ block sizes: IQ2_XXS=66, IQ2_XS=74, IQ2_S=82, IQ3_XXS=98, IQ3_S=110, IQ1_S=50, IQ1_M=56 (d packed in scale nibbles), NVFP4=(64,36) with unsigned-E4M3 scales; ksigns is generatable (7 bits + parity bit).
 - DEFLATE compressor gotcha: save the old hash head BEFORE overwriting for prev-chain links, or matches self-reference and the chain breaks.
+- ggml quantization is ROW-wise: ne[0] (fastest dim) must be a block-size multiple; gguf-py raises on total-count-only alignment. ggml nearest_int = round-half-to-even (`f32::round_ties_even`).
+- TF checkpoint v2 .index = LevelDB table (no compression by default): 48-byte footer (2 varint handles + magic 0xdb4775248b80fb57 LE), block trailer = type byte + masked crc32c(block+type); mask = rotate_right(15) + 0xa282ead8; values = BundleEntryProto (dtype f1, shape f2, shard f3, offset f4, size f5, crc32c fixed32 f6).
+- tensorflow-cpu installs fine in this VM (~600MB) for local validation; keep it OUT of dev extras — commit real-TF fixtures instead and importorskip live tests.
 
 # Scratchpad
 
@@ -223,6 +226,14 @@
 [X] Sharded HF: import_sharded(*.index.json), ChatbotSharded detect, st+pt shards mix
 [X] From-scratch DEFLATE compressor (fixed-Huffman + hash-chain LZ77) -> save_npz(compress=True), zlib-verified
 [X] Parallel torch storage decode; 451 Rust / 839 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 4 — k-quant encoders, TF checkpoint v2, real-TF validation, perf
+[X] Q4_K/Q5_K/Q6_K encoders (make_qx_quants / make_qkx2_quants ports, round_ties_even nearest_int); gguf-py decodes our blocks identically; Q6_K < 2% rel RMSE
+[X] Row-wise quant rule: fastest dim must be block multiple (gguf-py rejected total-count-based quantization) — narrow tensors fall back F32
+[X] TF checkpoint v2 reader from scratch: LevelDB table (prefix blocks, varint handles, masked CRC-32C), BundleEntryProto protobuf, multi-shard, checksum verify -> ai.load_tf_checkpoint
+[X] Real-TF validation: fixtures tests/fixtures/tf/ (TF 2.21 keras + ckpt) in CI; live importorskip tests match get_weights / load_checkpoint exactly (tensorflow-cpu NOT in dev extras)
+[X] Parallel zip entry inflation; examples/interop_benchmark.py (Q4_K = 7x smaller than F32)
+[X] 464 Rust / 852 pytest; clippy 0; smoke OK
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses

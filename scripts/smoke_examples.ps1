@@ -19,6 +19,9 @@ Write-Host "== examples/checkpoint_roundtrip =="
 Write-Host "== examples/global_formats_roundtrip =="
 & $PY examples/global_formats_roundtrip.py
 
+Write-Host "== examples/interop_benchmark =="
+& $PY examples/interop_benchmark.py
+
 Write-Host "== examples/hf_safetensors_roundtrip =="
 & $PY examples/hf_safetensors_roundtrip.py
 
