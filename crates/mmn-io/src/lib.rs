@@ -41,6 +41,11 @@ pub use interop::arrays_auto::{
     detect_array_format, read_arrays_auto, read_gguf_arrays, read_gguf_arrays_bytes,
     write_gguf_arrays, ArrayFormat,
 };
+pub use interop::ggml_legacy::{
+    is_ggml_legacy_bytes, read_ggml_legacy, read_ggml_legacy_bytes, LegacyGgmlContainer,
+    LegacyGgmlFile,
+};
+pub use interop::tflite::{is_tflite_bytes, read_tflite_arrays, read_tflite_arrays_bytes};
 pub use interop::flax::{
     read_flax_arrays, read_flax_arrays_bytes, write_flax_arrays, write_flax_arrays_bytes,
 };

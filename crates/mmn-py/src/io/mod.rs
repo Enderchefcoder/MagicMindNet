@@ -516,6 +516,28 @@ pub fn read_arrays_auto(path: &str) -> PyResult<(String, Vec<NamedArray>)> {
     Ok((format.as_str().to_string(), arrays))
 }
 
+/// Read every weight tensor in a TFLite flatbuffer model.
+#[pyfunction]
+pub fn read_tflite(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_tflite_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read a legacy GGML/GGMF/GGJT file; returns
+/// `(container_name, hparams, vocab_tokens, arrays)`.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn read_ggml_legacy(
+    path: &str,
+) -> PyResult<(String, Vec<i32>, Vec<(Vec<u8>, f32)>, Vec<NamedArray>)> {
+    let file = mmn_io::read_ggml_legacy(path).map_err(mmn_err_to_py)?;
+    Ok((
+        file.container.as_str().to_string(),
+        file.hparams.to_vec(),
+        file.vocab,
+        file.arrays,
+    ))
+}
+
 /// Write named f32 arrays as a Flax msgpack pytree.
 #[pyfunction]
 pub fn write_flax(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {

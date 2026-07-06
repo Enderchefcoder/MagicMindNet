@@ -150,6 +150,8 @@ impl GgufFile {
 struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// GGUF v1 stored counts/lengths as u32; v2+ widened them to u64.
+    wide_counts: bool,
 }
 
 impl<'a> Reader<'a> {
@@ -176,8 +178,17 @@ impl<'a> Reader<'a> {
         ]))
     }
 
+    /// Version-dependent count: u64 for v2+, u32 for v1.
+    fn count(&mut self) -> Result<u64, MmnError> {
+        if self.wide_counts {
+            self.u64()
+        } else {
+            Ok(self.u32()? as u64)
+        }
+    }
+
     fn string(&mut self) -> Result<String, MmnError> {
-        let len = self.u64()? as usize;
+        let len = self.count()? as usize;
         if len > self.bytes.len() {
             return Err(err("GGUF file truncated (string length exceeds buffer)"));
         }
@@ -207,7 +218,7 @@ impl<'a> Reader<'a> {
             8 => GgufValue::String(self.string()?),
             9 => {
                 let elem_type = self.u32()?;
-                let count = self.u64()? as usize;
+                let count = self.count()? as usize;
                 if count > self.bytes.len() {
                     return Err(err("GGUF file truncated (array count exceeds buffer)"));
                 }
@@ -239,15 +250,20 @@ pub fn parse_gguf_header(bytes: &[u8]) -> Result<GgufHeader, MmnError> {
     if bytes.len() < 4 || &bytes[..4] != GGUF_MAGIC {
         return Err(err("not a GGUF file (missing GGUF magic)"));
     }
-    let mut r = Reader { bytes, pos: 4 };
+    let mut r = Reader {
+        bytes,
+        pos: 4,
+        wide_counts: true,
+    };
     let version = r.u32()?;
-    if !(2..=3).contains(&version) {
+    if !(1..=3).contains(&version) {
         return Err(err(format!(
-            "GGUF version {version} not supported (versions 2 and 3 are)"
+            "GGUF version {version} not supported (versions 1-3 are)"
         )));
     }
-    let tensor_count = r.u64()? as usize;
-    let kv_count = r.u64()? as usize;
+    r.wide_counts = version >= 2;
+    let tensor_count = r.count()? as usize;
+    let kv_count = r.count()? as usize;
     if tensor_count > 1 << 24 || kv_count > 1 << 24 {
         return Err(err("GGUF header counts unreasonably large"));
     }
@@ -273,7 +289,8 @@ pub fn parse_gguf_header(bytes: &[u8]) -> Result<GgufHeader, MmnError> {
         }
         let mut dims = Vec::with_capacity(n_dims);
         for _ in 0..n_dims {
-            dims.push(r.u64()?);
+            // v1 stored dims as u32.
+            dims.push(r.count()?);
         }
         let type_id = r.u32()?;
         let ggml_type = GgmlType::from_id(type_id)?;
@@ -697,6 +714,64 @@ mod tests {
         bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
         let file = read_gguf(&bytes).unwrap();
         assert_eq!(file.version, 2);
+    }
+
+    /// GGUF v1 ("oldest" GGUF): counts, string lengths, array counts, and
+    /// tensor dims are u32 instead of u64. Hand-built per the v1 spec.
+    #[test]
+    fn reads_version_1_file() {
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(GGUF_MAGIC);
+        b.extend_from_slice(&1u32.to_le_bytes()); // version
+        b.extend_from_slice(&1u32.to_le_bytes()); // tensor count (u32!)
+        b.extend_from_slice(&2u32.to_le_bytes()); // kv count (u32!)
+        let write_str_v1 = |b: &mut Vec<u8>, s: &str| {
+            b.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            b.extend_from_slice(s.as_bytes());
+        };
+        // kv 1: general.name = "old" (string, type 8).
+        write_str_v1(&mut b, "general.name");
+        b.extend_from_slice(&8u32.to_le_bytes());
+        write_str_v1(&mut b, "old");
+        // kv 2: tokenizer.ggml.tokens = ["a", "b"] (array type 9, u32 count).
+        write_str_v1(&mut b, "tokenizer.ggml.tokens");
+        b.extend_from_slice(&9u32.to_le_bytes());
+        b.extend_from_slice(&8u32.to_le_bytes()); // element type: string
+        b.extend_from_slice(&2u32.to_le_bytes()); // count (u32!)
+        write_str_v1(&mut b, "a");
+        write_str_v1(&mut b, "b");
+        // tensor info: name, n_dims(u32), dims(u32 each!), type, offset(u64).
+        write_str_v1(&mut b, "w");
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes()); // ne[0]
+        b.extend_from_slice(&3u32.to_le_bytes()); // ne[1]
+        b.extend_from_slice(&GgmlType::F32.type_id().to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        // data section aligned to 32.
+        let data_start = b.len().div_ceil(32) * 32;
+        b.resize(data_start, 0);
+        for v in [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        let file = read_gguf(&b).unwrap();
+        assert_eq!(file.version, 1);
+        assert_eq!(
+            file.metadata.get("general.name").and_then(|v| v.as_str()),
+            Some("old")
+        );
+        let info = file.find_tensor("w").unwrap();
+        let (shape, values) = file.tensor_f32(info).unwrap();
+        assert_eq!(shape, vec![3, 2]); // row-major: reversed ne
+        assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn version_0_and_4_rejected() {
+        let mut bytes = sample_file();
+        bytes[4..8].copy_from_slice(&0u32.to_le_bytes());
+        assert!(read_gguf(&bytes).err().unwrap().message().contains("version"));
+        bytes[4..8].copy_from_slice(&4u32.to_le_bytes());
+        assert!(read_gguf(&bytes).err().unwrap().message().contains("version"));
     }
 
     /// Segmented parallel encoding must be byte-identical to encoding the

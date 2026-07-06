@@ -32,6 +32,7 @@ __all__ = [
     "gguf_info",
     "load_arrays",
     "load_flax",
+    "load_ggml_legacy",
     "load_gguf_arrays",
     "load_gguf_bpe_tokenizer",
     "load_gguf_tokenizer",
@@ -43,6 +44,7 @@ __all__ = [
     "load_pt",
     "load_safetensors",
     "load_tf_checkpoint",
+    "load_tflite",
     "save_arrays",
     "save_flax",
     "save_gguf_arrays",
@@ -252,6 +254,35 @@ def load_tf_checkpoint(path):
     """
     return {
         name: _nest(shape, flat) for name, shape, flat in _native.read_tf_checkpoint(path)
+    }
+
+
+def load_tflite(path):
+    """Read every weight in a ``.tflite`` model into ``{name: nested lists}``.
+
+    From-scratch flatbuffer parsing — no TensorFlow install needed. INT8/
+    UINT8/INT32 tensors with quantization parameters dequantize to
+    ``scale * (q - zero_point)`` (per-tensor or per-channel); float16,
+    bfloat16, and all int widths decode to floats. Activation tensors
+    (empty buffers) are skipped.
+    """
+    return {name: _nest(shape, flat) for name, shape, flat in _native.read_tflite(path)}
+
+
+def load_ggml_legacy(path):
+    """Read a legacy pre-GGUF llama.cpp file (GGML/GGMF/GGJT v1-v3).
+
+    Returns ``{"container": ..., "hparams": {...}, "vocab": [(bytes, score)],
+    "tensors": {name: nested lists}}``. Original f32-scale Q4_0/Q4_1 block
+    layouts (pre-GGJT-v2) and the modern layouts (GGJT v2/v3) both decode.
+    """
+    container, hparams, vocab, arrays = _native.read_ggml_legacy(path)
+    names = ["n_vocab", "n_embd", "n_mult", "n_head", "n_layer", "n_rot", "ftype"]
+    return {
+        "container": container,
+        "hparams": dict(zip(names, hparams)),
+        "vocab": [(bytes(token), score) for token, score in vocab],
+        "tensors": {name: _nest(shape, flat) for name, shape, flat in arrays},
     }
 
 

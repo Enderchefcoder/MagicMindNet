@@ -6,9 +6,11 @@
 //! weights file, whatever ecosystem produced it.
 
 use super::gguf::{is_gguf_bytes, read_gguf, write_gguf, GgufWriteTensor};
+use super::ggml_legacy::{is_ggml_legacy_bytes, read_ggml_legacy_bytes};
 use super::gguf_quant::GgmlType;
 use super::hdf5::{is_hdf5_bytes, read_h5_arrays_bytes};
 use super::npy::{decode_npy, is_npy_bytes};
+use super::tflite::{is_tflite_bytes, read_tflite_arrays_bytes};
 use super::zip::{is_zip_bytes, zip_entry_names};
 use super::NamedArray;
 use crate::checkpoint_util::write_file_create_parents;
@@ -57,6 +59,7 @@ pub fn write_gguf_arrays(path: &str, arrays: &[NamedArray]) -> Result<(), MmnErr
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayFormat {
     Gguf,
+    GgmlLegacy,
     TorchZip,
     Npz,
     KerasZip,
@@ -67,12 +70,14 @@ pub enum ArrayFormat {
     FlaxMsgpack,
     Onnx,
     TfCheckpoint,
+    Tflite,
 }
 
 impl ArrayFormat {
     pub fn as_str(&self) -> &'static str {
         match self {
             ArrayFormat::Gguf => "gguf",
+            ArrayFormat::GgmlLegacy => "ggml-legacy",
             ArrayFormat::TorchZip => "pt",
             ArrayFormat::Npz => "npz",
             ArrayFormat::KerasZip => "keras",
@@ -83,6 +88,7 @@ impl ArrayFormat {
             ArrayFormat::FlaxMsgpack => "flax",
             ArrayFormat::Onnx => "onnx",
             ArrayFormat::TfCheckpoint => "tf-checkpoint",
+            ArrayFormat::Tflite => "tflite",
         }
     }
 }
@@ -123,9 +129,18 @@ pub fn detect_array_format(path: &str, bytes: &[u8]) -> Result<ArrayFormat, MmnE
     if is_gguf_bytes(bytes) {
         return Ok(ArrayFormat::Gguf);
     }
+    if is_ggml_legacy_bytes(bytes) {
+        return Ok(ArrayFormat::GgmlLegacy);
+    }
+    if is_tflite_bytes(bytes) {
+        return Ok(ArrayFormat::Tflite);
+    }
     if is_zip_bytes(bytes) {
         let names = zip_entry_names(bytes)?;
-        if names.iter().any(|n| n.ends_with("data.pkl")) {
+        if names
+            .iter()
+            .any(|n| n.ends_with("data.pkl") || n.ends_with("constants.pkl"))
+        {
             return Ok(ArrayFormat::TorchZip);
         }
         if names.iter().any(|n| n.ends_with(".h5")) {
@@ -161,7 +176,7 @@ pub fn detect_array_format(path: &str, bytes: &[u8]) -> Result<ArrayFormat, MmnE
         return Ok(ArrayFormat::Onnx);
     }
     Err(err(format!(
-        "{path}: unrecognized tensor container (tried GGUF, zip/pt/npz/keras, npy, HDF5, safetensors, legacy torch, Flax msgpack, ONNX)"
+        "{path}: unrecognized tensor container (tried GGUF, legacy ggml/ggjt, TFLite, zip/pt/npz/keras, npy, HDF5, safetensors, legacy torch, Flax msgpack, ONNX)"
     )))
 }
 
@@ -181,6 +196,8 @@ pub fn read_arrays_auto(path: &str) -> Result<(ArrayFormat, Vec<NamedArray>), Mm
     let format = detect_array_format(path, &bytes)?;
     let arrays = match format {
         ArrayFormat::Gguf => read_gguf_arrays_bytes(&bytes)?,
+        ArrayFormat::GgmlLegacy => read_ggml_legacy_bytes(&bytes)?.arrays,
+        ArrayFormat::Tflite => read_tflite_arrays_bytes(&bytes)?,
         ArrayFormat::TorchZip | ArrayFormat::LegacyTorch => {
             super::torch_pt::read_torch_arrays_bytes(&bytes)?.0
         }

@@ -284,6 +284,36 @@ TensorFlow/Keras interchange also goes through `np.savez` on
 Anything exposing `.tolist()` (numpy arrays, torch tensors) is accepted by
 `save_npy` / `save_npz` / `save_pt` directly.
 
+## TFLite — flatbuffers without TensorFlow
+
+A from-scratch flatbuffer walker (root/vtable/table/vector/string wire
+format) parses the TFLite `Model` schema: subgraph tensors, buffer payloads
+(inline vectors and the TF ≥ 2.13 out-of-band `offset`/`size` placement for
+big models), and quantization parameters. INT8/UINT8/INT32 weights
+dequantize to `scale * (q - zero_point)`, per-tensor or per-channel:
+
+```python
+weights = ai.load_tflite("model.tflite")   # {name: nested lists}
+```
+
+Validated against models converted live by the installed TensorFlow
+(float and dynamic-range int8), plus a committed converter-written fixture
+(`tests/fixtures/simple.tflite`) for dependency-free Rust tests.
+
+## Legacy GGML / GGMF / GGJT — the oldest llama.cpp files
+
+Pre-GGUF containers (March-July 2023) read completely: magic + version,
+llama hparams, scored vocab (unversioned GGML has no scores), and tensors —
+including the **original f32-scale Q4_0/Q4_1 block layouts with
+consecutive-pair nibble packing** that GGJT v2 later replaced, and GGJT
+v2/v3's modern blocks (shared with GGUF). GGUF **v1** (u32 counts) also
+reads alongside v2/v3:
+
+```python
+old = ai.load_ggml_legacy("model.ggjt")
+old["container"], old["hparams"], old["vocab"], old["tensors"]
+```
+
 ## Universal array IO
 
 Beyond the per-format helpers, one pair of calls covers everything:
@@ -294,12 +324,14 @@ ai.save_arrays("out.safetensors", arrays)   # writer picked from the extension
 ai.detect_arrays_format("anything.bin")     # "gguf" / "pt" / "npz" / ...
 ```
 
-`load_arrays` recognizes GGUF (any quantization — everything dequantizes to
-f32, also exposed as `ai.load_gguf_arrays` / `ai.save_gguf_arrays`), PyTorch
-zip + legacy `.pt`, `.npy`/`.npz`, HDF5/Keras, safetensors, Flax msgpack,
-ONNX, and TF checkpoint v2 prefixes. `save_arrays` infers from `.npz`,
-`.pt`/`.pth`, `.h5`/`.hdf5`, `.onnx`, `.safetensors`, `.msgpack`, `.gguf`,
-or an explicit `format=` (including `"tf-checkpoint"`).
+`load_arrays` recognizes GGUF v1-v3 (any quantization — everything
+dequantizes to f32, also exposed as `ai.load_gguf_arrays` /
+`ai.save_gguf_arrays`), legacy GGML/GGMF/GGJT, TFLite, PyTorch zip + legacy
+`.pt` + TorchScript archives (`constants.pkl`), `.npy`/`.npz`, HDF5/Keras,
+safetensors, Flax msgpack, ONNX, and TF checkpoint v2 prefixes.
+`save_arrays` infers from `.npz`, `.pt`/`.pth`, `.h5`/`.hdf5`, `.onnx`,
+`.safetensors`, `.msgpack`, `.gguf`, or an explicit `format=` (including
+`"tf-checkpoint"`).
 
 ## Universal detection
 

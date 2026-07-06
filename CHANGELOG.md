@@ -2,6 +2,23 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
+- **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp
+  containers, including the original f32-scale Q4_0/Q4_1 block layouts with
+  consecutive-pair nibble packing (pre-GGJT-v2) and the modern layouts (GGJT v2/v3);
+  hparams + scored vocab exposed
+- **GGUF v1 read support**: the oldest GGUF revision (u32 counts, lengths, dims)
+  parses alongside v2/v3 in `read_gguf`, `gguf_info`, and `load_gguf_arrays`
+- **TFLite reader** (`ai.load_tflite`): from-scratch flatbuffer wire-format walker
+  over the Model schema — subgraph tensors, inline + out-of-band (TF ≥ 2.13)
+  buffers, INT8/UINT8/INT32 quantization dequantized per-tensor or per-channel,
+  f16/bf16/all-int decode; validated against live TensorFlow conversions (float +
+  dynamic-range int8) and a committed converter fixture
+- **TorchScript archives**: `torch.jit.save` zips (`constants.pkl` tuple + shared
+  `data/` storages) read through the existing pickle VM as `constants.N` arrays
+- `ai.load_arrays` / `detect_arrays_format` detect all of the above by content
+- Tests: +14 Rust and +9 pytest (`test_interop_tflite_ggml_legacy_py`)
+
 ### Added (interop wave 9: default-format fast path, block-parallel GGUF writes, safetensors arrays, Flax)
 - **5–6x faster default checkpoint format**: the `mmn-safetensors-v1` /
   `mmn-classifier-v1` / `mmn-diffusion-v1` JSON paths moved from `serde_json::Value`

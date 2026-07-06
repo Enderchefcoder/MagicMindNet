@@ -22,7 +22,8 @@ use io::{
     import_classifier_model, import_diffusion_model, import_model, load_checkpoint,
     load_gguf_bpe_tokenizer, load_gguf_tokenizer, merge, merge_classifier,
     merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
-    read_arrays_auto, read_flax, read_gguf_arrays, read_h5, read_keras, read_npy, read_npz,
+    read_arrays_auto, read_flax, read_gguf_arrays, read_ggml_legacy, read_h5, read_keras,
+    read_npy, read_npz, read_tflite,
     read_onnx, read_pt, read_safetensors,
     read_tf_checkpoint, write_h5,
     write_flax, write_gguf_arrays, write_npy, write_npz, write_onnx, write_pt, write_safetensors,
@@ -90,6 +91,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_gguf_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(write_gguf_arrays, m)?)?;
     m.add_function(wrap_pyfunction!(read_arrays_auto, m)?)?;
+    m.add_function(wrap_pyfunction!(read_tflite, m)?)?;
+    m.add_function(wrap_pyfunction!(read_ggml_legacy, m)?)?;
     m.add_function(wrap_pyfunction!(write_flax, m)?)?;
     m.add_function(wrap_pyfunction!(write_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(write_onnx, m)?)?;

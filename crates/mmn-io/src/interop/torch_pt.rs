@@ -224,18 +224,22 @@ fn gather_strided(
 }
 
 fn find_pickle_entry(entries: &[ZipEntry]) -> Result<(&ZipEntry, String), MmnError> {
-    for entry in entries {
-        if entry.name == "data.pkl" {
-            return Ok((entry, String::new()));
-        }
-        if let Some(prefix) = entry.name.strip_suffix("data.pkl") {
-            if prefix.ends_with('/') {
-                return Ok((entry, prefix.to_string()));
+    // Eager checkpoints use data.pkl; TorchScript (torch.jit.save) archives
+    // store their tensors in constants.pkl with the same data/ storage dir.
+    for pickle_name in ["data.pkl", "constants.pkl"] {
+        for entry in entries {
+            if entry.name == pickle_name {
+                return Ok((entry, String::new()));
+            }
+            if let Some(prefix) = entry.name.strip_suffix(pickle_name) {
+                if prefix.ends_with('/') {
+                    return Ok((entry, prefix.to_string()));
+                }
             }
         }
     }
     Err(err(
-        "not a torch checkpoint: archive has no data.pkl entry",
+        "not a torch checkpoint: archive has no data.pkl or constants.pkl entry",
     ))
 }
 
@@ -435,10 +439,23 @@ pub fn read_torch_arrays_bytes(
     let entries = read_zip(bytes)?;
     let (pickle_entry, prefix) = find_pickle_entry(&entries)?;
     let root = parse_pickle(&pickle_entry.data)?;
-    let PickleValue::Dict(pairs) = root else {
-        return Err(err(
-            "torch checkpoint does not contain a state dict (torch.save(model.state_dict(), path))",
-        ));
+    let (stubs, meta) = match root {
+        PickleValue::Dict(pairs) => stubs_from_state_dict(&pairs)?,
+        // TorchScript constants.pkl holds a tuple/list of tensors.
+        PickleValue::Tuple(items) | PickleValue::List(items) => {
+            let mut stubs = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                if let Some(stub) = tensor_stub_from_reduce(item)? {
+                    stubs.push((format!("constants.{i}"), stub));
+                }
+            }
+            (stubs, None)
+        }
+        _ => {
+            return Err(err(
+                "torch checkpoint does not contain a state dict (torch.save(model.state_dict(), path))",
+            ));
+        }
     };
     let storages: HashMap<&str, &[u8]> = entries
         .iter()
@@ -449,7 +466,6 @@ pub fn read_torch_arrays_bytes(
                 .map(|key| (key, e.data.as_slice()))
         })
         .collect();
-    let (stubs, meta) = stubs_from_state_dict(&pairs)?;
     Ok((arrays_from_stubs(stubs, &storages)?, meta))
 }
 
@@ -633,6 +649,42 @@ mod tests {
         let bytes = write_zip_stored(&[("nope.txt".to_string(), vec![1])]).unwrap();
         let e = import_torch_pt_bytes(&bytes).err().unwrap();
         assert!(e.message().contains("data.pkl"));
+    }
+
+    /// TorchScript (`torch.jit.save`) archives: constants.pkl holds a tuple
+    /// of tensors, storages live under the same `data/` directory.
+    #[test]
+    fn torchscript_constants_archive_reads() {
+        let mut w = PickleWriter::new();
+        w.mark();
+        write_tensor_reduce(&mut w, "0", &[2, 2]);
+        write_tensor_reduce(&mut w, "1", &[3]);
+        w.tuple_from_mark();
+        let pickle = w.finish();
+        let storage0: Vec<u8> = [1.0f32, 2.0, 3.0, 4.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let storage1: Vec<u8> = [9.0f32, 8.0, 7.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let bytes = write_zip_stored(&[
+            ("model/constants.pkl".to_string(), pickle),
+            ("model/data/0".to_string(), storage0),
+            ("model/data/1".to_string(), storage1),
+            ("model/code/model.py".to_string(), b"# script".to_vec()),
+        ])
+        .unwrap();
+        let (arrays, meta) = read_torch_arrays_bytes(&bytes).unwrap();
+        assert!(meta.is_none());
+        assert_eq!(
+            arrays,
+            vec![
+                ("constants.0".to_string(), vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
+                ("constants.1".to_string(), vec![3], vec![9.0, 8.0, 7.0]),
+            ]
+        );
     }
 
     #[test]

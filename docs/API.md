@@ -36,7 +36,7 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
 | IO | **`load`** (universal), `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
-| Array IO | `load_arrays`/`save_arrays`/`detect_arrays_format` (universal, content-detected), plus `save_npy`/`load_npy`, `save_npz`/`load_npz`, `save_pt`/`load_pt`, `save_h5`/`load_h5`, `load_keras`, `save_tf_checkpoint`/`load_tf_checkpoint`, `save_onnx`/`load_onnx`, `save_safetensors`/`load_safetensors`, `save_flax`/`load_flax`, `save_gguf_arrays`/`load_gguf_arrays` (NumPy/PyTorch/TF/ONNX/safetensors/JAX/GGUF interchange, none of those packages needed) |
+| Array IO | `load_arrays`/`save_arrays`/`detect_arrays_format` (universal, content-detected), plus `save_npy`/`load_npy`, `save_npz`/`load_npz`, `save_pt`/`load_pt`, `save_h5`/`load_h5`, `load_keras`, `save_tf_checkpoint`/`load_tf_checkpoint`, `save_onnx`/`load_onnx`, `save_safetensors`/`load_safetensors`, `save_flax`/`load_flax`, `save_gguf_arrays`/`load_gguf_arrays`, `load_tflite`, `load_ggml_legacy` (NumPy/PyTorch/TF/TFLite/ONNX/safetensors/JAX/GGUF interchange, none of those packages needed) |
 | GGUF tools | `gguf_info`, `load_gguf_tokenizer`, `load_gguf_bpe_tokenizer` |
 | Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
@@ -402,7 +402,10 @@ ai.save_flax("out.msgpack", params)            # flax.serialization.from_bytes r
 
 arrays = ai.load_arrays("weights.anything")    # universal: detects any container
 ai.save_arrays("out.gguf", arrays)             # writer inferred from extension
-tensors = ai.load_gguf_arrays("model.gguf")    # dequantize every GGUF tensor
+tensors = ai.load_gguf_arrays("model.gguf")    # dequantize every GGUF tensor (v1-v3)
+
+weights = ai.load_tflite("model.tflite")       # flatbuffers, no TF needed
+old = ai.load_ggml_legacy("model.ggjt")        # pre-GGUF llama.cpp containers
 
 info = ai.gguf_info("model.gguf")              # header-only inspection
 tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab
