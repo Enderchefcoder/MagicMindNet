@@ -146,6 +146,7 @@ flowchart TB
 | **Generation** | KV cache, top-k/top-p/min-p, repetition/frequency/presence penalties, stop strings, sliding context |
 | **RL / SPIN** | Toy alignment loops on small models |
 | **IO** | Universal `ai.load(path)` auto-detects model family + format; `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
+| **Global formats** | **GGUF read/write from scratch** (Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q4_K/Q6_K dequant, no llama.cpp), **PyTorch `.pt`** state dicts (from-scratch pickle VM, `torch.load`-compatible export), **NumPy `.npy`/`.npz`** (numpy-free codec + DEFLATE inflate; TensorFlow/Keras bridge) — [docs/interop.md](docs/interop.md) |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
@@ -232,9 +233,11 @@ ai.SPIN(bot, selfplay_epochs=2, dataset=dataset)
 
 ```python
 model = ai.load(path)      # universal: Chatbot / Classifier / Diffusion, any format
+                           # (.mmn / .safetensors / .gguf / .pt / .npz — detected by content)
 
 ai.export(bot, "safetensors", path)
 bot2 = ai.import_model("safetensors", [path])  # first path only
+bot.save("bot.gguf", format="gguf")            # also "gguf-q8_0", "npz", "pt"
 merged = ai.merge(bot_a, bot_b)
 ai.quantize(bot, "int8")  # or "int4"
 ai.export_classifier(clf, "safetensors", path)
@@ -242,6 +245,10 @@ clf2 = ai.import_classifier("safetensors", [path])
 ai.merge_classifier(clf_a, clf_b)
 ai.quantize_classifier(clf, "int4")
 ai.limit("50%")  # resource cap helper
+
+# Generic array IO — no numpy/torch required (but their arrays are accepted)
+ai.save_npz("arrays.npz", {"w": [[1.0, 2.0]]})
+ai.save_pt("arrays.pt", {"w": [[1.0, 2.0]]})   # torch.load-compatible
 ```
 
 Full API reference: [docs/API.md](docs/API.md). Beginner tutorial: [docs/getting_started.md](docs/getting_started.md).
@@ -303,8 +310,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **325**
-- pytest: **714**
+- Rust `#[test]`: **395**
+- pytest: **772**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

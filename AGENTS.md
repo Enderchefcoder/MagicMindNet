@@ -31,7 +31,8 @@ CUDA: `maturin develop --release --features cuda -m crates/mmn-py/Cargo.toml`
 
 ## Layout
 
-- `crates/mmn-core` — tensor, autograd, ops (CE grad, linear backward, embedding backward)
+- `crates/mmn-core` — tensor, autograd, ops (CE grad, linear backward, embedding backward, NumPy-style elementwise/reduction ops)
+- `crates/mmn-io` — checkpoint IO + global format interop (`interop/`: from-scratch GGUF, PyTorch pickle/.pt, NumPy npy/npz, ZIP+inflate)
 - `crates/mmn-optim` — AdamW, Muon, hybrid
 - `crates/mmn-data` — datasets, ChatXML
 - `crates/mmn-nn` — layers, VAE, UNet
@@ -51,7 +52,7 @@ CUDA: `maturin develop --release --features cuda -m crates/mmn-py/Cargo.toml`
 
 When adding or changing behavior, extend the matching regression doc and tests. Full index: [docs/testing.md](docs/testing.md). Contributor table: [CONTRIBUTING.md](CONTRIBUTING.md#coverage-matrices).
 
-Key docs: `checkpoint_coverage.md`, `training_coverage.md`, `examples_coverage.md`, `attention_coverage.md`, `layernorm_coverage.md`, `nn_coverage.md`.
+Key docs: `checkpoint_coverage.md`, `training_coverage.md`, `examples_coverage.md`, `attention_coverage.md`, `layernorm_coverage.md`, `nn_coverage.md`, `interop.md` (GGUF / PyTorch / NumPy formats).
 
 ## Subagents
 

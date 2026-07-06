@@ -16,7 +16,11 @@
 - PyO3 `panic!` in `#[new]` surfaces as `pyo3_runtime.PanicException` — user-facing constructors must return `PyResult` and raise `ValueError` instead.
 - Rust `println!` bypasses Python's buffered stdout; flush `sys.stdout` before Rust-side progress prints so output interleaves correctly (see `flush_python_stdout` in mmn-py train dispatch).
 - Cloud VM rust default was 1.83; deps need edition2024 → `rustup default stable` (1.96) before `maturin develop`.
-- This linux VM needs `sudo apt-get install python3.12-venv` before `python3 -m venv .venv`.
+- This linux VM needs `sudo apt-get install python3.12-venv` before `python3 -m venv .venv`; run `sudo apt-get update` first or the package is "not available".
+- GGUF stores dims GGML-style (`ne[0]` fastest-varying): reverse them for row-major ndarray shapes; tensor data section aligns to `general.alignment` (default 32).
+- torch.save `.pt` = stored ZIP with `<root>/data.pkl` (pickle proto 2) + `<root>/data/<key>` raw storage blobs; persistent id tuple is `('storage', StorageClass, key, location, numel)`; CPython's pickler verifies globals are importable, so tests must install fake `torch` modules in `sys.modules` before pickling torch-style objects.
+- `np.savez` writes stored (uncompressed) zip entries; `np.savez_compressed` uses deflate — the from-scratch inflate in `mmn-io interop` covers both.
+- mmn-py error convention: `MmnError::Other` surfaces as `RuntimeError`; pytest error assertions should use `(RuntimeError, ValueError)` tuples like existing IO tests.
 
 # Scratchpad
 
@@ -186,6 +190,17 @@
 [X] diffusion_benchmark example, masked fixed-t loss regression, eval_mean_loss edit --train; 311 Rust / 631 pytest, verify_gate
 [X] Diffusion parameters getter, quantize roundtrip example, roundtrip pytest; 313 Rust / 635 pytest, verify_gate
 [X] Image dataset path resolvers, merge_diffusion demo, classifier IO guard; 314 Rust / 640 pytest, verify_gate
+
+## Task: Global interop — GGUF from scratch, PyTorch .pt, NumPy npy/npz, universal load
+[X] mmn-io interop core: zip.rs (reader/writer + crc32), inflate.rs (RFC1951), npy.rs codec
+[X] GGUF from scratch: container read/write, quant dequant (Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q4_K/Q6_K, F16/BF16), llama name map -> Chatbot
+[X] PyTorch .pt: pickle VM reader + writer, torch zip layout, state_dict -> Chatbot
+[X] npz chatbot checkpoint (tensors as .npy + meta.json) — numpy/TF interchange
+[X] detect.rs: GGUF/ZIP magic, new CheckpointKind variants; ai.load() universal
+[X] mmn-core elementwise ops expansion + tests (elementwise.rs)
+[X] mmn-py: export/import formats gguf/gguf-q8_0/npz/pt, read/write npy/npz/pt fns, interop.py, stubs
+[X] Docs: docs/interop.md, checkpoint_coverage, checkpoints, API, README, CHANGELOG; examples/global_formats_roundtrip.py
+[X] 395 Rust / 772 pytest green; ruff clean; verify_gate
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses

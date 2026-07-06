@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.1.0 — 2026-07-06
+
+### Added (global format interop: GGUF, PyTorch, NumPy/TensorFlow — all from scratch)
+- **GGUF read/write with zero llama.cpp code**: from-scratch container parser (v2/v3
+  headers, typed metadata KV, aligned tensor data) plus block-dequant codecs for
+  Q4_0 / Q4_1 / Q5_0 / Q5_1 / Q8_0 / **Q4_K / Q6_K** / F16 / BF16 / F64 / ints.
+  llama.cpp tensor names (`token_embd.weight`, `blk.N.attn_q.weight`, …) map onto the
+  MMN transformer with SwiGLU fusion, GQA head counts, and RoPE theta from `{arch}.*`
+  metadata. `bot.save(path, format="gguf")` / `"gguf-q8_0"` writes GGUF back out;
+  loaded models generate through the existing KV-cache engine
+- **PyTorch `.pt` state dicts without torch**: from-scratch pickle virtual machine
+  (protocols 2–4: memo, FRAME, persistent IDs, strided views, F16/BF16/int storages)
+  + from-scratch ZIP reader/writer. Imports HF llama-style state dicts; exports are
+  `torch.load`-compatible (verified against CPython's own `pickle`); `_mmn_meta`
+  entry preserves shape/seed/RoPE across roundtrips. Generic array API:
+  `ai.save_pt` / `ai.load_pt`
+- **NumPy `.npy`/`.npz` without numpy**: from-scratch NPY 1.0/2.0 codec (all common
+  dtypes, big-endian, Fortran order) and from-scratch **RFC 1951 DEFLATE inflate** so
+  `np.savez_compressed` archives read too. `bot.save(path, format="npz")` writes
+  `numpy.load`-compatible checkpoints (the TensorFlow/Keras interchange path);
+  `ai.save_npy` / `ai.load_npy` / `ai.save_npz` / `ai.load_npz` accept nested lists,
+  numpy arrays, or torch tensors (anything with `.tolist()`)
+- **Universal detection**: `detect_checkpoint_kind` now recognizes GGUF magic and ZIP
+  archives (torch vs npz); `ai.load()` / `Chatbot.load()` open every format with no
+  format argument. New `CheckpointKind::{ChatbotGguf, ChatbotNpz, ChatbotTorch}`
+- **Tensor op expansion (mmn-core)**: `sub`, `div`, `neg`, `exp`, `log`, `sqrt`,
+  `abs`, `pow_scalar`, `sigmoid`, `tanh`, `clamp`, `add_scalar`, `mul_scalar`,
+  `reshape`, `transpose`, `flatten`, `sum_axis`, `mean_axis`, `max_value`,
+  `min_value`, `argmax`, `argmin`, `argmax_rows`, `from_vec`, `to_vec` — unary math
+  ops register autograd nodes
+- External MLP checkpoints with only `up_proj`/`ffn_up` (no gate) now import as the
+  FFN weight instead of failing
+- New docs: `docs/interop.md`; example `examples/global_formats_roundtrip.py`
+- Tests: ~60 Rust (interop modules + elementwise) and 50 pytest across
+  `test_interop_*` / `test_universal_formats_py.py`, including CPython-pickle
+  cross-checks and `numpy.load` compatibility checks (numpy now a dev extra)
+
+### Fixed
+- Flaky `mean_denoise_loss_masked_decreases_after_fixed_t_training`: unseeded
+  `Diffusion::new()` occasionally overshoots at lr=0.05 — the regression now
+  allows bounded fresh-model retries while keeping the loss-decrease contract
+- Workspace is clippy-clean on Rust 1.96 (`repeat_n`, `slice::from_ref`,
+  `str::len` modernizations in mmn-train / mmn-models / mmn-data tests)
+
 ## 0.1.0 — 2026-05-31
 
 ### Added (beginner API overhaul: train/chat/save/load, in-memory data, typed errors)

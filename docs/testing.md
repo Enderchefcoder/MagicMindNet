@@ -32,6 +32,7 @@ Regression matrices live under `docs/*_coverage.md`. Extend the relevant doc whe
 | Doc | Scope |
 |-----|--------|
 | [checkpoint_coverage.md](checkpoint_coverage.md) | Chatbot/classifier IO contract (100% tensor keys) |
+| [interop.md](interop.md) | Global formats: GGUF, PyTorch `.pt`, NumPy `.npy`/`.npz`, universal `ai.load` |
 | [training_coverage.md](training_coverage.md) | `Train`, `TrainClassifier`, RL/SPIN, mean loss |
 | [dataset_coverage.md](dataset_coverage.md) | QA, corpus, classification, image loaders |
 | [examples_coverage.md](examples_coverage.md) | Runnable `examples/` × smoke × pytest |
@@ -68,6 +69,7 @@ See also [CONTRIBUTING.md](../CONTRIBUTING.md) (coverage table for contributors)
 | Classifier train / IO | `mmn-io`, `mmn-models` | `test_classifier_*.py`, `test_io_classifier_matrix_py.py`, … |
 | PyO3 API / errors | — | `test_public_exceptions.py`, `test_api_surface_py.py`, `test_mmn_py_bindings_py.py` |
 | Checkpoints / merge | `mmn-io` | `test_io_checkpoint_matrix_py.py`, `test_import_*`, `test_merge_*`, … |
+| Global formats (GGUF / `.pt` / `.npy`/`.npz`) | `mmn-io interop` | `test_interop_*.py`, `test_universal_formats_py.py` |
 | Checkpoint train deltas | — | `conftest.checkpoint_tensor_*`, `tensor_entry_first_f32` |
 | Conftest / CI python | — | `test_conftest_helpers_py.py` |
 | Quantize | `mmn-io` | `test_io_ln_quantize_py.py`, `test_quantize_*.py`, … |

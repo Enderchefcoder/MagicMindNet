@@ -4,6 +4,8 @@ This document tracks **100% regression coverage** of the chatbot `mmn-safetensor
 
 Classifier coverage is documented separately (backbone/head + meta); see `tests/test_import_classifier_strict_py.py` and related files.
 
+Global interchange formats (GGUF, PyTorch `.pt`, NumPy `.npz`) are covered in [interop.md](interop.md); their roundtrip/loss-parity matrix lives in `tests/test_universal_formats_py.py` (parametrized over `safetensors`, `hf-safetensors`, `gguf`, `npz`, `pt`) plus the Rust module tests under `crates/mmn-io/src/interop/`.
+
 ## Chatbot tensor keys (single block)
 
 | Tensor key | Missing import | Shape mismatch | Merge average | int8 quantize | int4 quantize |
