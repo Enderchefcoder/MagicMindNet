@@ -22,9 +22,10 @@ use io::{
     import_classifier_model, import_diffusion_model, import_model, load_checkpoint,
     load_gguf_bpe_tokenizer, load_gguf_tokenizer, merge, merge_classifier,
     merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
-    read_h5, read_keras, read_npy, read_npz, read_onnx, read_pt, read_safetensors,
+    read_flax, read_h5, read_keras, read_npy, read_npz, read_onnx, read_pt, read_safetensors,
     read_tf_checkpoint, write_h5,
-    write_npy, write_npz, write_onnx, write_pt, write_safetensors, write_tf_checkpoint,
+    write_flax, write_npy, write_npz, write_onnx, write_pt, write_safetensors,
+    write_tf_checkpoint,
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
@@ -84,6 +85,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_tf_checkpoint, m)?)?;
     m.add_function(wrap_pyfunction!(read_onnx, m)?)?;
     m.add_function(wrap_pyfunction!(read_safetensors, m)?)?;
+    m.add_function(wrap_pyfunction!(read_flax, m)?)?;
+    m.add_function(wrap_pyfunction!(write_flax, m)?)?;
     m.add_function(wrap_pyfunction!(write_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(write_onnx, m)?)?;
     m.add_function(wrap_pyfunction!(write_tf_checkpoint, m)?)?;

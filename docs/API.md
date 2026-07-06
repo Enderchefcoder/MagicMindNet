@@ -36,7 +36,7 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
 | IO | **`load`** (universal), `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
-| Array IO | `save_npy`/`load_npy`, `save_npz`/`load_npz`, `save_pt`/`load_pt`, `save_h5`/`load_h5`, `load_keras`, `save_tf_checkpoint`/`load_tf_checkpoint`, `save_onnx`/`load_onnx`, `save_safetensors`/`load_safetensors` (NumPy/PyTorch/TF/ONNX/safetensors interchange, none of those packages needed) |
+| Array IO | `save_npy`/`load_npy`, `save_npz`/`load_npz`, `save_pt`/`load_pt`, `save_h5`/`load_h5`, `load_keras`, `save_tf_checkpoint`/`load_tf_checkpoint`, `save_onnx`/`load_onnx`, `save_safetensors`/`load_safetensors`, `save_flax`/`load_flax` (NumPy/PyTorch/TF/ONNX/safetensors/JAX interchange, none of those packages needed) |
 | GGUF tools | `gguf_info`, `load_gguf_tokenizer`, `load_gguf_bpe_tokenizer` |
 | Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
@@ -396,6 +396,9 @@ ai.save_onnx("out.onnx", weights)              # passes onnx.checker
 
 tensors = ai.load_safetensors("m.safetensors") # every spec dtype, no package needed
 ai.save_safetensors("out.safetensors", tensors)  # loads with safetensors.numpy
+
+params = ai.load_flax("state.msgpack")         # Flax/JAX pytree, no msgpack needed
+ai.save_flax("out.msgpack", params)            # flax.serialization.from_bytes reads it
 
 info = ai.gguf_info("model.gguf")              # header-only inspection
 tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab

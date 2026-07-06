@@ -60,6 +60,7 @@ from magicmindnet._native import (
 from magicmindnet.bpe_io import load_bpe_sidecar
 from magicmindnet.interop import (
     gguf_info,
+    load_flax,
     load_gguf_bpe_tokenizer,
     load_gguf_tokenizer,
     load_h5,
@@ -70,6 +71,7 @@ from magicmindnet.interop import (
     load_pt,
     load_safetensors,
     load_tf_checkpoint,
+    save_flax,
     save_h5,
     save_npy,
     save_npz,
@@ -139,6 +141,7 @@ __all__ = [
     "load",
     "load_bpe_sidecar",
     "load_checkpoint",
+    "load_flax",
     "load_gguf_bpe_tokenizer",
     "load_gguf_tokenizer",
     "load_h5",
@@ -159,6 +162,7 @@ __all__ = [
     "quantize_classifier_model",
     "quantize_diffusion",
     "quantize_diffusion_model",
+    "save_flax",
     "save_h5",
     "save_npy",
     "save_npz",

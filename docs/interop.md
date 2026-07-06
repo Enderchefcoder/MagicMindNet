@@ -241,6 +241,24 @@ ai.save_safetensors("out.safetensors", {"w": [[1.0, 2.0]], "b": [0.5]})
 Cross-validated both directions against the official `safetensors` package
 (`safetensors.numpy` for all dtypes, `safetensors.torch` for BF16).
 
+## Flax / JAX — msgpack checkpoints without msgpack
+
+`flax.serialization.to_bytes` output is a MessagePack map tree whose ndarray
+leaves are `ExtType(1, packb((shape, dtype.name, tobytes())))`. A
+from-scratch msgpack codec (all wire types: nil/bool/ints/floats/str/bin/
+array/map/ext) plus the Flax ext-type convention gives both directions:
+
+```python
+arrays = ai.load_flax("state.msgpack")   # {"params/dense/kernel": [[...]]}
+ai.save_flax("out.msgpack", {"params/dense/kernel": [[1.0, 2.0]]})
+```
+
+Paths join nested dicts with `/`; scalars (Flax `step` counters) come back
+as 0-d values; every numpy dtype plus JAX `bfloat16` decodes to floats.
+Writes produce trees `flax.serialization.from_bytes` accepts (F32 leaves).
+Cross-validated against the official `msgpack` package using the exact
+`flax.serialization` encoding in both directions.
+
 ## NumPy `.npy` / `.npz` — also a TensorFlow bridge
 
 The NPY codec handles format 1.0/2.0 headers, every common dtype

@@ -490,6 +490,18 @@ pub fn read_safetensors(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_safetensors_arrays(path).map_err(mmn_err_to_py)
 }
 
+/// Read a Flax msgpack checkpoint into `/`-joined named arrays.
+#[pyfunction]
+pub fn read_flax(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_flax_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named f32 arrays as a Flax msgpack pytree.
+#[pyfunction]
+pub fn write_flax(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_flax_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
 /// Write named f32 arrays as a `.safetensors` file.
 #[pyfunction]
 pub fn write_safetensors(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {

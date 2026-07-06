@@ -146,7 +146,7 @@ flowchart TB
 | **Generation** | KV cache, top-k/top-p/min-p, repetition/frequency/presence penalties, stop strings, sliding context |
 | **RL / SPIN** | Toy alignment loops on small models |
 | **IO** | Universal `ai.load(path)` auto-detects model family + format; `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
-| **Global formats** | **Zero format libraries anywhere** (safetensors container included — from scratch). **GGUF**: reads every current GGML tensor type, encodes classic quants byte-identical to the reference plus the **complete k-quant family Q2_K–Q6_K + Q8_K** (the reference Python package can't encode k-quants at all), cross-validated against llama.cpp's `gguf` package; embedded SentencePiece and gpt2 byte-BPE tokenizers. **PyTorch** zip + legacy `.pt` + sharded `*.index.json`. **NumPy `.npy`/`.npz`** with from-scratch DEFLATE both ways. **TensorFlow**: Keras `.h5`/`.keras` and checkpoint v2, read AND write — h5py and `tf.train.load_checkpoint` open our output. **ONNX** read + write (passes `onnx.checker`). Official `safetensors` package opens our containers — [docs/interop.md](docs/interop.md) |
+| **Global formats** | **Zero format libraries anywhere** (safetensors container included — from scratch). **GGUF**: reads every current GGML tensor type, encodes classic quants byte-identical to the reference plus the **complete k-quant family Q2_K–Q6_K + Q8_K** (the reference Python package can't encode k-quants at all), cross-validated against llama.cpp's `gguf` package; embedded SentencePiece and gpt2 byte-BPE tokenizers. **PyTorch** zip + legacy `.pt` + sharded `*.index.json`. **NumPy `.npy`/`.npz`** with from-scratch DEFLATE both ways. **TensorFlow**: Keras `.h5`/`.keras` and checkpoint v2, read AND write — h5py and `tf.train.load_checkpoint` open our output. **ONNX** read + write (passes `onnx.checker`). **Flax/JAX** msgpack pytrees read + write (from-scratch MessagePack codec). Generic `.safetensors` arrays in every spec dtype. Official `safetensors` package opens our containers — [docs/interop.md](docs/interop.md) |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
@@ -313,8 +313,8 @@ After `pip install -e ".[dev]"` and `maturin develop --release`:
 
 **Current counts** (run `.\scripts\count_tests.ps1` after changes):
 
-- Rust `#[test]`: **510**
-- pytest: **911**
+- Rust `#[test]`: **520**
+- pytest: **930**
 
 Test area map: [docs/testing.md](docs/testing.md).
 

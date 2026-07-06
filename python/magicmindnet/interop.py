@@ -29,6 +29,7 @@ from magicmindnet import _native
 
 __all__ = [
     "gguf_info",
+    "load_flax",
     "load_gguf_bpe_tokenizer",
     "load_gguf_tokenizer",
     "load_h5",
@@ -39,6 +40,7 @@ __all__ = [
     "load_pt",
     "load_safetensors",
     "load_tf_checkpoint",
+    "save_flax",
     "save_h5",
     "save_npy",
     "save_npz",
@@ -167,6 +169,29 @@ def save_onnx(path, arrays):
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
     _native.write_onnx(path, packed)
+
+
+def load_flax(path):
+    """Read a Flax/JAX msgpack checkpoint into ``{"a/b/c": nested lists}``.
+
+    Parses ``flax.serialization.to_bytes`` output from scratch (msgpack map
+    tree with ExtType ndarray leaves) — no msgpack, JAX, or Flax install
+    needed. All numpy dtypes plus JAX ``bfloat16`` decode to floats.
+    """
+    return {name: _nest(shape, flat) for name, shape, flat in _native.read_flax(path)}
+
+
+def save_flax(path, arrays):
+    """Write named arrays as a Flax msgpack pytree.
+
+    ``/`` in names creates nested dicts (e.g. ``"params/dense/kernel"``);
+    ``flax.serialization.from_bytes`` reads the output.
+    """
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_flax(path, packed)
 
 
 def load_safetensors(path):

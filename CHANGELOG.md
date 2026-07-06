@@ -2,7 +2,7 @@
 
 ## 0.1.0 — 2026-07-06
 
-### Added (interop wave 9: default-format fast path, block-parallel GGUF writes, generic safetensors arrays)
+### Added (interop wave 9: default-format fast path, block-parallel GGUF writes, safetensors arrays, Flax)
 - **5–6x faster default checkpoint format**: the `mmn-safetensors-v1` /
   `mmn-classifier-v1` / `mmn-diffusion-v1` JSON paths moved from `serde_json::Value`
   trees to typed `TensorEntry` structs plus a hand-rolled structural scanner
@@ -20,8 +20,13 @@
   spec (BOOL through F64/I64/U64) into floats, `ai.save_safetensors` writes F32
   files the official package loads — cross-validated both directions against
   `safetensors.numpy` (and `safetensors.torch` for BF16)
-- Tests: +11 Rust (scanner, segmented-encode identity, st_arrays) and +18 pytest
-  (`test_interop_safetensors_arrays_py`)
+- **Flax / JAX checkpoints**: from-scratch MessagePack codec (every wire type
+  including all ext forms) + the `flax.serialization` ndarray ExtType convention;
+  `ai.load_flax` flattens pytrees to `/`-joined names (all numpy dtypes + JAX
+  `bfloat16`), `ai.save_flax` writes trees `flax.serialization.from_bytes` reads —
+  cross-validated against the official `msgpack` package both directions
+- Tests: +21 Rust (scanner, segmented-encode identity, st_arrays, msgpack, flax)
+  and +35 pytest (`test_interop_safetensors_arrays_py`, `test_interop_flax_py`)
 
 ### Added (interop wave 8: IQ4 encoders, vision GGUF export, SavedModel dirs)
 - **IQ4_NL / IQ4_XS encoders** (`gguf-iq4_nl` / `gguf-iq4_xs` exports): from-scratch
