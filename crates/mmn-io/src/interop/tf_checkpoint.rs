@@ -262,6 +262,22 @@ fn decode_values(dtype: u64, raw: &[u8], name: &str) -> Result<Vec<f32>, MmnErro
 }
 
 fn checkpoint_prefix(path: &str) -> String {
+    // SavedModel directory: use its `variables/variables` bundle.
+    let as_dir = std::path::Path::new(path);
+    if as_dir.is_dir() {
+        let saved_model = as_dir.join("variables").join("variables.index");
+        if saved_model.is_file() {
+            return as_dir
+                .join("variables")
+                .join("variables")
+                .to_string_lossy()
+                .into_owned();
+        }
+        let direct = as_dir.join("variables.index");
+        if direct.is_file() {
+            return as_dir.join("variables").to_string_lossy().into_owned();
+        }
+    }
     path.strip_suffix(".index").unwrap_or(path).to_string()
 }
 

@@ -336,12 +336,44 @@ pub fn import_hf_safetensors_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
             }
         }
     }
-    let mut mmn_tensors: HashMap<String, Tensor> = HashMap::new();
-    for name in st.names() {
-        if let Some(mmn_key) = hf_name_to_mmn(name) {
-            let view = st.tensor(name).map_err(hf_err)?;
-            let t = tensor_from_view(name, &view)?;
-            mmn_tensors.insert(mmn_key, t);
+    // Decode mapped tensors in parallel (dtype conversion dominates for
+    // F16/BF16 checkpoints).
+    let mapped: Vec<(String, &str)> = st
+        .names()
+        .into_iter()
+        .filter_map(|name| hf_name_to_mmn(name).map(|key| (key, name)))
+        .collect();
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(mapped.len().max(1));
+    let decode_one = |(key, name): &(String, &str)| -> Result<(String, Tensor), MmnError> {
+        let view = st.tensor(name).map_err(hf_err)?;
+        Ok((key.clone(), tensor_from_view(name, &view)?))
+    };
+    let mut mmn_tensors: HashMap<String, Tensor> = HashMap::with_capacity(mapped.len());
+    if workers <= 1 || mapped.len() <= 1 {
+        for pair in &mapped {
+            let (key, tensor) = decode_one(pair)?;
+            mmn_tensors.insert(key, tensor);
+        }
+    } else {
+        let chunk_size = mapped.len().div_ceil(workers);
+        let results: Vec<Result<Vec<(String, Tensor)>, MmnError>> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = mapped
+                    .chunks(chunk_size)
+                    .map(|chunk| scope.spawn(move || chunk.iter().map(decode_one).collect()))
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("safetensors decode worker panicked"))
+                    .collect()
+            });
+        for chunk in results {
+            for (key, tensor) in chunk? {
+                mmn_tensors.insert(key, tensor);
+            }
         }
     }
     chatbot_from_external_tensors(mmn_tensors, meta)
