@@ -34,6 +34,7 @@ pub use interop::tf_checkpoint::read_tf_checkpoint_arrays;
 pub use interop::npz_chatbot::{
     export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_opts,
 };
+pub use interop::onnx::read_onnx_arrays;
 pub use interop::torch_pt::{
     export_torch_pt, import_torch_pt, read_torch_arrays, write_torch_arrays,
 };
