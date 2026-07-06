@@ -54,14 +54,16 @@ def test_keras_plain_h5_passthrough():
     assert "weights" in arrays
 
 
-def test_compressed_dataset_rejected(tmp_path):
+def test_compressed_dataset_reads(tmp_path):
+    """Chunked+gzip datasets decode through the from-scratch inflate."""
     h5py = pytest.importorskip("h5py")
     np = pytest.importorskip("numpy")
     path = str(tmp_path / "gz.h5")
+    data = np.arange(64 * 64, dtype=np.float32).reshape(64, 64)
     with h5py.File(path, "w") as f:
-        f.create_dataset("big", data=np.zeros((64, 64), dtype=np.float32), compression="gzip")
-    with pytest.raises((RuntimeError, ValueError), match="chunked|compression"):
-        ai.load_h5(path)
+        f.create_dataset("big", data=data, compression="gzip")
+    arrays = ai.load_h5(path)
+    np.testing.assert_allclose(np.array(arrays["big"], dtype=np.float32), data)
 
 
 def test_not_hdf5_errors(tmp_path):

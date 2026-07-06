@@ -30,6 +30,9 @@
 - ggml quantization is ROW-wise: ne[0] (fastest dim) must be a block-size multiple; gguf-py raises on total-count-only alignment. ggml nearest_int = round-half-to-even (`f32::round_ties_even`).
 - TF checkpoint v2 .index = LevelDB table (no compression by default): 48-byte footer (2 varint handles + magic 0xdb4775248b80fb57 LE), block trailer = type byte + masked crc32c(block+type); mask = rotate_right(15) + 0xa282ead8; values = BundleEntryProto (dtype f1, shape f2, shard f3, offset f4, size f5, crc32c fixed32 f6).
 - tensorflow-cpu installs fine in this VM (~600MB) for local validation; keep it OUT of dev extras — commit real-TF fixtures instead and importorskip live tests.
+- ggml classic-quant encoders round by truncation after +0.5 ((int8_t)(x+0.5f)), NOT round_ties_even; matching this makes our blocks byte-identical to gguf-py's quantize.
+- HDF5 chunk B-tree keys carry rank+1 dims (trailing element-size); chunk data is filtered per chunk with a filter mask; gzip filter = zlib wrapper (2-byte header + deflate + big-endian adler32).
+- Test float roundtrips with power-of-two denominators — 1/89 isn't f32-representable and 'exact equality' tests fail for storage reasons, not codec bugs.
 
 # Scratchpad
 
@@ -234,6 +237,13 @@
 [X] Real-TF validation: fixtures tests/fixtures/tf/ (TF 2.21 keras + ckpt) in CI; live importorskip tests match get_weights / load_checkpoint exactly (tensorflow-cpu NOT in dev extras)
 [X] Parallel zip entry inflation; examples/interop_benchmark.py (Q4_K = 7x smaller than F32)
 [X] 464 Rust / 852 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 5 — ONNX, chunked HDF5, byte-exact encoders, fast inflate
+[X] ONNX reader: shared interop/proto.rs walker + onnx.rs initializer extraction; validated vs official onnx package
+[X] Chunked HDF5: B-tree v1 chunk index (edge clipping), gzip filter (zlib + adler32 via our inflate), shuffle filter; fixtures/chunked.h5 + live h5py odd shapes
+[X] Byte-exact classic quant encoders Q4_1/Q5_0/Q5_1/TQ2_0 (ggml truncating rounding); gguf-py re-quantization fixed-point verified; gguf-q4_1/q5_0/q5_1 exports
+[X] Fast inflate: 10-bit Huffman LUT over 64-bit accumulator; take_bytes buffered
+[X] 473 Rust / 862 pytest; clippy 0; smoke OK
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses

@@ -2,6 +2,27 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 5: ONNX, chunked HDF5, byte-exact encoders, fast inflate)
+- **ONNX reader** (`ai.load_onnx`): from-scratch protobuf wire-format walker
+  (shared `interop/proto.rs`) extracting every graph initializer — packed/repeated
+  dims, all numeric tensor types via `raw_data` or typed fields, external-data
+  models rejected with a re-export hint. Validated against models saved by the
+  official `onnx` package
+- **Chunked HDF5**: B-tree v1 chunk index with edge-chunk clipping, plus the
+  **gzip filter** (zlib wrapper undone by our inflate, Adler-32 verified) and
+  **shuffle filter** (byte transpose) — `compression="gzip", shuffle=True` h5py
+  files now read; committed `tests/fixtures/chunked.h5` + live h5py odd-shape tests
+- **Classic-quant encoders, byte-identical to the reference**: Q4_1, Q5_0, Q5_1,
+  TQ2_0 join Q4_0/Q8_0 (ggml's exact truncating rounding); verified as
+  re-quantization fixed points against gguf-py; new `gguf-q4_1`/`q5_0`/`q5_1`
+  export formats
+- **Fast inflate**: 10-bit one-hit Huffman lookup table over a 64-bit bit
+  accumulator (canonical bit-walk only for rare >10-bit codes) — the classic
+  zlib fast path, from scratch
+- Tests: +9 Rust (proto walker, ONNX handcrafted models, chunked/gzip/shuffle
+  fixture, Adler-32) and +9 pytest (`test_interop_wave5_py`: real-onnx equality,
+  live h5py gzip+shuffle with edge chunks, encoder fixed-point checks)
+
 ### Added (interop wave 4: k-quant encoders, TF checkpoint v2, real-TF validation)
 - **K-quant encoders** (`gguf-q4_k` / `gguf-q5_k` / `gguf-q6_k` exports): from-scratch
   ports of ggml's reference quantization searches (`make_qx_quants` iscale

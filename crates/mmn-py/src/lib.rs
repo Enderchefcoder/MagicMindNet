@@ -22,8 +22,8 @@ use io::{
     import_classifier_model, import_diffusion_model, import_model, load_checkpoint,
     load_gguf_bpe_tokenizer, load_gguf_tokenizer, merge, merge_classifier,
     merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
-    read_h5, read_keras, read_npy, read_npz, read_pt, read_tf_checkpoint, write_npy, write_npz,
-    write_pt,
+    read_h5, read_keras, read_npy, read_npz, read_onnx, read_pt, read_tf_checkpoint, write_npy,
+    write_npz, write_pt,
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
@@ -81,6 +81,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_h5, m)?)?;
     m.add_function(wrap_pyfunction!(read_keras, m)?)?;
     m.add_function(wrap_pyfunction!(read_tf_checkpoint, m)?)?;
+    m.add_function(wrap_pyfunction!(read_onnx, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patch_from_image_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patches_from_image_path_py, m)?)?;
     m.add("vision_rgb_patch_from_image_path", m.getattr("vision_rgb_patch_from_image_path_py")?)?;

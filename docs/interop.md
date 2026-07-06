@@ -18,6 +18,7 @@ numpy/torch/h5py dependency.
 | HDF5 / Keras weights | `.h5` / `.weights.h5` | ✅ | — | from-scratch HDF5 reader |
 | Keras v3 archive | `.keras` | ✅ | — | ZIP + HDF5 reader |
 | TensorFlow checkpoint v2 | `.index` + `.data-…` | ✅ | — | from-scratch LevelDB table + protobuf |
+| ONNX model weights | `.onnx` | ✅ | — | from-scratch protobuf walker |
 | Architecture stub | `.bin` | ✅ | ✅ | `mmn-bin-v1` JSON |
 
 `ai.load(path)` detects checkpoint formats automatically by magic bytes and
@@ -95,15 +96,18 @@ scratch bytes↔unicode table, ranked merges, approximate GPT-2
 pretokenization; ids follow the vocabulary order). `Gpt2BpeEncoder.from_vocab`
 also accepts HF-style token lists + merge rules directly.
 
-### K-quant encoding
+### Quant encoding
 
-The writer also **encodes k-quants** — `format="gguf-q4_k"` / `"gguf-q5_k"` /
-`"gguf-q6_k"` — via from-scratch ports of ggml's reference quantization
-searches (`make_qx_quants` iscale refinement, `make_qkx2_quants` joint
-scale+min least squares, round-half-to-even `nearest_int`). The reference
-llama.cpp Python package cannot encode k-quants at all; ours produces blocks
-it decodes identically, with Q6_K reconstruction under 2% relative RMSE.
-Per the ggml spec, quantization is **row-wise**: tensors whose fastest
+The writer encodes every practical target — classic quants **byte-identical
+to the reference implementation** (`gguf-q4_0` / `q4_1` / `q5_0` / `q5_1` /
+`q8_0`, ggml's exact truncating rounding), plus TQ2_0 ternary blocks, plus
+**k-quants** (`gguf-q4_k` / `q5_k` / `q6_k`) via from-scratch ports of ggml's
+reference quantization searches (`make_qx_quants` iscale refinement,
+`make_qkx2_quants` joint scale+min least squares, round-half-to-even
+`nearest_int`). The reference llama.cpp Python package cannot encode k-quants
+at all; ours produces blocks it decodes identically (verified as a
+re-quantization fixed point), with Q6_K reconstruction under 2% relative
+RMSE. Per the ggml spec, quantization is **row-wise**: tensors whose fastest
 dimension is not a block multiple stay F32 automatically.
 
 Limitations: vision chatbots cannot be exported to GGUF (use safetensors or
@@ -141,12 +145,14 @@ shapes exactly like the HF safetensors importer.
 
 ## HDF5 — TensorFlow/Keras weights without h5py
 
-A from-scratch HDF5 reader covers the layout `h5py`/Keras write by default
-("earliest" libver): superblock v0/1, version-1 object headers with
-continuation blocks, symbol-table groups (B-tree v1 + local heap + SNOD), and
-compact or contiguous datasets of fixed-point / IEEE-float types (F16 through
-F64, all int widths, both endiannesses). Chunked/compressed datasets are
-rejected with a clear message.
+A from-scratch HDF5 reader covers the layouts `h5py`/Keras write: superblock
+v0/1, version-1 object headers with continuation blocks, symbol-table groups
+(B-tree v1 + local heap + SNOD), and compact, contiguous, or **chunked**
+datasets (B-tree v1 chunk index with edge-chunk clipping) of fixed-point /
+IEEE-float types (F16 through F64, all int widths, both endiannesses). The
+**gzip filter** (zlib wrapper, from-scratch inflate + Adler-32 verification)
+and **shuffle filter** (byte transpose) are undone per chunk, so
+`compression="gzip", shuffle=True` files read fine.
 
 ```python
 weights = ai.load_h5("model.weights.h5")   # {"dense/kernel": [[...]], ...}
@@ -176,6 +182,20 @@ All numeric `DataType`s decode to f32 (float/double/half/bfloat16, all int
 widths, bool); the object-graph metadata entry is skipped. Fixtures written
 by real TensorFlow are committed, and live tests compare against
 `tf.train.load_checkpoint` bit-for-bit.
+
+## ONNX — model weights without onnx/protobuf
+
+A from-scratch protobuf wire-format walker extracts every graph initializer
+from `.onnx` files: `dims` (packed or repeated), all numeric tensor types
+(`raw_data` little-endian plus typed `float_data`/`int*_data` fields),
+external-data models rejected with a re-export hint:
+
+```python
+weights = ai.load_onnx("model.onnx")   # {"w": [[...]], "b": [...]}
+```
+
+Validated against models built and saved by the official `onnx` package
+(importorskip in tests).
 
 ## NumPy `.npy` / `.npz` — also a TensorFlow bridge
 
@@ -229,6 +249,9 @@ recognize files by content, not extension:
   lookups even for 32k+ piece GGUF vocabularies (was a linear vocab scan).
 - The DEFLATE compressor uses hash-chain LZ77 (32-deep chains, 32 KiB
   window) with fixed-Huffman blocks; entries that don't shrink stay stored.
+- The inflate decoder uses a **10-bit one-hit Huffman lookup table** over a
+  64-bit bit accumulator (bit-by-bit canonical walk only for rare long
+  codes) — the classic zlib fast path, from scratch.
 
 ## Tensor ops (mmn-core)
 

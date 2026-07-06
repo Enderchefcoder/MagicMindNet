@@ -35,6 +35,7 @@ __all__ = [
     "load_keras",
     "load_npy",
     "load_npz",
+    "load_onnx",
     "load_pt",
     "load_tf_checkpoint",
     "save_npy",
@@ -143,6 +144,15 @@ def load_h5(path):
 def load_keras(path):
     """Read Keras weights (``.keras`` archive, ``.weights.h5``, or ``.h5``)."""
     return {name: _nest(shape, flat) for name, shape, flat in _native.read_keras(path)}
+
+
+def load_onnx(path):
+    """Read every graph initializer (weight) in an ``.onnx`` model.
+
+    From-scratch protobuf parsing — no onnx/protobuf install needed. Returns
+    ``{name: nested lists}``.
+    """
+    return {name: _nest(shape, flat) for name, shape, flat in _native.read_onnx(path)}
 
 
 def load_tf_checkpoint(path):

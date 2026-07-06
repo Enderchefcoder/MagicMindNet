@@ -36,7 +36,7 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
 | IO | **`load`** (universal), `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
-| Array IO | `save_npy`, `load_npy`, `save_npz`, `load_npz`, `save_pt`, `load_pt`, `load_h5`, `load_keras`, `load_tf_checkpoint` (NumPy/PyTorch/TF interchange, no numpy/torch/h5py/tensorflow needed) |
+| Array IO | `save_npy`, `load_npy`, `save_npz`, `load_npz`, `save_pt`, `load_pt`, `load_h5`, `load_keras`, `load_tf_checkpoint`, `load_onnx` (NumPy/PyTorch/TF/ONNX interchange, none of those packages needed) |
 | GGUF tools | `gguf_info`, `load_gguf_tokenizer`, `load_gguf_bpe_tokenizer` |
 | Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
@@ -385,9 +385,10 @@ arrays = ai.load_npz("many.npz")               # {name: nested lists}
 ai.save_pt("state.pt", {"w": [[1.0]]})         # torch.load-compatible
 tensors = ai.load_pt("state.pt")               # zip + legacy pre-1.6 formats
 
-weights = ai.load_h5("model.weights.h5")       # HDF5 without h5py
+weights = ai.load_h5("model.weights.h5")       # HDF5 without h5py (incl. gzip chunks)
 weights = ai.load_keras("model.keras")         # Keras v3 archive
 arrays = ai.load_tf_checkpoint("ckpt")         # TF checkpoint v2, no TF needed
+weights = ai.load_onnx("model.onnx")           # ONNX initializers, no onnx needed
 
 info = ai.gguf_info("model.gguf")              # header-only inspection
 tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab
