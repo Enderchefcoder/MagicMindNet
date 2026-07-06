@@ -96,11 +96,21 @@ pub fn read_npz_arrays(path: &str) -> Result<Vec<super::NamedArray>, MmnError> {
 
 /// Write arrays to an `.npz` archive (generic, model-agnostic).
 pub fn write_npz_arrays(path: &str, arrays: &[super::NamedArray]) -> Result<(), MmnError> {
+    write_npz_arrays_opts(path, arrays, false)
+}
+
+/// Write arrays to an `.npz` archive, optionally DEFLATE-compressed
+/// (equivalent to `np.savez_compressed`).
+pub fn write_npz_arrays_opts(
+    path: &str,
+    arrays: &[super::NamedArray],
+    compress: bool,
+) -> Result<(), MmnError> {
     let mut entries = Vec::with_capacity(arrays.len());
     for (name, shape, data) in arrays {
         entries.push((format!("{name}.npy"), encode_npy_f32(shape, data)?));
     }
-    let bytes = write_zip_stored(&entries)?;
+    let bytes = super::zip::write_zip(&entries, compress)?;
     write_file_create_parents(path, bytes)
 }
 

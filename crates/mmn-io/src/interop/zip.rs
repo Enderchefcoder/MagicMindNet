@@ -197,12 +197,29 @@ pub fn read_zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, MmnError> {
 
 /// Serialize entries into a stored (uncompressed) ZIP archive.
 pub fn write_zip_stored(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, MmnError> {
+    write_zip(entries, false)
+}
+
+/// Serialize entries into a ZIP archive, optionally DEFLATE-compressing each
+/// entry (kept stored when compression does not shrink it).
+pub fn write_zip(entries: &[(String, Vec<u8>)], compress: bool) -> Result<Vec<u8>, MmnError> {
     let mut out = Vec::new();
     let mut central = Vec::new();
     for (name, data) in entries {
         if data.len() > u32::MAX as usize || out.len() > u32::MAX as usize {
             return Err(err("zip64 writing not supported (entry or archive > 4 GiB)"));
         }
+        let packed;
+        let (method, payload): (u16, &[u8]) = if compress {
+            packed = super::deflate::deflate(data);
+            if packed.len() < data.len() {
+                (METHOD_DEFLATE, &packed)
+            } else {
+                (METHOD_STORED, data)
+            }
+        } else {
+            (METHOD_STORED, data)
+        };
         let offset = out.len() as u32;
         let crc = crc32(data);
         let name_bytes = name.as_bytes();
@@ -210,31 +227,38 @@ pub fn write_zip_stored(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, MmnErr
         out.extend_from_slice(&LOCAL_HEADER_SIG.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes()); // version needed
         out.extend_from_slice(&0u16.to_le_bytes()); // flags
-        out.extend_from_slice(&METHOD_STORED.to_le_bytes());
+        out.extend_from_slice(&method.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // mod time
         out.extend_from_slice(&0u16.to_le_bytes()); // mod date
         out.extend_from_slice(&crc.to_le_bytes());
-        out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // compressed
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes()); // compressed
         out.extend_from_slice(&(data.len() as u32).to_le_bytes()); // uncompressed
         out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // extra len
         out.extend_from_slice(name_bytes);
-        out.extend_from_slice(data);
-        central.push((name.clone(), crc, data.len() as u32, offset));
+        out.extend_from_slice(payload);
+        central.push((
+            name.clone(),
+            crc,
+            payload.len() as u32,
+            data.len() as u32,
+            method,
+            offset,
+        ));
     }
     let cd_start = out.len() as u32;
-    for (name, crc, size, offset) in central.iter() {
+    for (name, crc, csize, usize_, method, offset) in central.iter() {
         let name_bytes = name.as_bytes();
         out.extend_from_slice(&CENTRAL_HEADER_SIG.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes()); // version made by
         out.extend_from_slice(&20u16.to_le_bytes()); // version needed
         out.extend_from_slice(&0u16.to_le_bytes()); // flags
-        out.extend_from_slice(&METHOD_STORED.to_le_bytes());
+        out.extend_from_slice(&method.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // mod time
         out.extend_from_slice(&0u16.to_le_bytes()); // mod date
         out.extend_from_slice(&crc.to_le_bytes());
-        out.extend_from_slice(&size.to_le_bytes()); // compressed
-        out.extend_from_slice(&size.to_le_bytes()); // uncompressed
+        out.extend_from_slice(&csize.to_le_bytes()); // compressed
+        out.extend_from_slice(&usize_.to_le_bytes()); // uncompressed
         out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // extra len
         out.extend_from_slice(&0u16.to_le_bytes()); // comment len
@@ -289,6 +313,20 @@ mod tests {
             read_zip_entry(&bytes, "dir/data.bin").unwrap(),
             vec![0u8, 1, 2, 250, 255]
         );
+    }
+
+    #[test]
+    fn compressed_zip_roundtrip() {
+        let entries = vec![
+            ("big.txt".to_string(), b"repeat me ".repeat(500)),
+            ("tiny".to_string(), vec![1u8, 2, 3]),
+        ];
+        let bytes = write_zip(&entries, true).unwrap();
+        let stored = write_zip(&entries, false).unwrap();
+        assert!(bytes.len() < stored.len() / 2, "{} vs {}", bytes.len(), stored.len());
+        let read = read_zip(&bytes).unwrap();
+        assert_eq!(read[0].data, entries[0].1);
+        assert_eq!(read[1].data, entries[1].1);
     }
 
     #[test]
