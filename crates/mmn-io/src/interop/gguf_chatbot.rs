@@ -302,9 +302,12 @@ pub fn export_gguf_with_tokenizer(
         "f16" | "F16" => GgmlType::F16,
         "q8_0" | "Q8_0" => GgmlType::Q8_0,
         "q4_0" | "Q4_0" => GgmlType::Q4_0,
+        "q4_k" | "Q4_K" => GgmlType::Q4K,
+        "q5_k" | "Q5_K" => GgmlType::Q5K,
+        "q6_k" | "Q6_K" => GgmlType::Q6K,
         other => {
             return Err(err(format!(
-                "GGUF export quant {other:?} not supported (use \"f32\", \"f16\", \"q8_0\", or \"q4_0\")"
+                "GGUF export quant {other:?} not supported (use \"f32\", \"f16\", \"q8_0\", \"q4_0\", \"q4_k\", \"q5_k\", or \"q6_k\")"
             )));
         }
     };
@@ -328,11 +331,14 @@ pub fn export_gguf_with_tokenizer(
     let tensors: Vec<GgufWriteTensor<'_>> = standardized
         .iter()
         .map(|(name, shape, values)| {
-            // Block-quantized tensors need 32-element alignment; small vectors
-            // (layernorm gammas/betas on tiny models) stay F32.
+            // ggml quantizes per row: the fastest-varying dimension must be a
+            // block multiple (blocks never straddle rows). Narrow tensors
+            // (layernorm vectors, small d_model) stay F32.
             let (block_elems, _) = ggml_type.block_layout();
+            let row = shape.last().copied().unwrap_or(0);
             let use_quant = ggml_type != GgmlType::F32
-                && values.len().is_multiple_of(block_elems);
+                && row > 0
+                && row.is_multiple_of(block_elems);
             GgufWriteTensor {
                 name: name.clone(),
                 shape: shape.clone(),
@@ -414,7 +420,7 @@ mod tests {
     #[test]
     fn export_unknown_quant_errors() {
         let model = Chatbot::new(false, None, 32, Some(1), Some(8));
-        let e = export_gguf(&model, "/tmp/never.gguf", "q4_k").unwrap_err();
+        let e = export_gguf(&model, "/tmp/never.gguf", "iq2_xxs").unwrap_err();
         assert!(e.message().contains("not supported"));
     }
 
@@ -428,6 +434,36 @@ mod tests {
         let a = model.embed.weight.data[[2, 3]];
         let b = loaded.embed.weight.data[[2, 3]];
         assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn gguf_q6_k_roundtrip_close() {
+        // Rows must be 256-multiples for k-quants: d_model = 256.
+        let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(256), Some(12));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_q6k_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "q6_k").unwrap();
+        let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+        let a = model.embed.weight.data[[1, 2]];
+        let b = loaded.embed.weight.data[[1, 2]];
+        assert!((a - b).abs() < 0.05, "{a} vs {b}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn gguf_quant_falls_back_to_f32_for_narrow_rows() {
+        // d_model 16 rows are not 256-multiples: k-quant export stays valid
+        // by keeping every tensor F32 (per-row quantization rule).
+        let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(3));
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_narrow_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "q6_k").unwrap();
+        let file = super::super::gguf::read_gguf(&fs::read(&path).unwrap()).unwrap();
+        assert!(file
+            .tensors
+            .iter()
+            .all(|t| t.ggml_type == GgmlType::F32));
         let _ = fs::remove_file(&path);
     }
 

@@ -514,6 +514,12 @@ fn dequant_mxfp4(data: &[u8], out: &mut Vec<f32>) {
     }
 }
 
+/// 6-bit packed (scale, min) pairs used by Q4_K/Q5_K super-blocks
+/// (shared with the k-quant encoders).
+pub(crate) fn scale_min_k4_pub(j: usize, scales: &[u8]) -> (u8, u8) {
+    scale_min_k4(j, scales)
+}
+
 /// 6-bit packed (scale, min) pairs used by Q4_K super-blocks.
 fn scale_min_k4(j: usize, scales: &[u8]) -> (u8, u8) {
     if j < 4 {
