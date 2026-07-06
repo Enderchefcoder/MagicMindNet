@@ -1,8 +1,9 @@
-"""Global array/tensor file interop: NumPy ``.npy``/``.npz`` and PyTorch ``.pt``.
+"""Global array/tensor file interop: NumPy, PyTorch, TensorFlow/Keras, GGUF.
 
-Every codec is implemented from scratch in the Rust core — ``numpy`` and
-``torch`` do **not** need to be installed. When they are, their arrays and
-tensors are accepted directly (anything with ``.tolist()`` works)::
+Every codec is implemented from scratch in the Rust core — ``numpy``,
+``torch``, ``tensorflow``, and ``h5py`` do **not** need to be installed. When
+they are, their arrays and tensors are accepted directly (anything with
+``.tolist()`` works)::
 
     import magicmindnet as ai
 
@@ -13,12 +14,24 @@ tensors are accepted directly (anything with ``.tolist()`` works)::
     arrays = ai.load_npz("weights.npz")  # {"w": [[1.0]], "b": [0.5]}
 
     ai.save_pt("model.pt", {"w": [[1.0]]})  # torch.load-compatible
-    tensors = ai.load_pt("model.pt")
+    tensors = ai.load_pt("model.pt")        # zip or legacy pre-1.6 format
+
+    weights = ai.load_h5("model.h5")        # HDF5 / Keras weights
+    weights = ai.load_keras("model.keras")  # Keras v3 archive
+
+    info = ai.gguf_info("model.gguf")       # metadata + tensor summaries
+    tok = ai.load_gguf_tokenizer("model.gguf")  # embedded SentencePiece vocab
 """
+
+import json
 
 from magicmindnet import _native
 
 __all__ = [
+    "gguf_info",
+    "load_gguf_tokenizer",
+    "load_h5",
+    "load_keras",
     "load_npy",
     "load_npz",
     "load_pt",
@@ -114,3 +127,30 @@ def save_pt(path, arrays):
 def load_pt(path):
     """Read a PyTorch ``.pt`` state dict into ``{name: nested lists}`` (no torch needed)."""
     return {name: _nest(shape, flat) for name, shape, flat in _native.read_pt(path)}
+
+
+def load_h5(path):
+    """Read every dataset in an HDF5 file into ``{path: nested lists}`` (no h5py needed)."""
+    return {name: _nest(shape, flat) for name, shape, flat in _native.read_h5(path)}
+
+
+def load_keras(path):
+    """Read Keras weights (``.keras`` archive, ``.weights.h5``, or ``.h5``)."""
+    return {name: _nest(shape, flat) for name, shape, flat in _native.read_keras(path)}
+
+
+def gguf_info(path):
+    """Inspect a GGUF file: version, metadata dict, and tensor summaries.
+
+    Header-only read — multi-gigabyte models are not loaded into memory.
+    """
+    return json.loads(_native.gguf_info_json(path))
+
+
+def load_gguf_tokenizer(path):
+    """Extract the SentencePiece vocabulary embedded in a GGUF model.
+
+    Returns a :class:`magicmindnet.UnigramEncoder` whose token ids match the
+    model's rows, so ``encode``/``decode`` line up with the GGUF weights.
+    """
+    return _native.load_gguf_tokenizer(path)

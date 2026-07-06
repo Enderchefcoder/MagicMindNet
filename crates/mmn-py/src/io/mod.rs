@@ -1,6 +1,7 @@
 use mmn_io::{
-    detect_checkpoint_kind, export_bin, export_classifier, export_diffusion, export_gguf,
-    export_hf_classifier_safetensors, export_hf_safetensors, export_npz, export_safetensors,
+    detect_checkpoint_kind, export_bin, export_classifier, export_diffusion,
+    export_gguf_with_tokenizer, export_hf_classifier_safetensors, export_hf_safetensors,
+    export_npz, export_safetensors,
     export_torch_pt, import_bin, import_classifier, import_diffusion, import_gguf,
     import_hf_classifier_safetensors, import_hf_safetensors, import_npz, import_safetensors,
     import_torch_pt, merge_classifiers, merge_diffusion, merge_models, quantize_classifier,
@@ -79,6 +80,29 @@ pub(crate) fn export_chatbot_to_path(
     bpe_encoder: Option<&PyBytePairEncoder>,
     unigram_encoder: Option<&PyUnigramEncoder>,
 ) -> PyResult<()> {
+    // GGUF embeds its vocabulary in-file (llama.cpp convention); no sidecars.
+    if let Some(quant) = match format {
+        "gguf" => Some("f32"),
+        "gguf-f16" | "gguf_f16" => Some("f16"),
+        "gguf-q8_0" | "gguf_q8_0" => Some("q8_0"),
+        "gguf-q4_0" | "gguf_q4_0" => Some("q4_0"),
+        _ => None,
+    } {
+        if bpe_encoder.is_some() {
+            return Err(PyValueError::new_err(
+                "GGUF embeds unigram vocabularies only; pass unigram_encoder= (or export BPE with safetensors sidecars)",
+            ));
+        }
+        return export_gguf_with_tokenizer(model, path, quant, unigram_encoder.map(|e| &e.inner))
+            .map_err(mmn_err_to_py);
+    }
+    if matches!(format, "bin" | "npz" | "numpy" | "pt" | "pytorch" | "torch")
+        && (bpe_encoder.is_some() || unigram_encoder.is_some())
+    {
+        return Err(PyValueError::new_err(
+            "bpe_encoder / unigram_encoder are only supported with safetensors or gguf export",
+        ));
+    }
     let (bpe_rel, uni_rel) = write_tokenizer_sidecars(path, bpe_encoder, unigram_encoder)?;
     let sidecars = TokenizerSidecarRefs {
         bpe: bpe_rel.as_deref(),
@@ -89,20 +113,11 @@ pub(crate) fn export_chatbot_to_path(
         "hf-safetensors" | "hf_safetensors" => {
             export_hf_safetensors(model, path, sidecars).map_err(mmn_err_to_py)
         }
-        "bin" => {
-            if bpe_encoder.is_some() || unigram_encoder.is_some() {
-                return Err(PyValueError::new_err(
-                    "bpe_encoder / unigram_encoder are only supported with safetensors export",
-                ));
-            }
-            export_bin(model, path).map_err(mmn_err_to_py)
-        }
-        "gguf" => export_gguf(model, path, "f32").map_err(mmn_err_to_py),
-        "gguf-q8_0" | "gguf_q8_0" => export_gguf(model, path, "q8_0").map_err(mmn_err_to_py),
+        "bin" => export_bin(model, path).map_err(mmn_err_to_py),
         "npz" | "numpy" => export_npz(model, path).map_err(mmn_err_to_py),
         "pt" | "pytorch" | "torch" => export_torch_pt(model, path).map_err(mmn_err_to_py),
         _ => Err(PyValueError::new_err(format!(
-            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, gguf-q8_0, npz, pt"
+            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, gguf-f16, gguf-q8_0, gguf-q4_0, npz, pt"
         ))),
     }
 }
@@ -116,7 +131,8 @@ pub(crate) fn import_chatbot_from_path(
         "safetensors" => import_safetensors(path, 0).map_err(mmn_err_to_py),
         "hf-safetensors" | "hf_safetensors" => import_hf_safetensors(path).map_err(mmn_err_to_py),
         "bin" => import_bin(path).map_err(mmn_err_to_py),
-        "gguf" | "gguf-q8_0" | "gguf_q8_0" => import_gguf(path).map_err(mmn_err_to_py),
+        "gguf" | "gguf-f16" | "gguf_f16" | "gguf-q8_0" | "gguf_q8_0" | "gguf-q4_0"
+        | "gguf_q4_0" => import_gguf(path).map_err(mmn_err_to_py),
         "npz" | "numpy" => import_npz(path).map_err(mmn_err_to_py),
         "pt" | "pytorch" | "torch" => import_torch_pt(path).map_err(mmn_err_to_py),
         _ => Err(PyValueError::new_err(format!(
@@ -357,6 +373,32 @@ pub fn write_npz(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
 #[pyfunction]
 pub fn read_pt(path: &str) -> PyResult<Vec<NamedArray>> {
     read_torch_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// GGUF file inspection: metadata + tensor summaries as a JSON string.
+#[pyfunction]
+pub fn gguf_info_json(path: &str) -> PyResult<String> {
+    let info = mmn_io::gguf_info_json(path).map_err(mmn_err_to_py)?;
+    Ok(info.to_string())
+}
+
+/// Extract the SentencePiece vocabulary embedded in a GGUF file.
+#[pyfunction]
+pub fn load_gguf_tokenizer(path: &str) -> PyResult<crate::tokenizer::PyUnigramEncoder> {
+    let inner = mmn_io::import_gguf_tokenizer(path).map_err(mmn_err_to_py)?;
+    Ok(crate::tokenizer::PyUnigramEncoder { inner })
+}
+
+/// Read every dataset in an HDF5 file as `[(path, shape, values), ...]`.
+#[pyfunction]
+pub fn read_h5(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_h5_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read weights from a Keras `.keras` / `.weights.h5` / `.h5` file.
+#[pyfunction]
+pub fn read_keras(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_keras_arrays(path).map_err(mmn_err_to_py)
 }
 
 /// Write named arrays as a `torch.load`-compatible `.pt` state dict.
