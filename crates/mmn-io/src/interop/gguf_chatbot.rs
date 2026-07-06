@@ -305,6 +305,8 @@ pub fn export_gguf_with_tokenizer(
         "q4_1" | "Q4_1" => GgmlType::Q4_1,
         "q5_0" | "Q5_0" => GgmlType::Q5_0,
         "q5_1" | "Q5_1" => GgmlType::Q5_1,
+        "q2_k" | "Q2_K" => GgmlType::Q2K,
+        "q3_k" | "Q3_K" => GgmlType::Q3K,
         "q4_k" | "Q4_K" => GgmlType::Q4K,
         "q5_k" | "Q5_K" => GgmlType::Q5K,
         "q6_k" | "Q6_K" => GgmlType::Q6K,

@@ -8,7 +8,9 @@ use super::gguf_quant::{
     dequantize, encode_f16, quantize_mxfp4, quantize_q4_0, quantize_q4_1, quantize_q5_0,
     quantize_q5_1, quantize_q8_0, quantize_tq1_0, quantize_tq2_0, GgmlType,
 };
-use super::gguf_quant_k_encode::{quantize_q4_k, quantize_q5_k, quantize_q6_k};
+use super::gguf_quant_k_encode::{
+    quantize_q2_k, quantize_q3_k, quantize_q4_k, quantize_q5_k, quantize_q6_k, quantize_q8_k,
+};
 use mmn_core::MmnError;
 use std::collections::HashMap;
 
@@ -402,11 +404,9 @@ pub fn write_gguf(
         out.extend_from_slice(&value.type_id().to_le_bytes());
         write_value(&mut out, value);
     }
-    // Encode tensor payloads first to learn offsets.
-    let mut payloads = Vec::with_capacity(tensors.len());
-    let mut offset = 0usize;
-    let mut offsets = Vec::with_capacity(tensors.len());
-    for t in tensors {
+    // Encode tensor payloads (in parallel — quantization searches dominate),
+    // then lay out aligned offsets.
+    let encode_one = |t: &GgufWriteTensor<'_>| -> Result<Vec<u8>, MmnError> {
         let numel: usize = t.shape.iter().product();
         if numel != t.values.len() {
             return Err(err(format!(
@@ -416,33 +416,61 @@ pub fn write_gguf(
                 t.values.len()
             )));
         }
-        let payload = match t.ggml_type {
-            GgmlType::F32 => t
+        match t.ggml_type {
+            GgmlType::F32 => Ok(t
                 .values
                 .iter()
                 .flat_map(|v| v.to_le_bytes())
-                .collect::<Vec<u8>>(),
-            GgmlType::F16 => encode_f16(t.values),
-            GgmlType::Q8_0 => quantize_q8_0(t.values)?,
-            GgmlType::Q4_0 => quantize_q4_0(t.values)?,
-            GgmlType::Q4_1 => quantize_q4_1(t.values)?,
-            GgmlType::Q5_0 => quantize_q5_0(t.values)?,
-            GgmlType::Q5_1 => quantize_q5_1(t.values)?,
-            GgmlType::Tq1_0 => quantize_tq1_0(t.values)?,
-            GgmlType::Tq2_0 => quantize_tq2_0(t.values)?,
-            GgmlType::Mxfp4 => quantize_mxfp4(t.values)?,
-            GgmlType::Q4K => quantize_q4_k(t.values)?,
-            GgmlType::Q5K => quantize_q5_k(t.values)?,
-            GgmlType::Q6K => quantize_q6_k(t.values)?,
-            other => {
-                return Err(err(format!(
-                    "GGUF writer encodes F32/F16, Q4_0/Q4_1/Q5_0/Q5_1/Q8_0, Q4_K/Q5_K/Q6_K, or TQ2_0, not {other:?}"
-                )));
-            }
-        };
+                .collect::<Vec<u8>>()),
+            GgmlType::F16 => Ok(encode_f16(t.values)),
+            GgmlType::Q8_0 => quantize_q8_0(t.values),
+            GgmlType::Q4_0 => quantize_q4_0(t.values),
+            GgmlType::Q4_1 => quantize_q4_1(t.values),
+            GgmlType::Q5_0 => quantize_q5_0(t.values),
+            GgmlType::Q5_1 => quantize_q5_1(t.values),
+            GgmlType::Tq1_0 => quantize_tq1_0(t.values),
+            GgmlType::Tq2_0 => quantize_tq2_0(t.values),
+            GgmlType::Mxfp4 => quantize_mxfp4(t.values),
+            GgmlType::Q2K => quantize_q2_k(t.values),
+            GgmlType::Q3K => quantize_q3_k(t.values),
+            GgmlType::Q4K => quantize_q4_k(t.values),
+            GgmlType::Q5K => quantize_q5_k(t.values),
+            GgmlType::Q6K => quantize_q6_k(t.values),
+            GgmlType::Q8K => quantize_q8_k(t.values),
+            other => Err(err(format!(
+                "GGUF writer encodes F32/F16, Q4_0..Q8_0, Q2_K..Q8_K, TQ1_0/TQ2_0, or MXFP4, not {other:?}"
+            ))),
+        }
+    };
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(tensors.len().max(1));
+    let payloads: Vec<Vec<u8>> = if workers <= 1 || tensors.len() <= 1 {
+        tensors.iter().map(encode_one).collect::<Result<_, _>>()?
+    } else {
+        let chunk_size = tensors.len().div_ceil(workers);
+        let results: Vec<Result<Vec<Vec<u8>>, MmnError>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = tensors
+                .chunks(chunk_size)
+                .map(|group| scope.spawn(move || group.iter().map(encode_one).collect()))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("gguf encode worker panicked"))
+                .collect()
+        });
+        let mut all = Vec::with_capacity(tensors.len());
+        for group in results {
+            all.extend(group?);
+        }
+        all
+    };
+    let mut offset = 0usize;
+    let mut offsets = Vec::with_capacity(tensors.len());
+    for payload in &payloads {
         offsets.push(offset);
         offset += payload.len().div_ceil(alignment) * alignment;
-        payloads.push(payload);
     }
     for (t, tensor_offset) in tensors.iter().zip(&offsets) {
         write_string(&mut out, &t.name);

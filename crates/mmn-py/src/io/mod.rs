@@ -89,6 +89,8 @@ pub(crate) fn export_chatbot_to_path(
         "gguf-q4_1" | "gguf_q4_1" => Some("q4_1"),
         "gguf-q5_0" | "gguf_q5_0" => Some("q5_0"),
         "gguf-q5_1" | "gguf_q5_1" => Some("q5_1"),
+        "gguf-q2_k" | "gguf_q2_k" => Some("q2_k"),
+        "gguf-q3_k" | "gguf_q3_k" => Some("q3_k"),
         "gguf-q4_k" | "gguf_q4_k" => Some("q4_k"),
         "gguf-q5_k" | "gguf_q5_k" => Some("q5_k"),
         "gguf-q6_k" | "gguf_q6_k" => Some("q6_k"),
