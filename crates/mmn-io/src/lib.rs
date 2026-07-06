@@ -42,7 +42,8 @@ pub use interop::arrays_auto::{
     write_gguf_arrays, ArrayFormat,
 };
 pub use interop::ggml_legacy::{
-    is_ggml_legacy_bytes, read_ggml_legacy, read_ggml_legacy_bytes, LegacyGgmlContainer,
+    import_ggml_legacy_chatbot, import_ggml_legacy_chatbot_bytes, is_ggml_legacy_bytes,
+    read_ggml_legacy, read_ggml_legacy_bytes, LegacyGgmlContainer,
     LegacyGgmlFile,
 };
 pub use interop::tflite::{is_tflite_bytes, read_tflite_arrays, read_tflite_arrays_bytes};

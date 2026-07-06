@@ -338,6 +338,10 @@ pub fn load_checkpoint(py: Python<'_>, path: &str) -> PyResult<PyObject> {
             let inner = mmn_io::import_sharded(path).map_err(mmn_err_to_py)?;
             Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
         }
+        CheckpointKind::ChatbotGgmlLegacy => {
+            let inner = mmn_io::import_ggml_legacy_chatbot(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
         CheckpointKind::Classifier => {
             let inner = import_classifier(path).map_err(mmn_err_to_py)?;
             Ok(PyClassifier { inner }.into_pyobject(py)?.into_any().unbind())

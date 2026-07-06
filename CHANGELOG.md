@@ -16,8 +16,11 @@
   dynamic-range int8) and a committed converter fixture
 - **TorchScript archives**: `torch.jit.save` zips (`constants.pkl` tuple + shared
   `data/` storages) read through the existing pickle VM as `constants.N` arrays
+- **Legacy llama models load as Chatbots**: `ai.load("model.ggjt")` adapts
+  `tok_embeddings` / `layers.N.attention.wq` / SwiGLU `w1/w2/w3` / RMSNorm names
+  through the HF fusion pipeline and generates
 - `ai.load_arrays` / `detect_arrays_format` detect all of the above by content
-- Tests: +14 Rust and +9 pytest (`test_interop_tflite_ggml_legacy_py`)
+- Tests: +16 Rust and +10 pytest (`test_interop_tflite_ggml_legacy_py`) — totals 540 / 964
 
 ### Added (interop wave 9: default-format fast path, block-parallel GGUF writes, safetensors arrays, Flax)
 - **5–6x faster default checkpoint format**: the `mmn-safetensors-v1` /

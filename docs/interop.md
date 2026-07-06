@@ -312,7 +312,13 @@ reads alongside v2/v3:
 ```python
 old = ai.load_ggml_legacy("model.ggjt")
 old["container"], old["hparams"], old["vocab"], old["tensors"]
+
+bot = ai.load("model.ggjt")   # legacy llama models adapt to Chatbot and chat
 ```
+
+`ai.load()` adapts the legacy llama tensor names (`tok_embeddings`,
+`layers.N.attention.wq`, SwiGLU `w1/w2/w3`, RMSNorm gammas) through the
+same fusion pipeline as HF imports, so pre-GGUF models load and generate.
 
 ## Universal array IO
 

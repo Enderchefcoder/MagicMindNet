@@ -280,7 +280,7 @@ def load_ggml_legacy(path):
     names = ["n_vocab", "n_embd", "n_mult", "n_head", "n_layer", "n_rot", "ftype"]
     return {
         "container": container,
-        "hparams": dict(zip(names, hparams)),
+        "hparams": dict(zip(names, hparams, strict=True)),
         "vocab": [(bytes(token), score) for token, score in vocab],
         "tensors": {name: _nest(shape, flat) for name, shape, flat in arrays},
     }

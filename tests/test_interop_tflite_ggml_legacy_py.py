@@ -157,6 +157,44 @@ def test_legacy_bad_version_errors(tmp_path):
         ai.load_ggml_legacy(str(path))
 
 
+def test_legacy_llama_model_loads_as_chatbot(tmp_path):
+    vocab, d, ffn = 16, 8, 16
+    out = bytearray(struct.pack("<I", MAGIC["ggjt"]))
+    out += struct.pack("<I", 3)
+    out += struct.pack("<7i", vocab, d, 1, 2, 1, 4, 0)
+    for i in range(vocab):
+        token = f"tok{i}".encode()
+        out += struct.pack("<I", len(token)) + token + struct.pack("<f", -float(i))
+    tensors = [
+        ("tok_embeddings.weight", [d, vocab], np.full(d * vocab, 0.5, np.float32)),
+        ("output.weight", [d, vocab], np.full(d * vocab, 0.25, np.float32)),
+        ("layers.0.attention.wq.weight", [d, d], np.full(d * d, 0.1, np.float32)),
+        ("layers.0.attention.wk.weight", [d, d], np.full(d * d, 0.1, np.float32)),
+        ("layers.0.attention.wv.weight", [d, d], np.full(d * d, 0.1, np.float32)),
+        ("layers.0.attention.wo.weight", [d, d], np.full(d * d, 0.1, np.float32)),
+        ("layers.0.feed_forward.w1.weight", [d, ffn], np.full(d * ffn, 0.2, np.float32)),
+        ("layers.0.feed_forward.w2.weight", [ffn, d], np.full(d * ffn, 0.3, np.float32)),
+        ("layers.0.feed_forward.w3.weight", [d, ffn], np.full(d * ffn, 0.4, np.float32)),
+        ("layers.0.attention_norm.weight", [d], np.ones(d, np.float32)),
+        ("layers.0.ffn_norm.weight", [d], np.ones(d, np.float32)),
+    ]
+    for name, ne, values in tensors:
+        out += struct.pack("<3I", len(ne), len(name), 0)
+        for dim in ne:
+            out += struct.pack("<I", dim)
+        out += name.encode()
+        out += b"\x00" * (-len(out) % 32)
+        out += values.tobytes()
+    path = tmp_path / "tiny.ggjt"
+    path.write_bytes(bytes(out))
+    bot = ai.load(str(path))
+    assert bot.vocab_size == vocab
+    assert bot.d_model == d
+    assert bot.n_layer == 1
+    reply = bot.chat("hello")
+    assert isinstance(reply, str)
+
+
 def test_gguf_v1_file_loads(tmp_path):
     # Hand-built GGUF v1: u32 counts/lengths/dims (oldest GGUF revision).
     out = bytearray(b"GGUF")

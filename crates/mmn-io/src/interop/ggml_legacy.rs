@@ -12,7 +12,10 @@
 use super::gguf_quant::{dequantize, GgmlType};
 use super::NamedArray;
 use half::f16;
-use mmn_core::MmnError;
+use mmn_core::{MmnError, Tensor};
+use mmn_models::Chatbot;
+use ndarray::{ArrayD, IxDyn};
+use std::collections::HashMap;
 use std::fs;
 
 const MAGIC_GGML: u32 = 0x6767_6d6c;
@@ -276,12 +279,90 @@ pub fn read_ggml_legacy(path: &str) -> Result<LegacyGgmlFile, MmnError> {
     read_ggml_legacy_bytes(&bytes)
 }
 
+/// Map a legacy llama.cpp tensor name to the mmn checkpoint key.
+fn legacy_name_to_mmn(name: &str) -> Option<String> {
+    match name {
+        "tok_embeddings.weight" => return Some("embed".into()),
+        "output.weight" => return Some("lm_head".into()),
+        // Final norm has no mmn counterpart (per-block norms only).
+        "norm.weight" => return None,
+        _ => {}
+    }
+    let rest = name.strip_prefix("layers.")?;
+    let (idx, suffix) = rest.split_once('.')?;
+    let i: usize = idx.parse().ok()?;
+    let mmn_suffix = match suffix {
+        "attention.wq.weight" => "attn.q",
+        "attention.wk.weight" => "attn.k",
+        "attention.wv.weight" => "attn.v",
+        "attention.wo.weight" => "attn.out",
+        "feed_forward.w1.weight" => "ffn",     // SwiGLU gate
+        "feed_forward.w2.weight" => "ffn2",    // down
+        "feed_forward.w3.weight" => "ffn.up",  // up (fused with gate on import)
+        "attention_norm.weight" => "ln1.gamma",
+        "ffn_norm.weight" => "ln2.gamma",
+        _ => return None,
+    };
+    Some(format!("blocks.{i}.{mmn_suffix}"))
+}
+
+/// Import a legacy llama.cpp model file as a `Chatbot` (embed/lm_head,
+/// per-block attention + SwiGLU FFN, RMSNorm gammas; hparams give the
+/// architecture meta).
+pub fn import_ggml_legacy_chatbot_bytes(bytes: &[u8]) -> Result<Chatbot, MmnError> {
+    let file = read_ggml_legacy_bytes(bytes)?;
+    let mut ffn_dim: Option<usize> = None;
+    let mut tensors: HashMap<String, Tensor> = HashMap::new();
+    for (name, shape, values) in file.arrays {
+        let Some(mmn_key) = legacy_name_to_mmn(&name) else {
+            continue;
+        };
+        if mmn_key.ends_with(".ffn") && shape.len() == 2 {
+            ffn_dim = Some(shape[0]);
+        }
+        let arr = ArrayD::from_shape_vec(IxDyn(&shape), values)
+            .map_err(|e| err(format!("legacy tensor {name}: {e}")))?;
+        tensors.insert(mmn_key, Tensor::from_array(arr, true));
+    }
+    if tensors.is_empty() {
+        return Err(err(
+            "legacy ggml file contains no recognizable llama tensors (expected tok_embeddings.weight, layers.N.attention.wq.weight, ...)",
+        ));
+    }
+    let [n_vocab, n_embd, _, n_head, n_layer, ..] = file.hparams;
+    let mut meta = serde_json::json!({
+        "vocab_size": n_vocab.max(0),
+        "n_layer": n_layer.max(0),
+        "d_model": n_embd.max(0),
+        "num_attention_heads": n_head.max(1),
+        "rms_norm": true,
+    });
+    if let Some(ffn_dim) = ffn_dim {
+        meta["ffn_dim"] = serde_json::json!(ffn_dim);
+    }
+    crate::hf_safetensors::chatbot_from_external_tensors(tensors, meta)
+}
+
+/// Import a legacy llama.cpp model from disk as a `Chatbot`.
+pub fn import_ggml_legacy_chatbot(path: &str) -> Result<Chatbot, MmnError> {
+    let bytes = fs::read(path).map_err(|e| err(format!("cannot read {path}: {e}")))?;
+    import_ggml_legacy_chatbot_bytes(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Build a legacy file per the spec (independent of the reader).
     fn build(container: LegacyGgmlContainer, tensors: &[(&str, Vec<usize>, u32, Vec<u8>)]) -> Vec<u8> {
+        build_with(container, [2, 8, 1, 1, 1, 2, 0], tensors)
+    }
+
+    fn build_with(
+        container: LegacyGgmlContainer,
+        hparams: [i32; 7],
+        tensors: &[(&str, Vec<usize>, u32, Vec<u8>)],
+    ) -> Vec<u8> {
         let mut b: Vec<u8> = Vec::new();
         match container {
             LegacyGgmlContainer::Ggml => b.extend_from_slice(&MAGIC_GGML.to_le_bytes()),
@@ -294,13 +375,19 @@ mod tests {
                 b.extend_from_slice(&v.to_le_bytes());
             }
         }
-        // hparams: n_vocab=2, n_embd=8, n_mult=1, n_head=1, n_layer=1, n_rot=2, ftype=0.
-        for h in [2i32, 8, 1, 1, 1, 2, 0] {
+        for h in hparams {
             b.extend_from_slice(&h.to_le_bytes());
         }
-        for token in [b"<s>".as_slice(), b"hi".as_slice()] {
+        // n_vocab (hparams[0]) vocab entries; first two get fixed names so
+        // reader tests can assert on them.
+        for i in 0..hparams[0].max(0) as usize {
+            let token: Vec<u8> = match i {
+                0 => b"<s>".to_vec(),
+                1 => b"hi".to_vec(),
+                _ => format!("tok{i}").into_bytes(),
+            };
             b.extend_from_slice(&(token.len() as u32).to_le_bytes());
-            b.extend_from_slice(token);
+            b.extend_from_slice(&token);
             if container.has_vocab_scores() {
                 b.extend_from_slice(&(-1.5f32).to_le_bytes());
             }
@@ -420,6 +507,60 @@ mod tests {
         let values = &file.arrays[0].2;
         assert_eq!(values[0], -2.0);
         assert_eq!(values[1], 1.75);
+    }
+
+    /// A full legacy llama model imports as a Chatbot: SwiGLU gate/up fuse,
+    /// RMSNorm gammas land in ln1/ln2, hparams give the architecture.
+    #[test]
+    fn legacy_llama_imports_as_chatbot() {
+        let vocab = 16usize;
+        let d = 8usize;
+        let ffn = 16usize;
+        let f32s = |n: usize, v: f32| -> Vec<u8> {
+            std::iter::repeat_n(v, n).flat_map(f32::to_le_bytes).collect()
+        };
+        let tensors: Vec<(&str, Vec<usize>, u32, Vec<u8>)> = vec![
+            // ne is GGML order (fastest first): [d, vocab] row-major -> ne [d, vocab].
+            ("tok_embeddings.weight", vec![d, vocab], 0, f32s(d * vocab, 0.5)),
+            ("output.weight", vec![d, vocab], 0, f32s(d * vocab, 0.25)),
+            ("norm.weight", vec![d], 0, f32s(d, 1.0)),
+            ("layers.0.attention.wq.weight", vec![d, d], 0, f32s(d * d, 0.1)),
+            ("layers.0.attention.wk.weight", vec![d, d], 0, f32s(d * d, 0.1)),
+            ("layers.0.attention.wv.weight", vec![d, d], 0, f32s(d * d, 0.1)),
+            ("layers.0.attention.wo.weight", vec![d, d], 0, f32s(d * d, 0.1)),
+            ("layers.0.feed_forward.w1.weight", vec![d, ffn], 0, f32s(d * ffn, 0.2)),
+            ("layers.0.feed_forward.w2.weight", vec![ffn, d], 0, f32s(d * ffn, 0.3)),
+            ("layers.0.feed_forward.w3.weight", vec![d, ffn], 0, f32s(d * ffn, 0.4)),
+            ("layers.0.attention_norm.weight", vec![d], 0, f32s(d, 1.0)),
+            ("layers.0.ffn_norm.weight", vec![d], 0, f32s(d, 1.0)),
+        ];
+        let bytes = build_with(
+            LegacyGgmlContainer::Ggjt(3),
+            [vocab as i32, d as i32, 1, 2, 1, 4, 0],
+            &tensors,
+        );
+        let model = import_ggml_legacy_chatbot_bytes(&bytes).unwrap();
+        assert_eq!(model.shape.vocab_size, vocab);
+        assert_eq!(model.shape.d_model, d);
+        assert_eq!(model.shape.n_layer, 1);
+        assert_eq!(model.shape.n_heads, 2);
+        assert_eq!(model.shape.ffn_dim, ffn);
+        assert!((model.embed.weight.data[[0, 0]] - 0.5).abs() < 1e-6);
+        assert!((model.blocks[0].attn.q_proj.weight.data[[0, 0]] - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn legacy_without_llama_tensors_rejected_as_chatbot() {
+        let bytes = build(
+            LegacyGgmlContainer::Ggmf,
+            &[("something.weird", vec![2], 0, vec![0; 8])],
+        );
+        let e = import_ggml_legacy_chatbot_bytes(&bytes).err().unwrap();
+        assert!(
+            e.message().contains("no recognizable llama tensors"),
+            "got: {}",
+            e.message()
+        );
     }
 
     #[test]

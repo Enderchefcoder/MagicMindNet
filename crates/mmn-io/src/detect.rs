@@ -27,6 +27,8 @@ pub enum CheckpointKind {
     ChatbotTorch,
     /// Sharded HF checkpoint index (`*.index.json` + shard files).
     ChatbotSharded,
+    /// Legacy pre-GGUF llama.cpp container (GGML/GGMF/GGJT).
+    ChatbotGgmlLegacy,
 }
 
 impl CheckpointKind {
@@ -38,7 +40,8 @@ impl CheckpointKind {
             | CheckpointKind::ChatbotGguf
             | CheckpointKind::ChatbotNpz
             | CheckpointKind::ChatbotTorch
-            | CheckpointKind::ChatbotSharded => "Chatbot",
+            | CheckpointKind::ChatbotSharded
+            | CheckpointKind::ChatbotGgmlLegacy => "Chatbot",
             CheckpointKind::Classifier => "Classifier",
             CheckpointKind::Diffusion => "Diffusion",
         }
@@ -125,6 +128,9 @@ pub fn detect_checkpoint_kind(path: &str) -> Result<CheckpointKind, MmnError> {
     }
     if is_gguf_bytes(&bytes) {
         return Ok(CheckpointKind::ChatbotGguf);
+    }
+    if crate::interop::ggml_legacy::is_ggml_legacy_bytes(&bytes) {
+        return Ok(CheckpointKind::ChatbotGgmlLegacy);
     }
     if is_zip_bytes(&bytes) {
         return detect_zip_kind(&bytes);
