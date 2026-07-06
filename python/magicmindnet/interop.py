@@ -36,6 +36,7 @@ __all__ = [
     "load_npy",
     "load_npz",
     "load_pt",
+    "load_tf_checkpoint",
     "save_npy",
     "save_npz",
     "save_pt",
@@ -142,6 +143,18 @@ def load_h5(path):
 def load_keras(path):
     """Read Keras weights (``.keras`` archive, ``.weights.h5``, or ``.h5``)."""
     return {name: _nest(shape, flat) for name, shape, flat in _native.read_keras(path)}
+
+
+def load_tf_checkpoint(path):
+    """Read a TensorFlow checkpoint v2 (``ckpt`` prefix or ``ckpt.index`` path).
+
+    Parses the LevelDB-table index and raw data shards from scratch — no
+    TensorFlow installation needed. Returns ``{name: nested lists}`` with
+    ``/.ATTRIBUTES/VARIABLE_VALUE`` suffixes stripped.
+    """
+    return {
+        name: _nest(shape, flat) for name, shape, flat in _native.read_tf_checkpoint(path)
+    }
 
 
 def gguf_info(path):

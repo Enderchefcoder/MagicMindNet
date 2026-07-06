@@ -173,14 +173,52 @@ pub fn zip_entry_names(bytes: &[u8]) -> Result<Vec<String>, MmnError> {
 }
 
 /// Read and decompress every entry in the archive.
+///
+/// Entries decompress in parallel across available cores — compressed
+/// archives (`np.savez_compressed`, compressed `.pt`) inflate per-entry,
+/// which is embarrassingly parallel.
 pub fn read_zip(bytes: &[u8]) -> Result<Vec<ZipEntry>, MmnError> {
     let central = parse_central_directory(bytes)?;
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(central.len().max(1));
+    if workers <= 1 || central.len() <= 1 {
+        let mut out = Vec::with_capacity(central.len());
+        for entry in central.iter() {
+            out.push(ZipEntry {
+                name: entry.name.clone(),
+                data: entry_data(bytes, entry)?,
+            });
+        }
+        return Ok(out);
+    }
+    let chunk_size = central.len().div_ceil(workers);
+    let results: Vec<Result<Vec<ZipEntry>, MmnError>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = central
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|entry| {
+                            entry_data(bytes, entry).map(|data| ZipEntry {
+                                name: entry.name.clone(),
+                                data,
+                            })
+                        })
+                        .collect()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("zip decode worker panicked"))
+            .collect()
+    });
     let mut out = Vec::with_capacity(central.len());
-    for entry in central.iter() {
-        out.push(ZipEntry {
-            name: entry.name.clone(),
-            data: entry_data(bytes, entry)?,
-        });
+    for chunk in results {
+        out.extend(chunk?);
     }
     Ok(out)
 }
