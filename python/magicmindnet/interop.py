@@ -248,16 +248,19 @@ def save_safetensors(path, arrays):
     _native.write_safetensors(path, packed)
 
 
-def save_h5(path, arrays):
+def save_h5(path, arrays, compress=False):
     """Write named arrays as an HDF5 file (h5py/Keras-readable, no h5py needed).
 
     Names with ``/`` create nested groups (e.g. ``"dense/kernel"``).
+    ``compress=True`` stores each dataset as one gzip-compressed chunk (the
+    from-scratch DEFLATE compressor in a zlib wrapper), like
+    ``h5py.create_dataset(compression="gzip")``.
     """
     packed = []
     for name, array in arrays.items():
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
-    _native.write_h5(path, packed)
+    _native.write_h5(path, packed, compress)
 
 
 def save_tf_checkpoint(path, arrays):

@@ -284,6 +284,24 @@ TensorFlow/Keras interchange also goes through `np.savez` on
 Anything exposing `.tolist()` (numpy arrays, torch tensors) is accepted by
 `save_npy` / `save_npz` / `save_pt` directly.
 
+### Compressed HDF5 writing
+
+`ai.save_h5(path, arrays, compress=True)` stores each dataset as one
+gzip-compressed chunk — a raw-data-chunk B-tree (padded to libhdf5's fixed
+node allocation for the default indexed-storage K), a v1 filter pipeline
+carrying the deflate filter, and zlib-wrapped output from the from-scratch
+DEFLATE compressor. h5py reports `compression == "gzip"` and reads the
+values back exactly; a full circle (our gzip write → h5py read → h5py gzip
+write → our read) passes.
+
+### ZIP64
+
+Archives larger than 4 GiB — and any archive written with
+`zipfile`'s `force_zip64` — read correctly: the EOCD64 record + locator and
+per-entry `0x0001` extra fields resolve the 64-bit sizes, counts, and
+offsets that the classic headers mark with `0xFFFFFFFF`. This covers big
+`.npz` and torch `.pt` files.
+
 ## TFLite — flatbuffers without TensorFlow
 
 A from-scratch flatbuffer walker (root/vtable/table/vector/string wire

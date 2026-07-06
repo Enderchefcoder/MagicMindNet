@@ -31,6 +31,13 @@
   `Conv2d`/VAE/UNet constructors) — the stochastic loss-decrease training tests
   no longer flake on unlucky random inits (was intermittent under full-load
   `cargo test --workspace`)
+- **ZIP64 reading**: EOCD64 + locator + per-entry `0x0001` extra fields — `.npz`
+  and `.pt` archives over 4 GiB (and anything `zipfile` writes with
+  `force_zip64`) now load; cross-validated against CPython `zipfile`
+- **Gzip-compressed HDF5 writing** (`ai.save_h5(..., compress=True)`): one
+  deflate chunk per dataset behind a raw-data-chunk B-tree (padded to libhdf5's
+  fixed node allocation) + v1 filter pipeline; h5py reports `gzip` compression
+  and reads values exactly; full-circle h5py roundtrip passes
 
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp

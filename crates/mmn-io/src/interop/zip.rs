@@ -11,6 +11,9 @@ use mmn_core::MmnError;
 const LOCAL_HEADER_SIG: u32 = 0x0403_4b50;
 const CENTRAL_HEADER_SIG: u32 = 0x0201_4b50;
 const EOCD_SIG: u32 = 0x0605_4b50;
+const EOCD64_SIG: u32 = 0x0606_4b50;
+const EOCD64_LOCATOR_SIG: u32 = 0x0706_4b50;
+const ZIP64_EXTRA_ID: u16 = 0x0001;
 const METHOD_STORED: u16 = 0;
 const METHOD_DEFLATE: u16 = 8;
 
@@ -65,6 +68,13 @@ fn read_u32(bytes: &[u8], pos: usize) -> Result<u32, MmnError> {
         .ok_or_else(|| err("zip archive truncated"))
 }
 
+fn read_u64(bytes: &[u8], pos: usize) -> Result<u64, MmnError> {
+    bytes
+        .get(pos..pos + 8)
+        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+        .ok_or_else(|| err("zip archive truncated"))
+}
+
 fn find_eocd(bytes: &[u8]) -> Result<usize, MmnError> {
     // EOCD is at least 22 bytes and sits within the trailing 64 KiB + 22.
     if bytes.len() < 22 {
@@ -88,12 +98,78 @@ struct CentralEntry {
     local_offset: usize,
 }
 
+/// Resolve `0xFFFFFFFF` central-directory fields from the entry's ZIP64
+/// extra field (id 0x0001): u64 values appear in spec order — uncompressed
+/// size, compressed size, local header offset — but only for the fields
+/// that overflowed.
+fn apply_zip64_extra(
+    bytes: &[u8],
+    extra_start: usize,
+    extra_len: usize,
+    uncompressed_size: &mut usize,
+    compressed_size: &mut usize,
+    local_offset: &mut usize,
+) -> Result<(), MmnError> {
+    let mut pos = extra_start;
+    let end = extra_start + extra_len;
+    while pos + 4 <= end {
+        let id = read_u16(bytes, pos)?;
+        let size = read_u16(bytes, pos + 2)? as usize;
+        if id == ZIP64_EXTRA_ID {
+            let mut field = pos + 4;
+            let field_end = pos + 4 + size;
+            let mut take = |slot: &mut usize| -> Result<(), MmnError> {
+                if *slot == 0xFFFF_FFFF {
+                    if field + 8 > field_end {
+                        return Err(err("zip64 extra field truncated"));
+                    }
+                    *slot = read_u64(bytes, field)? as usize;
+                    field += 8;
+                }
+                Ok(())
+            };
+            take(uncompressed_size)?;
+            take(compressed_size)?;
+            take(local_offset)?;
+            return Ok(());
+        }
+        pos += 4 + size;
+    }
+    Ok(())
+}
+
+/// EOCD64: entry count + central directory offset for large archives.
+fn read_eocd64(bytes: &[u8], eocd: usize) -> Result<Option<(usize, usize)>, MmnError> {
+    // The 20-byte EOCD64 locator sits immediately before the EOCD.
+    let Some(locator) = eocd.checked_sub(20) else {
+        return Ok(None);
+    };
+    if read_u32(bytes, locator)? != EOCD64_LOCATOR_SIG {
+        return Ok(None);
+    }
+    let eocd64 = read_u64(bytes, locator + 8)? as usize;
+    if read_u32(bytes, eocd64)? != EOCD64_SIG {
+        return Err(err("zip64 end-of-central-directory signature mismatch"));
+    }
+    let entry_count = read_u64(bytes, eocd64 + 32)? as usize;
+    let cd_offset = read_u64(bytes, eocd64 + 48)? as usize;
+    Ok(Some((entry_count, cd_offset)))
+}
+
 fn parse_central_directory(bytes: &[u8]) -> Result<Vec<CentralEntry>, MmnError> {
     let eocd = find_eocd(bytes)?;
-    let entry_count = read_u16(bytes, eocd + 10)? as usize;
-    let cd_offset = read_u32(bytes, eocd + 16)? as usize;
-    if entry_count == 0xFFFF || cd_offset == 0xFFFF_FFFF {
-        return Err(err("zip64 archives are not supported (archive > 4 GiB)"));
+    let mut entry_count = read_u16(bytes, eocd + 10)? as usize;
+    let mut cd_offset = read_u32(bytes, eocd + 16)? as usize;
+    if let Some((count64, offset64)) = read_eocd64(bytes, eocd)? {
+        entry_count = count64;
+        cd_offset = offset64;
+    } else if entry_count == 0xFFFF || cd_offset == 0xFFFF_FFFF {
+        return Err(err(
+            "zip archive marks zip64 sizes but has no zip64 end-of-central-directory",
+        ));
+    }
+    if entry_count > bytes.len() {
+        return Err(err("zip central directory count unreasonable"));
     }
     let mut entries = Vec::with_capacity(entry_count);
     let mut pos = cd_offset;
@@ -103,16 +179,24 @@ fn parse_central_directory(bytes: &[u8]) -> Result<Vec<CentralEntry>, MmnError> 
         }
         let method = read_u16(bytes, pos + 10)?;
         let crc = read_u32(bytes, pos + 16)?;
-        let compressed_size = read_u32(bytes, pos + 20)? as usize;
-        let uncompressed_size = read_u32(bytes, pos + 24)? as usize;
+        let mut compressed_size = read_u32(bytes, pos + 20)? as usize;
+        let mut uncompressed_size = read_u32(bytes, pos + 24)? as usize;
         let name_len = read_u16(bytes, pos + 28)? as usize;
         let extra_len = read_u16(bytes, pos + 30)? as usize;
         let comment_len = read_u16(bytes, pos + 32)? as usize;
-        let local_offset = read_u32(bytes, pos + 42)? as usize;
+        let mut local_offset = read_u32(bytes, pos + 42)? as usize;
         let name_bytes = bytes
             .get(pos + 46..pos + 46 + name_len)
             .ok_or_else(|| err("zip central directory name truncated"))?;
         let name = String::from_utf8_lossy(name_bytes).into_owned();
+        apply_zip64_extra(
+            bytes,
+            pos + 46 + name_len,
+            extra_len,
+            &mut uncompressed_size,
+            &mut compressed_size,
+            &mut local_offset,
+        )?;
         entries.push(CentralEntry {
             name,
             method,
@@ -395,5 +479,101 @@ mod tests {
         assert!(is_zip_bytes(b"PK\x05\x06rest"));
         assert!(!is_zip_bytes(b"GGUF"));
         assert!(!is_zip_bytes(b"{"));
+    }
+
+    /// Hand-build a fully zip64 archive per APPNOTE: central entry with all
+    /// three fields deferred to the 0x0001 extra, EOCD64 + locator, and an
+    /// EOCD carrying only 0xFFFF/0xFFFFFFFF markers.
+    #[test]
+    fn zip64_archive_reads() {
+        let name = b"big.bin";
+        let payload = b"zip64 payload bytes";
+        let crc = crc32(payload);
+        let mut out: Vec<u8> = Vec::new();
+        // Local header (sizes deferred to a local zip64 extra).
+        out.extend_from_slice(&LOCAL_HEADER_SIG.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes()); // version needed: 4.5
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&METHOD_STORED.to_le_bytes());
+        out.extend_from_slice(&[0u8; 4]); // time/date
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&20u16.to_le_bytes()); // extra: 4 + 16
+        out.extend_from_slice(name);
+        out.extend_from_slice(&ZIP64_EXTRA_ID.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        out.extend_from_slice(payload);
+        // Central directory: sizes and offset all deferred.
+        let cd_start = out.len();
+        out.extend_from_slice(&CENTRAL_HEADER_SIG.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&METHOD_STORED.to_le_bytes());
+        out.extend_from_slice(&[0u8; 4]);
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // compressed
+        out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // uncompressed
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&28u16.to_le_bytes()); // extra: 4 + 24
+        out.extend_from_slice(&0u16.to_le_bytes()); // comment
+        out.extend_from_slice(&0u16.to_le_bytes()); // disk
+        out.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+        out.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+        out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // local offset
+        out.extend_from_slice(name);
+        out.extend_from_slice(&ZIP64_EXTRA_ID.to_le_bytes());
+        out.extend_from_slice(&24u16.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes()); // uncompressed
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes()); // compressed
+        out.extend_from_slice(&0u64.to_le_bytes()); // local header offset
+        let cd_size = out.len() - cd_start;
+        // EOCD64.
+        let eocd64_pos = out.len();
+        out.extend_from_slice(&EOCD64_SIG.to_le_bytes());
+        out.extend_from_slice(&44u64.to_le_bytes()); // record size
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&45u16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&1u64.to_le_bytes()); // entries this disk
+        out.extend_from_slice(&1u64.to_le_bytes()); // entries total
+        out.extend_from_slice(&(cd_size as u64).to_le_bytes());
+        out.extend_from_slice(&(cd_start as u64).to_le_bytes());
+        // EOCD64 locator.
+        out.extend_from_slice(&EOCD64_LOCATOR_SIG.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(eocd64_pos as u64).to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        // EOCD with overflow markers only.
+        out.extend_from_slice(&EOCD_SIG.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        out.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+
+        let entries = read_zip(&out).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "big.bin");
+        assert_eq!(entries[0].data, payload);
+        assert_eq!(zip_entry_names(&out).unwrap(), vec!["big.bin"]);
+    }
+
+    #[test]
+    fn zip64_markers_without_eocd64_rejected() {
+        let mut bytes = write_zip_stored(&[("a".to_string(), vec![1])]).unwrap();
+        // Corrupt the EOCD entry count to the zip64 marker with no EOCD64.
+        let eocd = bytes.len() - 22;
+        bytes[eocd + 10] = 0xFF;
+        bytes[eocd + 11] = 0xFF;
+        let e = read_zip(&bytes).unwrap_err();
+        assert!(e.message().contains("zip64"), "got: {}", e.message());
     }
 }

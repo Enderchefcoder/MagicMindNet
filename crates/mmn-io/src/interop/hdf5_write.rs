@@ -1,7 +1,10 @@
 //! From-scratch minimal HDF5 writer: superblock v0, symbol-table groups
 //! (B-tree v1 + local heap + SNOD), version-1 object headers, and contiguous
-//! F32 datasets — the layout `h5py`/libhdf5 read natively.
+//! or **chunked gzip-compressed** F32 datasets — layouts `h5py`/libhdf5
+//! read natively.
 
+use super::deflate::deflate;
+use super::hdf5::adler32;
 use mmn_core::MmnError;
 use std::collections::BTreeMap;
 
@@ -97,27 +100,115 @@ fn f32_datatype_body() -> Vec<u8> {
     body
 }
 
+fn dataspace_body(shape: &[usize]) -> Vec<u8> {
+    let mut dataspace = vec![1u8, shape.len() as u8, 0, 0, 0, 0, 0, 0];
+    for &d in shape {
+        dataspace.extend_from_slice(&(d as u64).to_le_bytes());
+    }
+    dataspace
+}
+
+/// Fill value v2: alloc time 2 (late), write time 2, defined 1, no data.
+fn fill_body() -> Vec<u8> {
+    vec![2u8, 2, 2, 1, 0, 0, 0, 0]
+}
+
 fn write_dataset(buf: &mut Vec<u8>, shape: &[usize], values: &[f32]) -> u64 {
     align8(buf);
     let data_addr = buf.len() as u64;
     for v in values {
         buf.extend_from_slice(&v.to_le_bytes());
     }
-    let mut dataspace = vec![1u8, shape.len() as u8, 0, 0, 0, 0, 0, 0];
-    for &d in shape {
-        dataspace.extend_from_slice(&(d as u64).to_le_bytes());
-    }
-    // Fill value v2: alloc time 2 (late), write time 2, defined 1, no data.
-    let fill = vec![2u8, 2, 2, 1, 0, 0, 0, 0];
     let mut layout = vec![3u8, 1]; // v3, contiguous
     layout.extend_from_slice(&data_addr.to_le_bytes());
     layout.extend_from_slice(&((values.len() * 4) as u64).to_le_bytes());
     write_object_header(
         buf,
         &[
-            (0x0001, dataspace),
+            (0x0001, dataspace_body(shape)),
             (0x0003, f32_datatype_body()),
-            (0x0005, fill),
+            (0x0005, fill_body()),
+            (0x0008, layout),
+        ],
+    )
+}
+
+/// zlib-wrap a deflate stream (2-byte header + deflate + big-endian Adler-32)
+/// — the HDF5 deflate filter's on-disk framing.
+fn zlib_compress(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x9C];
+    out.extend_from_slice(&deflate(data));
+    out.extend_from_slice(&adler32(data).to_be_bytes());
+    out
+}
+
+/// Chunked gzip-compressed dataset: one whole-dataset chunk behind a
+/// raw-data-chunk B-tree (v1, node type 1) plus a v1 filter pipeline
+/// carrying the deflate filter.
+fn write_dataset_chunked_gzip(buf: &mut Vec<u8>, shape: &[usize], values: &[f32]) -> u64 {
+    let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let compressed = zlib_compress(&raw);
+    align8(buf);
+    let chunk_addr = buf.len() as u64;
+    buf.extend_from_slice(&compressed);
+    // Chunk keys carry rank+1 offsets (trailing element-size dimension).
+    let rank = shape.len();
+    align8(buf);
+    let btree_addr = buf.len() as u64;
+    let btree_start = buf.len();
+    buf.extend_from_slice(b"TREE");
+    buf.push(1); // node type: raw data chunks
+    buf.push(0); // level: leaf
+    buf.extend_from_slice(&1u16.to_le_bytes()); // entries used
+    buf.extend_from_slice(&UNDEF.to_le_bytes()); // left sibling
+    buf.extend_from_slice(&UNDEF.to_le_bytes()); // right sibling
+    // Key 0: this chunk (at origin).
+    buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes()); // filter mask: all applied
+    for _ in 0..rank + 1 {
+        buf.extend_from_slice(&0u64.to_le_bytes());
+    }
+    // Child 0: chunk data address.
+    buf.extend_from_slice(&chunk_addr.to_le_bytes());
+    // Sentinel key: first offset past the end of the dataset.
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    for &d in shape {
+        buf.extend_from_slice(&(d as u64).to_le_bytes());
+    }
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    // libhdf5 reads chunk B-tree nodes at their full allocation for the
+    // superblock-default indexed-storage K (32): pad the node out.
+    const INDEXED_K: usize = 32;
+    let key_len = 8 + 8 * (rank + 1);
+    let node_alloc = 24 + (2 * INDEXED_K + 1) * key_len + 2 * INDEXED_K * 8;
+    let written = buf.len() - btree_start;
+    buf.extend(std::iter::repeat_n(0u8, node_alloc.saturating_sub(written)));
+    // Filter pipeline v1: deflate (id 1), level 4, one client value + pad.
+    let filters = vec![
+        1u8, 1, 0, 0, 0, 0, 0, 0, // version, nfilters, reserved
+        1, 0, // filter id: deflate
+        0, 0, // name length
+        0, 0, // flags
+        1, 0, // client values
+        4, 0, 0, 0, // level
+        0, 0, 0, 0, // pad to 8
+    ];
+    // Data layout v3, class 2 (chunked): dimensionality counts the trailing
+    // element-size entry.
+    let mut layout = vec![3u8, 2, (rank + 1) as u8];
+    layout.extend_from_slice(&btree_addr.to_le_bytes());
+    for &d in shape {
+        layout.extend_from_slice(&(d as u32).to_le_bytes());
+    }
+    layout.extend_from_slice(&4u32.to_le_bytes()); // element size
+    write_object_header(
+        buf,
+        &[
+            (0x0001, dataspace_body(shape)),
+            (0x0003, f32_datatype_body()),
+            (0x0005, fill_body()),
+            (0x000B, filters),
             (0x0008, layout),
         ],
     )
@@ -215,16 +306,21 @@ fn write_node(
     buf: &mut Vec<u8>,
     node: &Node,
     arrays: &[super::NamedArray],
+    compress: bool,
 ) -> u64 {
     match node {
         Node::Dataset(index) => {
             let (_, shape, values) = &arrays[*index];
-            write_dataset(buf, shape, values)
+            if compress && !values.is_empty() {
+                write_dataset_chunked_gzip(buf, shape, values)
+            } else {
+                write_dataset(buf, shape, values)
+            }
         }
         Node::Group(children) => {
             let resolved: Vec<(String, u64)> = children
                 .iter()
-                .map(|(name, child)| (name.clone(), write_node(buf, child, arrays)))
+                .map(|(name, child)| (name.clone(), write_node(buf, child, arrays, compress)))
                 .collect();
             write_group(buf, &resolved)
         }
@@ -233,6 +329,15 @@ fn write_node(
 
 /// Serialize named arrays into an HDF5 byte buffer (`h5py`-readable).
 pub fn write_h5_arrays_bytes(arrays: &[super::NamedArray]) -> Result<Vec<u8>, MmnError> {
+    write_h5_arrays_bytes_opts(arrays, false)
+}
+
+/// Serialize named arrays as HDF5, optionally storing every dataset as one
+/// gzip-compressed chunk (like `h5py.create_dataset(compression="gzip")`).
+pub fn write_h5_arrays_bytes_opts(
+    arrays: &[super::NamedArray],
+    compress: bool,
+) -> Result<Vec<u8>, MmnError> {
     if arrays.is_empty() {
         return Err(err("h5 writer needs at least one array"));
     }
@@ -250,7 +355,7 @@ pub fn write_h5_arrays_bytes(arrays: &[super::NamedArray]) -> Result<Vec<u8>, Mm
     let root = Node::Group(root);
     check_fanout(&root)?;
     let mut buf = vec![0u8; 96]; // superblock placeholder
-    let root_addr = write_node(&mut buf, &root, arrays);
+    let root_addr = write_node(&mut buf, &root, arrays, compress);
     let eof = buf.len() as u64;
     // Superblock v0.
     buf[..8].copy_from_slice(SIGNATURE);
@@ -275,6 +380,18 @@ pub fn write_h5_arrays(path: &str, arrays: &[super::NamedArray]) -> Result<(), M
     crate::checkpoint_util::write_file_create_parents(path, write_h5_arrays_bytes(arrays)?)
 }
 
+/// Write named arrays to an `.h5` file, optionally gzip-compressed.
+pub fn write_h5_arrays_opts(
+    path: &str,
+    arrays: &[super::NamedArray],
+    compress: bool,
+) -> Result<(), MmnError> {
+    crate::checkpoint_util::write_file_create_parents(
+        path,
+        write_h5_arrays_bytes_opts(arrays, compress)?,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::hdf5::read_h5_arrays_bytes;
@@ -297,6 +414,34 @@ mod tests {
         assert_eq!(w.2, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         let b = back.iter().find(|(n, _, _)| n == "layer1/bias").unwrap();
         assert_eq!(b.2, vec![-1.0, 1.0]);
+    }
+
+    #[test]
+    fn gzip_chunked_write_roundtrips_and_shrinks() {
+        // Large enough that compression outweighs the fixed ~2.6 KiB
+        // chunk-B-tree node allocation libhdf5 expects per dataset.
+        let arrays = vec![
+            (
+                "layer/kernel".to_string(),
+                vec![64, 128],
+                (0..64 * 128).map(|i| (i % 7) as f32).collect::<Vec<f32>>(),
+            ),
+            ("bias".to_string(), vec![4], vec![0.5, -0.5, 1.0, 0.0]),
+        ];
+        let plain = write_h5_arrays_bytes(&arrays).unwrap();
+        let packed = write_h5_arrays_bytes_opts(&arrays, true).unwrap();
+        assert!(
+            packed.len() < plain.len() / 2,
+            "gzip output should shrink repetitive data: {} vs {}",
+            packed.len(),
+            plain.len()
+        );
+        let back = read_h5_arrays_bytes(&packed).unwrap();
+        let kernel = back.iter().find(|(n, _, _)| n == "layer/kernel").unwrap();
+        assert_eq!(kernel.1, vec![64, 128]);
+        assert_eq!(kernel.2, arrays[0].2);
+        let bias = back.iter().find(|(n, _, _)| n == "bias").unwrap();
+        assert_eq!(bias.2, vec![0.5, -0.5, 1.0, 0.0]);
     }
 
     #[test]

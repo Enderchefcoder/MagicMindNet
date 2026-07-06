@@ -27,7 +27,7 @@ pub use interop::gguf_chatbot::{
 pub use interop::gguf_info::{gguf_info_json, import_gguf_bpe_tokenizer, import_gguf_tokenizer};
 pub use interop::gguf_quant::{dequantize as dequantize_ggml, GgmlType};
 pub use interop::hdf5::{read_h5_arrays, read_h5_arrays_bytes, read_keras_arrays};
-pub use interop::hdf5_write::write_h5_arrays;
+pub use interop::hdf5_write::{write_h5_arrays, write_h5_arrays_bytes_opts, write_h5_arrays_opts};
 pub use interop::deflate::deflate;
 pub use interop::inflate::inflate;
 pub use interop::npy::{decode_npy, encode_npy_f32, NpyArray};

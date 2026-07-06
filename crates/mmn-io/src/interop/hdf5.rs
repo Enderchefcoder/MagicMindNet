@@ -286,7 +286,7 @@ fn parse_filter_pipeline(bytes: &[u8], msg: &Message) -> Result<Vec<Filter>, Mmn
 }
 
 /// Adler-32 (RFC 1950) for zlib stream verification.
-fn adler32(data: &[u8]) -> u32 {
+pub(crate) fn adler32(data: &[u8]) -> u32 {
     const MOD: u32 = 65_521;
     let mut a: u32 = 1;
     let mut b: u32 = 0;
