@@ -116,10 +116,15 @@ def _nest(shape, flat):
     return nested
 
 
-def save_npy(path, array):
-    """Write one array (nested lists, numpy, or torch) as a ``.npy`` file."""
+def save_npy(path, array, dtype="f4"):
+    """Write one array (nested lists, numpy, or torch) as a ``.npy`` file.
+
+    ``dtype`` accepts numpy spellings (``"f2"``/``"float16"``, ``"f8"``,
+    ``"i4"``, ``"u1"``, ``"b1"``, ...); values convert element-wise, integer
+    conversions truncating like ``astype``.
+    """
     shape, flat = _flatten(array)
-    _native.write_npy(path, shape, flat)
+    _native.write_npy(path, shape, flat, dtype)
 
 
 def load_npy(path):
@@ -128,17 +133,18 @@ def load_npy(path):
     return _nest(shape, flat)
 
 
-def save_npz(path, arrays, compress=False):
+def save_npz(path, arrays, compress=False, dtype="f4"):
     """Write a dict of named arrays as an ``.npz`` archive (``numpy.load`` compatible).
 
     ``compress=True`` DEFLATE-compresses entries like ``np.savez_compressed``
-    (from-scratch compressor, no zlib).
+    (from-scratch compressor, no zlib). ``dtype`` selects the stored element
+    type (``"f2"``/``"f8"``/ints/``"b1"``; default ``"f4"``).
     """
     packed = []
     for name, array in arrays.items():
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
-    _native.write_npz(path, packed, compress)
+    _native.write_npz(path, packed, compress, dtype)
 
 
 def load_npz(path):
@@ -239,13 +245,17 @@ def load_safetensors(path):
     }
 
 
-def save_safetensors(path, arrays):
-    """Write named arrays as a ``.safetensors`` file (F32 tensors)."""
+def save_safetensors(path, arrays, dtype="f32"):
+    """Write named arrays as a ``.safetensors`` file.
+
+    ``dtype`` selects the stored precision: ``"f32"`` (default), ``"f16"``,
+    or ``"bf16"`` — the Hugging Face half-precision conventions.
+    """
     packed = []
     for name, array in arrays.items():
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
-    _native.write_safetensors(path, packed)
+    _native.write_safetensors(path, packed, dtype)
 
 
 def save_h5(path, arrays, compress=False):

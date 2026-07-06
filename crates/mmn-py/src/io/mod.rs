@@ -362,10 +362,12 @@ pub fn read_npy(path: &str) -> PyResult<(Vec<usize>, Vec<f32>)> {
     Ok((arr.shape, arr.data))
 }
 
-/// Write a NumPy `.npy` file from `(shape, flat f32 values)`.
+/// Write a NumPy `.npy` file from `(shape, flat f32 values)` in any
+/// supported dtype (values convert element-wise).
 #[pyfunction]
-pub fn write_npy(path: &str, shape: Vec<usize>, data: Vec<f32>) -> PyResult<()> {
-    let bytes = mmn_io::encode_npy_f32(&shape, &data).map_err(mmn_err_to_py)?;
+#[pyo3(signature = (path, shape, data, dtype = "f4"))]
+pub fn write_npy(path: &str, shape: Vec<usize>, data: Vec<f32>, dtype: &str) -> PyResult<()> {
+    let bytes = mmn_io::encode_npy(&shape, &data, dtype).map_err(mmn_err_to_py)?;
     if let Some(parent) = Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
@@ -384,9 +386,14 @@ pub fn read_npz(path: &str) -> PyResult<Vec<NamedArray>> {
 /// Write named arrays to an `.npz` archive readable by `numpy.load`
 /// (`compress=True` matches `np.savez_compressed`).
 #[pyfunction]
-#[pyo3(signature = (path, arrays, compress=false))]
-pub fn write_npz(path: &str, arrays: Vec<NamedArray>, compress: bool) -> PyResult<()> {
-    mmn_io::write_npz_arrays_opts(path, &arrays, compress).map_err(mmn_err_to_py)
+#[pyo3(signature = (path, arrays, compress=false, dtype="f4"))]
+pub fn write_npz(
+    path: &str,
+    arrays: Vec<NamedArray>,
+    compress: bool,
+    dtype: &str,
+) -> PyResult<()> {
+    mmn_io::write_npz_arrays_dtype(path, &arrays, compress, dtype).map_err(mmn_err_to_py)
 }
 
 /// Read every tensor in a PyTorch `.pt` state dict as `[(name, shape, values), ...]`.
@@ -650,10 +657,11 @@ pub fn write_flax(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
     mmn_io::write_flax_arrays(path, &arrays).map_err(mmn_err_to_py)
 }
 
-/// Write named f32 arrays as a `.safetensors` file.
+/// Write named arrays as a `.safetensors` file (F32/F16/BF16).
 #[pyfunction]
-pub fn write_safetensors(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
-    mmn_io::write_safetensors_arrays(path, &arrays).map_err(mmn_err_to_py)
+#[pyo3(signature = (path, arrays, dtype="f32"))]
+pub fn write_safetensors(path: &str, arrays: Vec<NamedArray>, dtype: &str) -> PyResult<()> {
+    mmn_io::write_safetensors_arrays_dtype(path, &arrays, dtype).map_err(mmn_err_to_py)
 }
 
 /// Write named arrays as an ONNX model (`onnx.load`-compatible).

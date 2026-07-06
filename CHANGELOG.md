@@ -38,6 +38,13 @@
   deflate chunk per dataset behind a raw-data-chunk B-tree (padded to libhdf5's
   fixed node allocation) + v1 filter pipeline; h5py reports `gzip` compression
   and reads values exactly; full-circle h5py roundtrip passes
+- **dtype-parameterized NumPy writes**: `ai.save_npy` / `ai.save_npz` accept
+  `dtype=` in numpy spellings (`f2`/`f4`/`f8`, `i1`-`i8`, `u1`-`u8`, `b1`) —
+  `numpy.load` reports the exact dtype; integer conversion truncates like
+  `astype`
+- **Half-precision safetensors writes**: `ai.save_safetensors(..., dtype="f16")`
+  / `"bf16"` (HF conventions); dtype verified by the official package, BF16
+  roundtrips through our reader
 
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp

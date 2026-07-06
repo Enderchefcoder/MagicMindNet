@@ -103,6 +103,25 @@ pub fn read_safetensors_arrays(path: &str) -> Result<Vec<NamedArray>, MmnError> 
 
 /// Serialize named `f32` arrays as a safetensors buffer.
 pub fn write_safetensors_arrays_bytes(arrays: &[NamedArray]) -> Result<Vec<u8>, MmnError> {
+    write_safetensors_arrays_bytes_dtype(arrays, "f32")
+}
+
+/// Serialize named arrays in F32, F16, or BF16 (the HF half-precision
+/// conventions); values convert element-wise from f32.
+pub fn write_safetensors_arrays_bytes_dtype(
+    arrays: &[NamedArray],
+    dtype: &str,
+) -> Result<Vec<u8>, MmnError> {
+    let st_dtype = match dtype {
+        "f32" | "F32" | "float32" => Dtype::F32,
+        "f16" | "F16" | "float16" => Dtype::F16,
+        "bf16" | "BF16" | "bfloat16" => Dtype::BF16,
+        other => {
+            return Err(err(format!(
+                "safetensors write dtype {other:?} not supported (f32/f16/bf16)"
+            )))
+        }
+    };
     let mut views = Vec::with_capacity(arrays.len());
     for (name, shape, values) in arrays {
         let numel: usize = shape.iter().product();
@@ -112,13 +131,24 @@ pub fn write_safetensors_arrays_bytes(arrays: &[NamedArray]) -> Result<Vec<u8>, 
                 values.len()
             )));
         }
-        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let bytes: Vec<u8> = match st_dtype {
+            Dtype::F32 => values.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            Dtype::F16 => values
+                .iter()
+                .flat_map(|&v| f16::from_f32(v).to_le_bytes())
+                .collect(),
+            Dtype::BF16 => values
+                .iter()
+                .flat_map(|&v| bf16::from_f32(v).to_le_bytes())
+                .collect(),
+            _ => unreachable!("dtype match above restricts variants"),
+        };
         views.push((name.clone(), shape.clone(), bytes));
     }
     let entries: std::collections::HashMap<String, TensorView<'_>> = views
         .iter()
         .map(|(name, shape, bytes)| {
-            TensorView::new(Dtype::F32, shape.clone(), bytes)
+            TensorView::new(st_dtype, shape.clone(), bytes)
                 .map(|view| (name.clone(), view))
                 .map_err(|e| err(e.to_string()))
         })
@@ -129,6 +159,16 @@ pub fn write_safetensors_arrays_bytes(arrays: &[NamedArray]) -> Result<Vec<u8>, 
 /// Write named `f32` arrays as a `.safetensors` file.
 pub fn write_safetensors_arrays(path: &str, arrays: &[NamedArray]) -> Result<(), MmnError> {
     let bytes = write_safetensors_arrays_bytes(arrays)?;
+    crate::checkpoint_util::write_file_create_parents(path, bytes)
+}
+
+/// Write named arrays as a `.safetensors` file in F32/F16/BF16.
+pub fn write_safetensors_arrays_dtype(
+    path: &str,
+    arrays: &[NamedArray],
+    dtype: &str,
+) -> Result<(), MmnError> {
+    let bytes = write_safetensors_arrays_bytes_dtype(arrays, dtype)?;
     crate::checkpoint_util::write_file_create_parents(path, bytes)
 }
 

@@ -30,14 +30,15 @@ pub use interop::hdf5::{read_h5_arrays, read_h5_arrays_bytes, read_keras_arrays}
 pub use interop::hdf5_write::{write_h5_arrays, write_h5_arrays_bytes_opts, write_h5_arrays_opts};
 pub use interop::deflate::deflate;
 pub use interop::inflate::inflate;
-pub use interop::npy::{decode_npy, encode_npy_f32, NpyArray};
+pub use interop::npy::{decode_npy, encode_npy, encode_npy_f32, NpyArray};
 pub use interop::pickle::{parse_pickle, parse_pickle_prefix, PickleValue, PickleWriter};
 pub use interop::sharded::{
     import_sharded, is_shard_index_bytes, read_sharded_arrays, write_sharded_safetensors,
 };
 pub use interop::tf_checkpoint::{read_tf_checkpoint_arrays, write_tf_checkpoint_arrays};
 pub use interop::npz_chatbot::{
-    export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_opts,
+    export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_dtype,
+    write_npz_arrays_opts,
 };
 pub use interop::arrays_auto::{
     detect_array_format, read_arrays_auto, read_gguf_arrays, read_gguf_arrays_bytes,
@@ -62,7 +63,8 @@ pub use interop::pickle_arrays::{
 };
 pub use interop::st_arrays::{
     read_safetensors_arrays, read_safetensors_arrays_bytes, write_safetensors_arrays,
-    write_safetensors_arrays_bytes,
+    write_safetensors_arrays_bytes, write_safetensors_arrays_bytes_dtype,
+    write_safetensors_arrays_dtype,
 };
 pub use interop::torch_pt::{
     export_torch_pt, import_torch_pt, read_torch_arrays, write_torch_arrays,

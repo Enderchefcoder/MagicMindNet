@@ -24,6 +24,57 @@ pub struct NpyArray {
 
 /// Encode an `f32` array as NumPy format 1.0 (`<f4`, C order).
 pub fn encode_npy_f32(shape: &[usize], data: &[f32]) -> Result<Vec<u8>, MmnError> {
+    encode_npy(shape, data, "f4")
+}
+
+/// Normalize a dtype spelling (`"f2"`, `"<f2"`, `"float16"`, ...) into the
+/// little-endian descr code this writer emits.
+fn normalize_descr(dtype: &str) -> Result<&'static str, MmnError> {
+    Ok(match dtype.trim_start_matches(['<', '|', '=']) {
+        "f2" | "float16" | "half" => "f2",
+        "f4" | "float32" | "float" => "f4",
+        "f8" | "float64" | "double" => "f8",
+        "i1" | "int8" => "i1",
+        "i2" | "int16" => "i2",
+        "i4" | "int32" => "i4",
+        "i8" | "int64" => "i8",
+        "u1" | "uint8" => "u1",
+        "u2" | "uint16" => "u2",
+        "u4" | "uint32" => "u4",
+        "u8" | "uint64" => "u8",
+        "b1" | "bool" => "b1",
+        other => {
+            return Err(err(format!(
+                "npy write dtype {other:?} not supported (f2/f4/f8, i1-i8, u1-u8, b1)"
+            )))
+        }
+    })
+}
+
+/// Serialize one `f32` element as the target dtype (little-endian; integer
+/// conversions truncate toward zero and saturate, matching `astype`).
+fn encode_element(code: &str, v: f32, out: &mut Vec<u8>) {
+    match code {
+        "f2" => out.extend_from_slice(&f16::from_f32(v).to_le_bytes()),
+        "f4" => out.extend_from_slice(&v.to_le_bytes()),
+        "f8" => out.extend_from_slice(&(v as f64).to_le_bytes()),
+        "i1" => out.push(v as i8 as u8),
+        "i2" => out.extend_from_slice(&(v as i16).to_le_bytes()),
+        "i4" => out.extend_from_slice(&(v as i32).to_le_bytes()),
+        "i8" => out.extend_from_slice(&(v as i64).to_le_bytes()),
+        "u1" => out.push(v as u8),
+        "u2" => out.extend_from_slice(&(v as u16).to_le_bytes()),
+        "u4" => out.extend_from_slice(&(v as u32).to_le_bytes()),
+        "u8" => out.extend_from_slice(&(v as u64).to_le_bytes()),
+        "b1" => out.push(if v != 0.0 { 1 } else { 0 }),
+        _ => unreachable!("normalize_descr validates codes"),
+    }
+}
+
+/// Encode an `f32` array as NumPy format 1.0 in any supported dtype
+/// (values converted element-wise; C order).
+pub fn encode_npy(shape: &[usize], data: &[f32], dtype: &str) -> Result<Vec<u8>, MmnError> {
+    let code = normalize_descr(dtype)?;
     let numel: usize = shape.iter().product();
     if numel != data.len() {
         return Err(err(format!(
@@ -33,6 +84,12 @@ pub fn encode_npy_f32(shape: &[usize], data: &[f32]) -> Result<Vec<u8>, MmnError
             data.len()
         )));
     }
+    // bool serializes as '|b1' (byte order not applicable), numerics as '<'.
+    let descr = if code == "b1" {
+        "|b1".to_string()
+    } else {
+        format!("<{code}")
+    };
     let shape_repr = match shape.len() {
         0 => "()".to_string(),
         1 => format!("({},)", shape[0]),
@@ -46,7 +103,7 @@ pub fn encode_npy_f32(shape: &[usize], data: &[f32]) -> Result<Vec<u8>, MmnError
         ),
     };
     let header = format!(
-        "{{'descr': '<f4', 'fortran_order': False, 'shape': {shape_repr}, }}"
+        "{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape_repr}, }}"
     );
     // Total header (magic + version + len field + dict + padding) must be a
     // multiple of 64, terminated by '\n'.
@@ -57,7 +114,8 @@ pub fn encode_npy_f32(shape: &[usize], data: &[f32]) -> Result<Vec<u8>, MmnError
     if header_len > u16::MAX as usize {
         return Err(err("npy header too large for format 1.0"));
     }
-    let mut out = Vec::with_capacity(prefix_len + header_len + data.len() * 4);
+    let item = descr_item_size(&descr)?;
+    let mut out = Vec::with_capacity(prefix_len + header_len + data.len() * item);
     out.extend_from_slice(MAGIC);
     out.push(1); // major version
     out.push(0); // minor version
@@ -65,8 +123,8 @@ pub fn encode_npy_f32(shape: &[usize], data: &[f32]) -> Result<Vec<u8>, MmnError
     out.extend_from_slice(header.as_bytes());
     out.extend(std::iter::repeat_n(b' ', padding));
     out.push(b'\n');
-    for value in data {
-        out.extend_from_slice(&value.to_le_bytes());
+    for &value in data {
+        encode_element(code, value, &mut out);
     }
     Ok(out)
 }

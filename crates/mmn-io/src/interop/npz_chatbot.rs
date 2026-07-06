@@ -106,9 +106,20 @@ pub fn write_npz_arrays_opts(
     arrays: &[super::NamedArray],
     compress: bool,
 ) -> Result<(), MmnError> {
+    write_npz_arrays_dtype(path, arrays, compress, "f4")
+}
+
+/// Write arrays to an `.npz` archive in any supported dtype
+/// (`f2`/`f4`/`f8`, ints, `b1`), optionally DEFLATE-compressed.
+pub fn write_npz_arrays_dtype(
+    path: &str,
+    arrays: &[super::NamedArray],
+    compress: bool,
+    dtype: &str,
+) -> Result<(), MmnError> {
     let mut entries = Vec::with_capacity(arrays.len());
     for (name, shape, data) in arrays {
-        entries.push((format!("{name}.npy"), encode_npy_f32(shape, data)?));
+        entries.push((format!("{name}.npy"), super::npy::encode_npy(shape, data, dtype)?));
     }
     let bytes = super::zip::write_zip(&entries, compress)?;
     write_file_create_parents(path, bytes)

@@ -236,7 +236,12 @@ into floats and writes F32 tensors the official package loads:
 ```python
 arrays = ai.load_safetensors("model.safetensors")   # {name: nested lists}
 ai.save_safetensors("out.safetensors", {"w": [[1.0, 2.0]], "b": [0.5]})
+ai.save_safetensors("half.safetensors", arrays, dtype="f16")   # or "bf16"
 ```
+
+Writes default to F32 and accept `dtype="f16"` / `"bf16"` — the Hugging
+Face half-precision conventions (the official package reads the dtype
+back exactly).
 
 Cross-validated both directions against the official `safetensors` package
 (`safetensors.numpy` for all dtypes, `safetensors.torch` for BF16).
@@ -276,7 +281,14 @@ bot = ai.load("weights.npz")        # HF/MMN-named arrays adapt
 ai.save_npy("x.npy", [[1.0, 2.0]])  # generic arrays — numpy optional
 x = ai.load_npy("x.npy")
 ai.save_npz("many.npz", {"w": [[1.0]], "b": [0.5]})
+
+ai.save_npy("h.npy", values, dtype="f2")       # any dtype: f2/f4/f8,
+ai.save_npz("i.npz", arrays, dtype="i4")       # i1-i8, u1-u8, b1
 ```
+
+Writes accept a `dtype=` in numpy spellings (`"f2"`/`"float16"`, `"i4"`,
+`"b1"`, ...); values convert element-wise with `astype` truncation
+semantics. `numpy.load` reports the exact dtype back.
 
 TensorFlow/Keras interchange also goes through `np.savez` on
 `model.get_weights()`, or read a MagicMindNet `.npz` from TF with `np.load`.
