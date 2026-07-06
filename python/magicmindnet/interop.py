@@ -62,6 +62,7 @@ __all__ = [
     "save_onnx",
     "save_pickle_arrays",
     "save_pt",
+    "save_safetensors_sharded",
     "save_safetensors",
     "save_tf_checkpoint",
 ]
@@ -185,6 +186,23 @@ def save_onnx(path, arrays):
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
     _native.write_onnx(path, packed)
+
+
+def save_safetensors_sharded(path, arrays, max_shard_size=2 * 1024**3):
+    """Write a sharded safetensors checkpoint (HF ``weight_map`` convention).
+
+    ``path`` is the index file (e.g. ``model.safetensors.index.json``);
+    numbered ``model-XXXXX-of-XXXXX.safetensors`` shards land beside it,
+    each holding at most ``max_shard_size`` bytes of tensor data. Load the
+    result back with ``ai.load_arrays(path)`` (or ``ai.load`` for chatbot
+    checkpoints); each shard also opens with the official ``safetensors``
+    package.
+    """
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_safetensors_sharded(path, packed, int(max_shard_size))
 
 
 def load_flax(path):
@@ -392,6 +410,10 @@ def save_arrays(path, arrays, format=None):
     ``.hdf5``, ``.onnx``, ``.safetensors``, ``.msgpack``, ``.gguf``, ``.pkl``/
     ``.pickle``/``.pdparams``) or an explicit ``format=`` (also accepts
     ``"tf-checkpoint"``, ``"flax"``, and ``"pickle"``).
+
+    When every value is a ``numpy.ndarray``, data moves as raw bytes
+    (``tobytes``) instead of Python float lists — an order of magnitude
+    faster for multi-megabyte models.
     """
     inferred = format
     if inferred is None:
@@ -429,6 +451,19 @@ def save_arrays(path, arrays, format=None):
             f"save_arrays cannot infer a format for {path!r}; pass format= one of "
             + ", ".join(sorted(savers))
         )
+    if _np is not None and arrays and all(
+        isinstance(v, _np.ndarray) for v in arrays.values()
+    ):
+        packed = [
+            (
+                str(name),
+                list(arr.shape),
+                _np.ascontiguousarray(arr, dtype="<f4").tobytes(),
+            )
+            for name, arr in arrays.items()
+        ]
+        _native.write_arrays_bytes(path, inferred, packed)
+        return
     savers[inferred](path, arrays)
 
 

@@ -74,6 +74,8 @@ pub enum ArrayFormat {
     /// Generic pickle holding numpy arrays (PaddlePaddle `.pdparams`,
     /// sklearn model pickles, plain pickled ndarray dicts).
     Pickle,
+    /// Sharded checkpoint index (`*.index.json` + shard files).
+    ShardedIndex,
 }
 
 impl ArrayFormat {
@@ -93,6 +95,7 @@ impl ArrayFormat {
             ArrayFormat::TfCheckpoint => "tf-checkpoint",
             ArrayFormat::Tflite => "tflite",
             ArrayFormat::Pickle => "pickle",
+            ArrayFormat::ShardedIndex => "sharded",
         }
     }
 }
@@ -177,6 +180,9 @@ pub fn detect_array_format(path: &str, bytes: &[u8]) -> Result<ArrayFormat, MmnE
     if looks_like_flax_msgpack(bytes) {
         return Ok(ArrayFormat::FlaxMsgpack);
     }
+    if super::sharded::is_shard_index_bytes(bytes) {
+        return Ok(ArrayFormat::ShardedIndex);
+    }
     if path.ends_with(".index") || path.ends_with(".ckpt") {
         return Ok(ArrayFormat::TfCheckpoint);
     }
@@ -219,6 +225,7 @@ pub fn read_arrays_auto(path: &str) -> Result<(ArrayFormat, Vec<NamedArray>), Mm
         ArrayFormat::Safetensors => super::st_arrays::read_safetensors_arrays_bytes(&bytes)?,
         ArrayFormat::FlaxMsgpack => super::flax::read_flax_arrays_bytes(&bytes)?,
         ArrayFormat::Pickle => super::pickle_arrays::read_pickle_arrays_bytes(&bytes)?,
+        ArrayFormat::ShardedIndex => super::sharded::read_sharded_arrays(path)?,
         ArrayFormat::Onnx => super::onnx::read_onnx_arrays_bytes(&bytes)?,
         ArrayFormat::TfCheckpoint => super::tf_checkpoint::read_tf_checkpoint_arrays(path)?,
     };

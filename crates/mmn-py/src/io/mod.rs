@@ -523,6 +523,62 @@ pub fn read_arrays_auto(path: &str) -> PyResult<(String, Vec<NamedArray>)> {
 /// One tensor as `(name, shape, little-endian f32 bytes)`.
 type NamedByteArray = (String, Vec<usize>, Py<pyo3::types::PyBytes>);
 
+/// Write named arrays given as little-endian f32 bytes (the numpy save
+/// fast path: `ndarray.tobytes()` instead of building float lists).
+#[pyfunction]
+pub fn write_arrays_bytes(
+    path: &str,
+    format: &str,
+    entries: Vec<(String, Vec<usize>, Vec<u8>)>,
+) -> PyResult<()> {
+    let mut arrays: Vec<NamedArray> = Vec::with_capacity(entries.len());
+    for (name, shape, bytes) in entries {
+        if !bytes.len().is_multiple_of(4) {
+            return Err(PyValueError::new_err(format!(
+                "array {name}: byte length {} is not a multiple of 4 (expected f32 data)",
+                bytes.len()
+            )));
+        }
+        let values: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let numel: usize = shape.iter().product();
+        if numel != values.len() {
+            return Err(PyValueError::new_err(format!(
+                "array {name}: shape {shape:?} needs {numel} values, got {}",
+                values.len()
+            )));
+        }
+        arrays.push((name, shape, values));
+    }
+    match format {
+        "npz" => mmn_io::write_npz_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "pt" => {
+            let bytes = write_torch_arrays(&arrays, None).map_err(mmn_err_to_py)?;
+            if let Some(parent) = Path::new(path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                }
+            }
+            std::fs::write(path, bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+        }
+        "h5" => mmn_io::write_h5_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "onnx" => mmn_io::write_onnx_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "safetensors" => mmn_io::write_safetensors_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "flax" => mmn_io::write_flax_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "gguf" => mmn_io::write_gguf_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "tf-checkpoint" => {
+            mmn_io::write_tf_checkpoint_arrays(path, &arrays).map_err(mmn_err_to_py)
+        }
+        "pickle" => mmn_io::write_pickle_arrays(path, &arrays).map_err(mmn_err_to_py),
+        other => Err(PyValueError::new_err(format!(
+            "write_arrays_bytes: unknown format {other:?}"
+        ))),
+    }
+}
+
 /// Like `read_arrays_auto` but values come back as little-endian f32 bytes
 /// (the numpy fast path: `np.frombuffer` instead of building float lists).
 #[pyfunction]
@@ -553,6 +609,17 @@ pub fn read_tflite(path: &str) -> PyResult<Vec<NamedArray>> {
 #[pyfunction]
 pub fn read_pickle_arrays(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_pickle_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write a sharded safetensors checkpoint (HF weight_map index + shards).
+#[pyfunction]
+pub fn write_safetensors_sharded(
+    index_path: &str,
+    arrays: Vec<NamedArray>,
+    max_shard_bytes: usize,
+) -> PyResult<()> {
+    mmn_io::write_sharded_safetensors(index_path, &arrays, max_shard_bytes)
+        .map_err(mmn_err_to_py)
 }
 
 /// Write named f32 arrays as a numpy-deserializable pickle dict.

@@ -85,6 +85,91 @@ fn collect_torch_shard(
     Ok(())
 }
 
+/// Read every tensor in a sharded checkpoint as generic named arrays
+/// (no chatbot name adaptation), shards resolved relative to the index.
+pub fn read_sharded_arrays(index_path: &str) -> Result<Vec<super::NamedArray>, MmnError> {
+    let index_bytes = fs::read(index_path)
+        .map_err(|e| err(format!("cannot read shard index {index_path}: {e}")))?;
+    let index: serde_json::Value = serde_json::from_slice(&index_bytes)
+        .map_err(|e| err(format!("shard index {index_path} is not JSON: {e}")))?;
+    let dir = Path::new(index_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let mut out: Vec<super::NamedArray> = Vec::new();
+    for file in shard_files(&index)? {
+        let shard_path = dir.join(&file);
+        let bytes = fs::read(&shard_path).map_err(|e| {
+            err(format!(
+                "cannot read shard {} (referenced by {index_path}): {e}",
+                shard_path.display()
+            ))
+        })?;
+        if is_zip_bytes(&bytes) || super::torch_pt::is_legacy_torch_bytes(&bytes) {
+            out.extend(read_torch_arrays_bytes(&bytes)?.0);
+        } else {
+            out.extend(super::st_arrays::read_safetensors_arrays_bytes(&bytes)?);
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// Write named arrays as a sharded safetensors checkpoint: numbered
+/// `model-XXXXX-of-XXXXX.safetensors` shards no larger than
+/// `max_shard_bytes` of tensor data, plus the HF-convention
+/// `weight_map` index at `index_path` (shards land beside it).
+pub fn write_sharded_safetensors(
+    index_path: &str,
+    arrays: &[super::NamedArray],
+    max_shard_bytes: usize,
+) -> Result<(), MmnError> {
+    if arrays.is_empty() {
+        return Err(err("cannot write a sharded checkpoint with no tensors"));
+    }
+    let max_shard_bytes = max_shard_bytes.max(1);
+    // Greedy packing in name order: a shard closes when adding the next
+    // tensor would exceed the budget (oversized tensors get their own shard).
+    let mut sorted: Vec<&super::NamedArray> = arrays.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut shards: Vec<Vec<&super::NamedArray>> = vec![Vec::new()];
+    let mut current_bytes = 0usize;
+    let mut total_size = 0u64;
+    for entry in sorted {
+        let tensor_bytes = entry.2.len() * 4;
+        total_size += tensor_bytes as u64;
+        if !shards.last().unwrap().is_empty() && current_bytes + tensor_bytes > max_shard_bytes {
+            shards.push(Vec::new());
+            current_bytes = 0;
+        }
+        shards.last_mut().unwrap().push(entry);
+        current_bytes += tensor_bytes;
+    }
+    let count = shards.len();
+    let dir = Path::new(index_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    if !dir.as_os_str().is_empty() {
+        fs::create_dir_all(dir).map_err(|e| err(e.to_string()))?;
+    }
+    let mut weight_map = serde_json::Map::new();
+    for (i, shard) in shards.iter().enumerate() {
+        let file = format!("model-{:05}-of-{count:05}.safetensors", i + 1);
+        let shard_arrays: Vec<super::NamedArray> = shard.iter().map(|e| (*e).clone()).collect();
+        super::st_arrays::write_safetensors_arrays(
+            dir.join(&file).to_string_lossy().as_ref(),
+            &shard_arrays,
+        )?;
+        for (name, _, _) in shard {
+            weight_map.insert(name.clone(), serde_json::json!(file));
+        }
+    }
+    let index = serde_json::json!({
+        "metadata": {"total_size": total_size},
+        "weight_map": serde_json::Value::Object(weight_map),
+    });
+    crate::checkpoint_util::write_file_create_parents(index_path, index.to_string())
+}
+
 /// Import a sharded checkpoint from its `*.index.json` file.
 ///
 /// Shards resolve relative to the index file and may be HF binary
@@ -258,5 +343,56 @@ mod tests {
     fn non_index_json_rejected() {
         assert!(!is_shard_index_bytes(b"{\"format\": \"mmn-bin-v1\"}"));
         assert!(!is_shard_index_bytes(b"GGUF"));
+    }
+
+    #[test]
+    fn sharded_write_roundtrips_and_splits() {
+        let dir = tmp_dir("write");
+        let arrays: Vec<crate::NamedArray> = (0..5)
+            .map(|i| {
+                (
+                    format!("t{i}"),
+                    vec![64],
+                    (0..64).map(|j| (i * 64 + j) as f32).collect(),
+                )
+            })
+            .collect();
+        let index_path = dir.join("model.safetensors.index.json");
+        // 64 f32 = 256 bytes per tensor; budget of 600 forces multiple shards.
+        write_sharded_safetensors(index_path.to_str().unwrap(), &arrays, 600).unwrap();
+        let index: serde_json::Value =
+            serde_json::from_slice(&fs::read(&index_path).unwrap()).unwrap();
+        assert_eq!(index["metadata"]["total_size"], 5 * 256);
+        let files = shard_files(&index).unwrap();
+        assert!(files.len() >= 2, "expected multiple shards, got {files:?}");
+        assert!(files[0].starts_with("model-00001-of-"));
+        assert!(is_shard_index_bytes(&fs::read(&index_path).unwrap()));
+        let back = read_sharded_arrays(index_path.to_str().unwrap()).unwrap();
+        assert_eq!(back.len(), 5);
+        assert_eq!(back[3].0, "t3");
+        assert_eq!(back[3].2[0], 192.0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generic_sharded_arrays_read_torch_shards() {
+        let dir = tmp_dir("generic_pt");
+        let arrays = vec![("a".to_string(), vec![2], vec![1.0f32, 2.0])];
+        let bytes = write_torch_arrays(&arrays, None).unwrap();
+        fs::write(dir.join("shard.bin"), bytes).unwrap();
+        let index = serde_json::json!({"weight_map": {"a": "shard.bin"}});
+        let index_path = dir.join("pytorch_model.bin.index.json");
+        fs::write(&index_path, index.to_string()).unwrap();
+        let back = read_sharded_arrays(index_path.to_str().unwrap()).unwrap();
+        assert_eq!(back, vec![("a".to_string(), vec![2], vec![1.0, 2.0])]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sharded_write_empty_rejected() {
+        let e = write_sharded_safetensors("/tmp/never.json", &[], 100)
+            .err()
+            .unwrap();
+        assert!(e.message().contains("no tensors"));
     }
 }

@@ -32,7 +32,9 @@ pub use interop::deflate::deflate;
 pub use interop::inflate::inflate;
 pub use interop::npy::{decode_npy, encode_npy_f32, NpyArray};
 pub use interop::pickle::{parse_pickle, parse_pickle_prefix, PickleValue, PickleWriter};
-pub use interop::sharded::{import_sharded, is_shard_index_bytes};
+pub use interop::sharded::{
+    import_sharded, is_shard_index_bytes, read_sharded_arrays, write_sharded_safetensors,
+};
 pub use interop::tf_checkpoint::{read_tf_checkpoint_arrays, write_tf_checkpoint_arrays};
 pub use interop::npz_chatbot::{
     export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_opts,

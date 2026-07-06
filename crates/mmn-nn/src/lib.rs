@@ -2003,6 +2003,22 @@ impl Conv2d {
         }
     }
 
+    /// Seeded init: weights drawn from the caller's RNG (reproducible runs).
+    pub fn new_with_rng(
+        rng: &mut impl rand::Rng,
+        in_ch: usize,
+        out_ch: usize,
+        kernel: usize,
+    ) -> Self {
+        let w = Tensor::randn_rng(rng, &[out_ch, in_ch, kernel, kernel], true);
+        Self {
+            weight: w,
+            in_ch,
+            out_ch,
+            kernel,
+        }
+    }
+
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let shape = &x.shape;
         if shape.len() != 4 {
@@ -2139,6 +2155,14 @@ impl VaeEncoder {
         }
     }
 
+    /// Seeded init (reproducible runs).
+    pub fn new_with_rng(rng: &mut impl rand::Rng) -> Self {
+        Self {
+            conv1: Conv2d::new_with_rng(rng, 3, 64, 3),
+            conv2: Conv2d::new_with_rng(rng, 64, 4, 3),
+        }
+    }
+
     pub fn encode(&self, x: &Tensor) -> Result<Tensor> {
         self.conv2.forward(&self.conv1.forward(x)?)
     }
@@ -2160,6 +2184,14 @@ impl VaeDecoder {
         Self {
             conv1: Conv2d::new(4, 64, 3),
             conv2: Conv2d::new(64, 3, 3),
+        }
+    }
+
+    /// Seeded init (reproducible runs).
+    pub fn new_with_rng(rng: &mut impl rand::Rng) -> Self {
+        Self {
+            conv1: Conv2d::new_with_rng(rng, 4, 64, 3),
+            conv2: Conv2d::new_with_rng(rng, 64, 3, 3),
         }
     }
 
@@ -2193,6 +2225,15 @@ impl UNet2D {
             down: Conv2d::new(4, 64, 3),
             mid: Conv2d::new(64, 64, 3),
             up: Conv2d::new(64, 4, 3),
+        }
+    }
+
+    /// Seeded init (reproducible runs).
+    pub fn new_with_rng(rng: &mut impl rand::Rng) -> Self {
+        Self {
+            down: Conv2d::new_with_rng(rng, 4, 64, 3),
+            mid: Conv2d::new_with_rng(rng, 64, 64, 3),
+            up: Conv2d::new_with_rng(rng, 64, 4, 3),
         }
     }
 

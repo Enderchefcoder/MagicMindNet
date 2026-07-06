@@ -1088,7 +1088,9 @@ mod tests {
         let ds = DatasetImageGen::load(&manifest).unwrap();
         let path = ds.resolve_image_path(&ds.samples[0].image_path);
         let x = mmn_data::rgb_nchw_tensor_from_image_path(&path).unwrap();
-        let mut model = Diffusion::new();
+        // Seeded init: at lr=0.05 an unlucky random init can overshoot in 12
+        // steps, so keep the run reproducible.
+        let mut model = Diffusion::new_with_seed(11);
         let before = model.denoise_loss(&x, 7).unwrap();
         let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
         let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
@@ -1186,7 +1188,8 @@ mod tests {
         let ds = DatasetImageGen::load(&manifest).unwrap();
         let path = ds.resolve_image_path(&ds.samples[0].image_path);
         let x = mmn_data::rgb_nchw_tensor_from_image_path(&path).unwrap();
-        let mut model = Diffusion::new();
+        // Seeded init keeps the loss-decrease assertion deterministic.
+        let mut model = Diffusion::new_with_seed(11);
         let before = mean_denoise_loss(&model, &ds, 7).unwrap();
         assert_eq!(before, model.denoise_loss(&x, 7).unwrap());
         let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
@@ -1223,33 +1226,26 @@ mod tests {
         let mask_path = ds.resolve_mask_path(&sample.mask_image);
         let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path).unwrap();
         let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path).unwrap();
-        // Diffusion::new() has no seeded variant; a rare random init overshoots
-        // at lr=0.05, so allow a bounded number of fresh-model attempts.
-        let mut last: Option<(f32, f32)> = None;
-        for _attempt in 0..3 {
-            let mut model = Diffusion::new();
-            let before = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
-            let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
-            let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
-                lr: 0.05,
-                ..Default::default()
-            });
-            let mut pid = 0usize;
-            for _ in 0..12 {
-                model
-                    .train_step_denoise_masked(&x, &mask, 5, &mut adamw, &mut pid)
-                    .unwrap();
-            }
-            let after = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
-            assert_ne!(model.unet.down.weight.data[[0, 0, 0, 0]], w_before);
-            if after <= before {
-                return;
-            }
-            last = Some((before, after));
+        // Seeded init makes the loss-decrease assertion deterministic (an
+        // unlucky random init can overshoot at lr=0.05).
+        let mut model = Diffusion::new_with_seed(11);
+        let before = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
+        let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
+        let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        for _ in 0..12 {
+            model
+                .train_step_denoise_masked(&x, &mask, 5, &mut adamw, &mut pid)
+                .unwrap();
         }
-        let (before, after) = last.unwrap();
-        panic!(
-            "mean masked denoise loss should decrease at fixed t in at least one of 3 attempts: before={before} after={after}"
+        let after = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
+        assert_ne!(model.unet.down.weight.data[[0, 0, 0, 0]], w_before);
+        assert!(
+            after <= before,
+            "mean masked denoise loss should decrease at fixed t: before={before} after={after}"
         );
     }
 

@@ -2042,6 +2042,18 @@ impl Diffusion {
         }
     }
 
+    /// Seeded init: the same seed reproduces the same VAE/UNet weights.
+    pub fn new_with_seed(seed: u64) -> Self {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        Self {
+            vae: mmn_nn::VaeEncoder::new_with_rng(&mut rng),
+            vae_decoder: mmn_nn::VaeDecoder::new_with_rng(&mut rng),
+            unet: mmn_nn::UNet2D::new_with_rng(&mut rng),
+            latent_channels: 4,
+        }
+    }
+
     /// Total trainable conv weight elements (VAE encoder/decoder + UNet).
     pub fn parameters(&self) -> usize {
         self.vae.conv1.weight.data.len()
@@ -2332,6 +2344,16 @@ mod diffusion_tests {
         let x = Tensor::randn(&[1, 3, 8, 8], false);
         let out = d.training_step(&x, 3).unwrap();
         assert!(out.data.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn seeded_init_is_reproducible_and_seed_dependent() {
+        let a = Diffusion::new_with_seed(5);
+        let b = Diffusion::new_with_seed(5);
+        let c = Diffusion::new_with_seed(6);
+        assert_eq!(a.unet.down.weight.data, b.unet.down.weight.data);
+        assert_eq!(a.vae.conv1.weight.data, b.vae.conv1.weight.data);
+        assert_ne!(a.unet.down.weight.data, c.unet.down.weight.data);
     }
 
     #[test]

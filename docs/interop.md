@@ -334,7 +334,22 @@ weights = ai.load_arrays("big.gguf", numpy=True)  # float32 ndarrays, ~12x faste
 
 With numpy installed, `numpy=True` skips Python list building entirely
 (decoded bytes go straight through `np.frombuffer`): ~80 ms → ~7 ms for a
-1.3M-value file.
+1.3M-value file. `save_arrays` does the same in reverse when every value is
+an ndarray (`tobytes` instead of `tolist`, byte-identical output, ~2x).
+
+### Sharded checkpoints (HF weight_map convention)
+
+```python
+ai.save_safetensors_sharded("out/model.safetensors.index.json", arrays,
+                            max_shard_size=2 * 1024**3)
+arrays = ai.load_arrays("out/model.safetensors.index.json")  # all shards
+```
+
+The writer packs tensors greedily into numbered
+`model-XXXXX-of-XXXXX.safetensors` shards under the size budget and emits
+the `weight_map` + `metadata.total_size` index; each shard opens with the
+official `safetensors` package, and `load_arrays` / `ai.load()` (chatbots)
+read indexes pointing at safetensors *or* torch `.bin` shards.
 
 `load_arrays` recognizes GGUF v1-v3 (any quantization — everything
 dequantizes to f32, also exposed as `ai.load_gguf_arrays` /

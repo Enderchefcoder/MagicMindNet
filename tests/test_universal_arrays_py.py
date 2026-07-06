@@ -76,6 +76,44 @@ def test_load_arrays_rejects_junk(tmp_path):
         ai.load_arrays(str(path))
 
 
+def test_save_safetensors_sharded_roundtrip(tmp_path):
+    index = str(tmp_path / "model.safetensors.index.json")
+    data = {f"layer.{i}.weight": [[float(i * 10 + j) for j in range(64)]] for i in range(6)}
+    # 64 f32 = 256 bytes per tensor; 600-byte budget forces several shards.
+    ai.save_safetensors_sharded(index, data, max_shard_size=600)
+    shard_files = sorted(p.name for p in tmp_path.glob("*.safetensors"))
+    assert len(shard_files) >= 2
+    assert shard_files[0].startswith("model-00001-of-")
+    assert ai.detect_arrays_format(index) == "sharded"
+    assert ai.load_arrays(index) == data
+
+    from safetensors.numpy import load_file as st_load
+
+    official = st_load(str(tmp_path / shard_files[0]))
+    assert set(official).issubset(set(data))
+
+
+def test_sharded_index_metadata_total_size(tmp_path):
+    import json
+
+    index = str(tmp_path / "model.safetensors.index.json")
+    ai.save_safetensors_sharded(index, {"w": [[1.0, 2.0]]}, max_shard_size=10**9)
+    meta = json.load(open(index))
+    assert meta["metadata"]["total_size"] == 8
+    assert meta["weight_map"] == {"w": "model-00001-of-00001.safetensors"}
+
+
+def test_save_arrays_numpy_fast_path_byte_identical(tmp_path):
+    data_np = {"w": np.array(DATA["w"], dtype=np.float32),
+               "b": np.array(DATA["b"], dtype=np.float32)}
+    for ext in ["safetensors", "npz", "gguf", "msgpack"]:
+        p_lists = str(tmp_path / f"lists.{ext}")
+        p_np = str(tmp_path / f"numpy.{ext}")
+        ai.save_arrays(p_lists, DATA)
+        ai.save_arrays(p_np, data_np)
+        assert open(p_lists, "rb").read() == open(p_np, "rb").read(), ext
+
+
 def test_load_arrays_numpy_fast_path(tmp_path):
     path = str(tmp_path / "arrays.safetensors")
     ai.save_arrays(path, DATA)

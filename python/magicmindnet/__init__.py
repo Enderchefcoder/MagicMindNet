@@ -87,6 +87,7 @@ from magicmindnet.interop import (
     save_pickle_arrays,
     save_pt,
     save_safetensors,
+    save_safetensors_sharded,
     save_tf_checkpoint,
 )
 from magicmindnet.unigram_io import load_unigram_sidecar
@@ -187,6 +188,7 @@ __all__ = [
     "save_pickle_arrays",
     "save_pt",
     "save_safetensors",
+    "save_safetensors_sharded",
     "save_tf_checkpoint",
     "VISION_PATCH_DIM",
     "VISION_RGB_CHANNELS",
