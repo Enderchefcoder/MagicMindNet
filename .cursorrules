@@ -270,6 +270,15 @@
 [X] Parallel hf-safetensors import decode; from_id<->type_id roundtrip guard (caught dropped IQ4_XS id)
 [X] 499 Rust / 891 pytest; clippy 0; smoke OK
 
+## Task: Interop waves 9-11 — perf fast paths + safetensors/Flax/universal arrays
+[X] Wave 9a: typed TensorEntry structs + hand-rolled mmn_json scanner for the default JSON formats (save 337->60ms, load 487->80ms @1.3M params, bytes unchanged); detect + shard-index probe scan only top-level keys (208->25ms)
+[X] Wave 9b: block-parallel GGUF quantize encoding — work-stealing ~64K-element segments, byte-identical to whole-tensor (q6_k save 65->38ms on 4 cores)
+[X] Wave 10a: st_arrays.rs — generic safetensors arrays, every spec dtype BOOL..U64 -> f32; ai.load_safetensors/save_safetensors; crossval vs safetensors.numpy
+[X] Wave 10b: from-scratch msgpack codec (all wire types) + flax.rs pytree bridge (ExtType 1/3, dtype.name incl bfloat16); ai.load_flax/save_flax; crossval vs pip msgpack
+[X] Wave 11: arrays_auto.rs — ai.load_arrays content detection (gguf/pt/pt-legacy/npz/keras/npy/h5/safetensors/flax/onnx/tf-checkpoint), ai.save_arrays extension inference, GGUF as plain array container (read_gguf_arrays dequantizes everything)
+[X] 524 Rust / 952 pytest; clippy 0; ruff clean; msgpack+safetensors added to dev extras
+Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
+
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses
 [X] mmn-io: detect.rs — detect_checkpoint_kind for all formats (JSON/binary/bin, 3 model families)
