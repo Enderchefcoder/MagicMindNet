@@ -19,7 +19,7 @@ pub const QK: usize = 32; // classic quant block size
 pub const QK_K: usize = 256; // k-quant super-block size
 
 /// Non-linear 4-bit codebook shared by IQ4_NL and IQ4_XS.
-const KVALUES_IQ4NL: [i8; 16] = [
+pub(crate) const KVALUES_IQ4NL: [i8; 16] = [
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
 ];
 
@@ -94,6 +94,7 @@ impl GgmlType {
             20 => GgmlType::Iq4Nl,
             21 => GgmlType::Iq3S,
             22 => GgmlType::Iq2S,
+            23 => GgmlType::Iq4Xs,
             29 => GgmlType::Iq1M,
             34 => GgmlType::Tq1_0,
             35 => GgmlType::Tq2_0,
@@ -737,12 +738,16 @@ pub fn encode_f16(values: &[f32]) -> Vec<u8> {
 
 fn require_block_multiple(values: &[f32], block: usize, what: &str) -> Result<(), MmnError> {
     if !values.len().is_multiple_of(block) {
-        return Err(err(format!(
-            "{what} quantization needs a multiple of {block} values, got {}",
-            values.len()
-        )));
+        return Err(block_multiple_err(what, block, values.len()));
     }
     Ok(())
+}
+
+/// Shared block-alignment error (used by the IQ encoders too).
+pub(crate) fn block_multiple_err(what: &str, block: usize, got: usize) -> MmnError {
+    err(format!(
+        "{what} quantization needs a multiple of {block} values, got {got}"
+    ))
 }
 
 /// Quantize into Q4_1 blocks (min + scale), matching ggml byte-for-byte.
@@ -1262,6 +1267,48 @@ mod tests {
         assert_eq!(GgmlType::from_id(22).unwrap(), GgmlType::Iq2S);
         assert_eq!(GgmlType::from_id(29).unwrap(), GgmlType::Iq1M);
         assert_eq!(GgmlType::from_id(40).unwrap(), GgmlType::Nvfp4);
+    }
+
+    #[test]
+    fn every_supported_type_id_roundtrips_through_from_id() {
+        // Guards against dropping ids during refactors (IQ4_XS regression).
+        for ty in [
+            GgmlType::F32,
+            GgmlType::F16,
+            GgmlType::BF16,
+            GgmlType::F64,
+            GgmlType::Q4_0,
+            GgmlType::Q4_1,
+            GgmlType::Q5_0,
+            GgmlType::Q5_1,
+            GgmlType::Q8_0,
+            GgmlType::Q8_1,
+            GgmlType::Q2K,
+            GgmlType::Q3K,
+            GgmlType::Q4K,
+            GgmlType::Q5K,
+            GgmlType::Q6K,
+            GgmlType::Q8K,
+            GgmlType::Iq4Nl,
+            GgmlType::Iq4Xs,
+            GgmlType::Iq2Xxs,
+            GgmlType::Iq2Xs,
+            GgmlType::Iq2S,
+            GgmlType::Iq3Xxs,
+            GgmlType::Iq3S,
+            GgmlType::Iq1S,
+            GgmlType::Iq1M,
+            GgmlType::Tq1_0,
+            GgmlType::Tq2_0,
+            GgmlType::Mxfp4,
+            GgmlType::Nvfp4,
+            GgmlType::I8,
+            GgmlType::I16,
+            GgmlType::I32,
+            GgmlType::I64,
+        ] {
+            assert_eq!(GgmlType::from_id(ty.type_id()).unwrap(), ty, "{ty:?}");
+        }
     }
 
     #[test]

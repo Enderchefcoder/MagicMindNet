@@ -6,7 +6,9 @@
 //! signs. NVFP4 is 16-element FP4 (E2M1) blocks under unsigned-E4M3 scales.
 
 use super::gguf_iq_grids::{ksigns, IqGrid, IQ1_S, IQ2_S, IQ2_XS, IQ2_XXS, IQ3_S, IQ3_XXS};
+use super::gguf_quant::KVALUES_IQ4NL;
 use half::f16;
+use mmn_core::MmnError;
 use std::sync::OnceLock;
 
 pub const QK_K: usize = 256;
@@ -261,6 +263,163 @@ pub fn dequant_nvfp4(data: &[u8], out: &mut Vec<f32>) {
     }
 }
 
+/// Nearest index in the sorted IQ4 codebook (binary search + neighbor pick).
+fn best_index_int8(values: &[i8; 16], x: f32) -> usize {
+    if x <= values[0] as f32 {
+        return 0;
+    }
+    if x >= values[15] as f32 {
+        return 15;
+    }
+    let mut ml = 0usize;
+    let mut mu = 15usize;
+    while mu - ml > 1 {
+        let mav = (ml + mu) / 2;
+        if x < values[mav] as f32 {
+            mu = mav;
+        } else {
+            ml = mav;
+        }
+    }
+    if x - (values[mu - 1] as f32) < values[mu] as f32 - x {
+        mu - 1
+    } else {
+        mu
+    }
+}
+
+const IQ4_NTRY: i32 = 7;
+
+fn ggml_nearest_int(x: f32) -> i32 {
+    x.round_ties_even() as i32
+}
+
+/// Per-32-block scale search over the non-linear codebook (ggml `ntry` loop).
+fn iq4_block_scale(xb: &[f32], levels: &mut [u8]) -> f32 {
+    let values = &KVALUES_IQ4NL;
+    let mut amax = 0.0f32;
+    let mut max = 0.0f32;
+    for &v in xb {
+        if v.abs() > amax {
+            amax = v.abs();
+            max = v;
+        }
+    }
+    if amax < 1e-15 {
+        levels.fill(best_index_int8(values, 0.0) as u8);
+        return 0.0;
+    }
+    let mut d = -max / values[0] as f32;
+    let mut id = 1.0 / d;
+    let mut sumqx = 0.0f32;
+    let mut sumq2 = 0.0f32;
+    for (j, &v) in xb.iter().enumerate() {
+        let l = best_index_int8(values, id * v);
+        levels[j] = l as u8;
+        let q = values[l] as f32;
+        let w = v * v;
+        sumqx += w * q * v;
+        sumq2 += w * q * q;
+    }
+    d = sumqx / sumq2;
+    let mut best = d * sumqx;
+    for itry in -IQ4_NTRY..=IQ4_NTRY {
+        id = (itry as f32 + values[0] as f32) / max;
+        let mut sumqx = 0.0f32;
+        let mut sumq2 = 0.0f32;
+        for &v in xb {
+            let l = best_index_int8(values, id * v);
+            let q = values[l] as f32;
+            let w = v * v;
+            sumqx += w * q * v;
+            sumq2 += w * q * q;
+        }
+        if sumq2 > 0.0 && sumqx * sumqx > best * sumq2 {
+            d = sumqx / sumq2;
+            best = d * sumqx;
+        }
+    }
+    d
+}
+
+fn pack_iq4_nibbles(levels: &[u8], out: &mut Vec<u8>) {
+    for group in levels.chunks_exact(32) {
+        for j in 0..16 {
+            out.push(group[j] | (group[j + 16] << 4));
+        }
+    }
+}
+
+/// Quantize `f32` values into IQ4_NL blocks (18 bytes / 32 values).
+pub fn quantize_iq4_nl(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    if !values.len().is_multiple_of(32) {
+        return Err(super::gguf_quant::block_multiple_err("IQ4_NL", 32, values.len()));
+    }
+    let mut out = Vec::with_capacity(values.len() / 32 * 18);
+    for block in values.chunks_exact(32) {
+        let mut levels = [0u8; 32];
+        let d = iq4_block_scale(block, &mut levels);
+        // Requantize against the rounded f16 scale.
+        let d16 = f16::from_f32(d).to_f32();
+        if d16 != 0.0 {
+            let id = 1.0 / d16;
+            for (j, &v) in block.iter().enumerate() {
+                levels[j] = best_index_int8(&KVALUES_IQ4NL, id * v) as u8;
+            }
+        }
+        out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
+        pack_iq4_nibbles(&levels, &mut out);
+    }
+    Ok(out)
+}
+
+/// Quantize `f32` values into IQ4_XS super-blocks (136 bytes / 256 values).
+pub fn quantize_iq4_xs(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    if !values.len().is_multiple_of(QK_K) {
+        return Err(super::gguf_quant::block_multiple_err("IQ4_XS", QK_K, values.len()));
+    }
+    let mut out = Vec::with_capacity(values.len() / QK_K * 136);
+    for block in values.chunks_exact(QK_K) {
+        let mut levels = [0u8; QK_K];
+        let mut scales = [0.0f32; 8];
+        let mut max_scale = 0.0f32;
+        let mut amax_scale = 0.0f32;
+        for (ib, xb) in block.chunks_exact(32).enumerate() {
+            let d = iq4_block_scale(xb, &mut levels[32 * ib..32 * ib + 32]);
+            scales[ib] = d;
+            if d.abs() > amax_scale {
+                amax_scale = d.abs();
+                max_scale = d;
+            }
+        }
+        let d = -max_scale / 32.0;
+        let d16 = f16::from_f32(d).to_f32();
+        let id = if d16 != 0.0 { 1.0 / d16 } else { 0.0 };
+        let mut scales_l = [0u8; 4];
+        let mut scales_h: u16 = 0;
+        for ib in 0..8 {
+            let l = ggml_nearest_int(id * scales[ib]).clamp(-32, 31);
+            let dl = d16 * l as f32;
+            let idl = if dl != 0.0 { 1.0 / dl } else { 0.0 };
+            for (j, &v) in block[32 * ib..32 * ib + 32].iter().enumerate() {
+                levels[32 * ib + j] = best_index_int8(&KVALUES_IQ4NL, idl * v) as u8;
+            }
+            let l = (l + 32) as u8;
+            if ib % 2 == 0 {
+                scales_l[ib / 2] = l & 0x0F;
+            } else {
+                scales_l[ib / 2] |= (l & 0x0F) << 4;
+            }
+            scales_h |= (((l >> 4) as u16) & 3) << (2 * ib);
+        }
+        out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
+        out.extend_from_slice(&scales_h.to_le_bytes());
+        out.extend_from_slice(&scales_l);
+        pack_iq4_nibbles(&levels, &mut out);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +469,65 @@ mod tests {
         assert_eq!(out.len(), 256);
         // h = 0: dl = 2 * (2*0+1) = 2, delta = +0.125, grid row 0.
         assert!((out[0] - 2.0 * (iq1_grid()[0] + 0.125)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn iq4_nl_quantize_roundtrip_close() {
+        let values: Vec<f32> = (0..64)
+            .map(|i| ((i as f32 - 30.0) * 0.037).sin() * 0.8)
+            .collect();
+        let packed = quantize_iq4_nl(&values).unwrap();
+        assert_eq!(packed.len(), 2 * 18);
+        let back =
+            super::super::gguf_quant::dequantize(super::super::gguf_quant::GgmlType::Iq4Nl, &packed, 64)
+                .unwrap();
+        let amax = values.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        for (a, b) in values.iter().zip(&back) {
+            assert!((a - b).abs() < amax * 0.2, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn iq4_xs_quantize_roundtrip_close() {
+        let values: Vec<f32> = (0..512)
+            .map(|i| ((i as f32) * 0.0173).sin() * (1.0 + (i as f32 * 0.002)))
+            .collect();
+        let packed = quantize_iq4_xs(&values).unwrap();
+        assert_eq!(packed.len(), 2 * 136);
+        let back =
+            super::super::gguf_quant::dequantize(super::super::gguf_quant::GgmlType::Iq4Xs, &packed, 512)
+                .unwrap();
+        let amax = values.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        let rmse: f32 = (values
+            .iter()
+            .zip(&back)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f32>()
+            / values.len() as f32)
+            .sqrt();
+        assert!(rmse / amax < 0.05, "IQ4_XS rel RMSE {}", rmse / amax);
+    }
+
+    #[test]
+    fn iq4_encoders_zero_and_misaligned() {
+        let zeros = vec![0.0f32; 256];
+        let back = super::super::gguf_quant::dequantize(
+            super::super::gguf_quant::GgmlType::Iq4Nl,
+            &quantize_iq4_nl(&zeros).unwrap(),
+            256,
+        )
+        .unwrap();
+        assert!(back.iter().all(|&v| v.abs() < 1e-6));
+        assert!(quantize_iq4_nl(&[0.0; 33]).is_err());
+        assert!(quantize_iq4_xs(&[0.0; 100]).is_err());
+    }
+
+    #[test]
+    fn best_index_finds_nearest_codebook_entry() {
+        assert_eq!(best_index_int8(&KVALUES_IQ4NL, -200.0), 0);
+        assert_eq!(best_index_int8(&KVALUES_IQ4NL, 200.0), 15);
+        assert_eq!(KVALUES_IQ4NL[best_index_int8(&KVALUES_IQ4NL, 1.0)], 1);
+        assert_eq!(KVALUES_IQ4NL[best_index_int8(&KVALUES_IQ4NL, 30.0)], 25);
     }
 
     #[test]

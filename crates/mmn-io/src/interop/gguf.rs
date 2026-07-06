@@ -8,6 +8,7 @@ use super::gguf_quant::{
     dequantize, encode_f16, quantize_mxfp4, quantize_q4_0, quantize_q4_1, quantize_q5_0,
     quantize_q5_1, quantize_q8_0, quantize_tq1_0, quantize_tq2_0, GgmlType,
 };
+use super::gguf_quant_iq::{quantize_iq4_nl, quantize_iq4_xs};
 use super::gguf_quant_k_encode::{
     quantize_q2_k, quantize_q3_k, quantize_q4_k, quantize_q5_k, quantize_q6_k, quantize_q8_k,
 };
@@ -437,8 +438,10 @@ pub fn write_gguf(
             GgmlType::Q5K => quantize_q5_k(t.values),
             GgmlType::Q6K => quantize_q6_k(t.values),
             GgmlType::Q8K => quantize_q8_k(t.values),
+            GgmlType::Iq4Nl => quantize_iq4_nl(t.values),
+            GgmlType::Iq4Xs => quantize_iq4_xs(t.values),
             other => Err(err(format!(
-                "GGUF writer encodes F32/F16, Q4_0..Q8_0, Q2_K..Q8_K, TQ1_0/TQ2_0, or MXFP4, not {other:?}"
+                "GGUF writer encodes F32/F16, Q4_0..Q8_0, Q2_K..Q8_K, IQ4_NL/IQ4_XS, TQ1_0/TQ2_0, or MXFP4, not {other:?}"
             ))),
         }
     };
