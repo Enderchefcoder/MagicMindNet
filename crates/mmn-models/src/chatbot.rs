@@ -1845,7 +1845,7 @@ mod chatbot_tests {
         let padded = targets_with_vision_prefix(&[20, 30, 40], 1, 256);
         let patch = vision_rgb_patch_from_text("scene");
         let loss_with = model
-            .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch.clone()]))
+            .loss_on_batch_with_patches(&tokens, &padded, Some(std::slice::from_ref(&patch)))
             .unwrap();
         let mut no_cross = model;
         no_cross.vision_cross_attn = None;
@@ -1865,7 +1865,7 @@ mod chatbot_tests {
             .loss_on_batch_with_patches(
                 &tokens,
                 &targets_with_vision_prefix(&[6, 7, 8], 1, 256),
-                Some(&[p1.clone()]),
+                Some(std::slice::from_ref(&p1)),
             )
             .unwrap();
         let loss_two = model

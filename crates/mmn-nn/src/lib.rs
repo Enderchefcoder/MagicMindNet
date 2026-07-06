@@ -1804,7 +1804,8 @@ mod attention_tests {
                     + grad_out[[s, 6]] * (y_plus.data[[s, 6]] - y_minus.data[[s, 6]])
                     + grad_out[[s, 7]] * (y_plus.data[[s, 7]] - y_minus.data[[s, 7]]))
                     / (2.0 * eps);
-                let kv_h = 0 * n_kv_heads / n_heads;
+                // Query head 0 maps to kv head `0 * n_kv_heads / n_heads` == 0.
+                let kv_h = 0;
                 let k_base = kv_h * (d_model / n_heads);
                 if d < d_model / n_heads {
                     assert!(
