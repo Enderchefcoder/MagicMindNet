@@ -21,6 +21,7 @@ pub mod hdf5_write;
 pub mod inflate;
 pub mod npy;
 pub mod npz_chatbot;
+pub mod arrays_auto;
 pub mod flax;
 pub mod msgpack;
 pub mod onnx;

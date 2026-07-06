@@ -37,6 +37,10 @@ pub use interop::tf_checkpoint::{read_tf_checkpoint_arrays, write_tf_checkpoint_
 pub use interop::npz_chatbot::{
     export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_opts,
 };
+pub use interop::arrays_auto::{
+    detect_array_format, read_arrays_auto, read_gguf_arrays, read_gguf_arrays_bytes,
+    write_gguf_arrays, ArrayFormat,
+};
 pub use interop::flax::{
     read_flax_arrays, read_flax_arrays_bytes, write_flax_arrays, write_flax_arrays_bytes,
 };

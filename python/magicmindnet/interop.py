@@ -28,8 +28,11 @@ import json
 from magicmindnet import _native
 
 __all__ = [
+    "detect_arrays_format",
     "gguf_info",
+    "load_arrays",
     "load_flax",
+    "load_gguf_arrays",
     "load_gguf_bpe_tokenizer",
     "load_gguf_tokenizer",
     "load_h5",
@@ -40,7 +43,9 @@ __all__ = [
     "load_pt",
     "load_safetensors",
     "load_tf_checkpoint",
+    "save_arrays",
     "save_flax",
+    "save_gguf_arrays",
     "save_h5",
     "save_npy",
     "save_npz",
@@ -248,6 +253,93 @@ def load_tf_checkpoint(path):
     return {
         name: _nest(shape, flat) for name, shape, flat in _native.read_tf_checkpoint(path)
     }
+
+
+def load_gguf_arrays(path):
+    """Dequantize every tensor in a GGUF file into ``{name: nested lists}``.
+
+    All GGML tensor types (F32/F16/BF16, classic quants, k-quants, IQ family,
+    ternary, MXFP4/NVFP4) decode to floats — no llama.cpp or gguf install
+    needed. For header-only inspection use :func:`gguf_info`.
+    """
+    return {
+        name: _nest(shape, flat) for name, shape, flat in _native.read_gguf_arrays(path)
+    }
+
+
+def save_gguf_arrays(path, arrays):
+    """Write named arrays as a GGUF file (F32 tensors, gguf-py readable)."""
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_gguf_arrays(path, packed)
+
+
+def load_arrays(path):
+    """Load *any* supported weights file into ``{name: nested lists}``.
+
+    Detects the container by content: GGUF, PyTorch ``.pt`` (zip + legacy),
+    ``.npy``/``.npz``, HDF5/Keras, safetensors, Flax msgpack, ONNX, and TF
+    checkpoint v2 prefixes. Single-array ``.npy`` files come back under the
+    name ``"arr"``. Returns the same shape of dict as the per-format
+    ``load_*`` helpers; use :func:`detect_arrays_format` for the format tag.
+    """
+    _, arrays = _native.read_arrays_auto(path)
+    return {name: _nest(shape, flat) for name, shape, flat in arrays}
+
+
+def detect_arrays_format(path):
+    """Name the container ``load_arrays`` would use for *path*.
+
+    One of ``"gguf"``, ``"pt"``, ``"pt-legacy"``, ``"npz"``, ``"npy"``,
+    ``"h5"``, ``"keras"``, ``"safetensors"``, ``"flax"``, ``"onnx"``,
+    ``"tf-checkpoint"``.
+    """
+    format_name, _ = _native.read_arrays_auto(path)
+    return format_name
+
+
+def save_arrays(path, arrays, format=None):
+    """Write named arrays to any supported container.
+
+    The format comes from the extension (``.npz``, ``.pt``/``.pth``, ``.h5``/
+    ``.hdf5``, ``.onnx``, ``.safetensors``, ``.msgpack``, ``.gguf``) or an
+    explicit ``format=`` (also accepts ``"tf-checkpoint"`` and ``"flax"``).
+    """
+    inferred = format
+    if inferred is None:
+        lower = str(path).lower()
+        for suffix, name in (
+            (".npz", "npz"),
+            (".pt", "pt"),
+            (".pth", "pt"),
+            (".h5", "h5"),
+            (".hdf5", "h5"),
+            (".onnx", "onnx"),
+            (".safetensors", "safetensors"),
+            (".msgpack", "flax"),
+            (".gguf", "gguf"),
+        ):
+            if lower.endswith(suffix):
+                inferred = name
+                break
+    savers = {
+        "npz": save_npz,
+        "pt": save_pt,
+        "h5": save_h5,
+        "onnx": save_onnx,
+        "safetensors": save_safetensors,
+        "flax": save_flax,
+        "gguf": save_gguf_arrays,
+        "tf-checkpoint": save_tf_checkpoint,
+    }
+    if inferred not in savers:
+        raise ValueError(
+            f"save_arrays cannot infer a format for {path!r}; pass format= one of "
+            + ", ".join(sorted(savers))
+        )
+    savers[inferred](path, arrays)
 
 
 def gguf_info(path):

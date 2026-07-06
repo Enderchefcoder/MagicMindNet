@@ -25,8 +25,14 @@
   `ai.load_flax` flattens pytrees to `/`-joined names (all numpy dtypes + JAX
   `bfloat16`), `ai.save_flax` writes trees `flax.serialization.from_bytes` reads —
   cross-validated against the official `msgpack` package both directions
-- Tests: +21 Rust (scanner, segmented-encode identity, st_arrays, msgpack, flax)
-  and +35 pytest (`test_interop_safetensors_arrays_py`, `test_interop_flax_py`)
+- **Universal array IO**: `ai.load_arrays` detects any container by content
+  (GGUF, PyTorch zip/legacy, npy/npz, HDF5/Keras, safetensors, Flax msgpack,
+  ONNX, TF checkpoint prefixes) and `ai.save_arrays` picks the writer from the
+  extension; `ai.load_gguf_arrays` / `ai.save_gguf_arrays` expose GGUF as a
+  plain tensor container (every quantization dequantizes)
+- Tests: +25 Rust (scanner, segmented-encode identity, st_arrays, msgpack, flax,
+  arrays_auto) and +61 pytest (`test_interop_safetensors_arrays_py`,
+  `test_interop_flax_py`, `test_universal_arrays_py`) — totals 524 / 952
 
 ### Added (interop wave 8: IQ4 encoders, vision GGUF export, SavedModel dirs)
 - **IQ4_NL / IQ4_XS encoders** (`gguf-iq4_nl` / `gguf-iq4_xs` exports): from-scratch

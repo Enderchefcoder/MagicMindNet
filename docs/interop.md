@@ -284,6 +284,23 @@ TensorFlow/Keras interchange also goes through `np.savez` on
 Anything exposing `.tolist()` (numpy arrays, torch tensors) is accepted by
 `save_npy` / `save_npz` / `save_pt` directly.
 
+## Universal array IO
+
+Beyond the per-format helpers, one pair of calls covers everything:
+
+```python
+arrays = ai.load_arrays("anything.bin")     # detects the container by content
+ai.save_arrays("out.safetensors", arrays)   # writer picked from the extension
+ai.detect_arrays_format("anything.bin")     # "gguf" / "pt" / "npz" / ...
+```
+
+`load_arrays` recognizes GGUF (any quantization — everything dequantizes to
+f32, also exposed as `ai.load_gguf_arrays` / `ai.save_gguf_arrays`), PyTorch
+zip + legacy `.pt`, `.npy`/`.npz`, HDF5/Keras, safetensors, Flax msgpack,
+ONNX, and TF checkpoint v2 prefixes. `save_arrays` infers from `.npz`,
+`.pt`/`.pth`, `.h5`/`.hdf5`, `.onnx`, `.safetensors`, `.msgpack`, `.gguf`,
+or an explicit `format=` (including `"tf-checkpoint"`).
+
 ## Universal detection
 
 `detect_checkpoint_kind` (Rust) and `ai.load()` / `Chatbot.load()` (Python)

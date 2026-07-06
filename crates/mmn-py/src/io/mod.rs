@@ -496,6 +496,26 @@ pub fn read_flax(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_flax_arrays(path).map_err(mmn_err_to_py)
 }
 
+/// Dequantize every tensor in a GGUF file into named f32 arrays.
+#[pyfunction]
+pub fn read_gguf_arrays(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_gguf_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named f32 arrays as a GGUF file (F32 tensors).
+#[pyfunction]
+pub fn write_gguf_arrays(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_gguf_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Detect and read any supported tensor container; returns
+/// `(format_name, arrays)`.
+#[pyfunction]
+pub fn read_arrays_auto(path: &str) -> PyResult<(String, Vec<NamedArray>)> {
+    let (format, arrays) = mmn_io::read_arrays_auto(path).map_err(mmn_err_to_py)?;
+    Ok((format.as_str().to_string(), arrays))
+}
+
 /// Write named f32 arrays as a Flax msgpack pytree.
 #[pyfunction]
 pub fn write_flax(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {

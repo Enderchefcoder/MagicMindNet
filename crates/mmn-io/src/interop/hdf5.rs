@@ -701,6 +701,11 @@ fn visit_object(
     Ok(())
 }
 
+/// True when the buffer starts with the HDF5 signature.
+pub fn is_hdf5_bytes(bytes: &[u8]) -> bool {
+    bytes.len() >= SIGNATURE.len() && &bytes[..SIGNATURE.len()] == SIGNATURE
+}
+
 /// Read every dataset in an HDF5 byte buffer as `(path, shape, f32 data)`.
 pub fn read_h5_arrays_bytes(bytes: &[u8]) -> Result<Vec<super::NamedArray>, MmnError> {
     if bytes.len() < 9 || &bytes[..8] != SIGNATURE {

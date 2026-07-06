@@ -78,6 +78,11 @@ struct NpyHeader {
     data_start: usize,
 }
 
+/// True when the buffer starts with the `\x93NUMPY` magic.
+pub fn is_npy_bytes(bytes: &[u8]) -> bool {
+    bytes.len() >= MAGIC.len() && &bytes[..MAGIC.len()] == MAGIC
+}
+
 fn parse_header(bytes: &[u8]) -> Result<NpyHeader, MmnError> {
     if bytes.len() < 10 || &bytes[..6] != MAGIC {
         return Err(err("not an npy file (missing \\x93NUMPY magic)"));
