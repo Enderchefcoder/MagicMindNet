@@ -187,6 +187,37 @@ pub fn read_onnx_arrays(path: &str) -> Result<Vec<super::NamedArray>, MmnError> 
     read_onnx_arrays_bytes(&bytes)
 }
 
+/// Serialize named arrays as an ONNX model (F32 initializers, empty graph).
+pub fn write_onnx_arrays_bytes(arrays: &[super::NamedArray]) -> Vec<u8> {
+    use super::proto::{write_field_bytes, write_field_varint};
+    let mut graph = Vec::new();
+    write_field_bytes(2, b"magicmindnet", &mut graph); // GraphProto.name
+    for (name, dims, values) in arrays {
+        let mut tensor = Vec::new();
+        for &d in dims {
+            write_field_varint(F_DIMS, d as u64, &mut tensor);
+        }
+        write_field_varint(F_DATA_TYPE, 1, &mut tensor); // FLOAT
+        write_field_bytes(F_NAME, name.as_bytes(), &mut tensor);
+        let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        write_field_bytes(F_RAW_DATA, &raw, &mut tensor);
+        write_field_bytes(5, &tensor, &mut graph); // GraphProto.initializer
+    }
+    let mut opset = Vec::new();
+    write_field_varint(2, 17, &mut opset); // OperatorSetIdProto.version
+    let mut model = Vec::new();
+    write_field_varint(1, 8, &mut model); // ModelProto.ir_version
+    write_field_bytes(2, b"magicmindnet", &mut model); // producer_name
+    write_field_bytes(7, &graph, &mut model); // graph
+    write_field_bytes(8, &opset, &mut model); // opset_import
+    model
+}
+
+/// Write named arrays as an `.onnx` file `onnx.load` accepts.
+pub fn write_onnx_arrays(path: &str, arrays: &[super::NamedArray]) -> Result<(), MmnError> {
+    crate::checkpoint_util::write_file_create_parents(path, write_onnx_arrays_bytes(arrays))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +290,16 @@ mod tests {
     #[test]
     fn garbage_bytes_error() {
         assert!(read_onnx_arrays_bytes(b"definitely not protobuf \xff\xff").is_err());
+    }
+
+    #[test]
+    fn writer_reader_roundtrip() {
+        let arrays = vec![
+            ("w".to_string(), vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+            ("scalar".to_string(), vec![], vec![9.5]),
+        ];
+        let bytes = write_onnx_arrays_bytes(&arrays);
+        let back = read_onnx_arrays_bytes(&bytes).unwrap();
+        assert_eq!(back, arrays);
     }
 }

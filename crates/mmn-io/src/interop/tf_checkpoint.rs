@@ -355,6 +355,111 @@ pub fn read_tf_checkpoint_arrays(path: &str) -> Result<Vec<super::NamedArray>, M
     Ok(out)
 }
 
+/// Build one LevelDB table block (no key sharing, single restart) + trailer.
+fn write_table_block(entries: &[(Vec<u8>, Vec<u8>)], out: &mut Vec<u8>) -> (usize, usize) {
+    use super::proto::write_varint;
+    let start = out.len();
+    for (key, value) in entries {
+        write_varint(0, out); // shared prefix length
+        write_varint(key.len() as u64, out);
+        write_varint(value.len() as u64, out);
+        out.extend_from_slice(key);
+        out.extend_from_slice(value);
+    }
+    out.extend_from_slice(&0u32.to_le_bytes()); // restart point 0
+    out.extend_from_slice(&1u32.to_le_bytes()); // num restarts
+    let size = out.len() - start;
+    // Trailer: type byte + masked CRC32C(block + type).
+    let mut with_type = out[start..].to_vec();
+    with_type.push(0);
+    out.push(0);
+    out.extend_from_slice(&masked_crc32c(&with_type).to_le_bytes());
+    (start, size)
+}
+
+fn encode_bundle_entry(shape: &[usize], offset: usize, size: usize, crc: u32) -> Vec<u8> {
+    use super::proto::{write_field_bytes, write_field_fixed32, write_field_varint};
+    let mut shape_proto = Vec::new();
+    for &d in shape {
+        let mut dim = Vec::new();
+        write_field_varint(1, d as u64, &mut dim); // Dim.size
+        write_field_bytes(2, &dim, &mut shape_proto); // Shape.dim
+    }
+    let mut entry = Vec::new();
+    write_field_varint(1, 1, &mut entry); // dtype = DT_FLOAT
+    write_field_bytes(2, &shape_proto, &mut entry);
+    if offset > 0 {
+        write_field_varint(4, offset as u64, &mut entry);
+    }
+    write_field_varint(5, size as u64, &mut entry);
+    write_field_fixed32(6, crc, &mut entry);
+    entry
+}
+
+/// Write a TF checkpoint v2 (`prefix.index` + `prefix.data-00000-of-00001`)
+/// that `tf.train.load_checkpoint` reads.
+pub fn write_tf_checkpoint_arrays(
+    path: &str,
+    arrays: &[super::NamedArray],
+) -> Result<(), MmnError> {
+    use super::proto::{write_field_bytes, write_field_varint, write_varint};
+    let prefix = checkpoint_prefix(path);
+    // Data shard: raw little-endian f32 payloads, entries sorted by name
+    // (LevelDB tables require sorted keys).
+    let mut sorted: Vec<&super::NamedArray> = arrays.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut data = Vec::new();
+    let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    // "" key: BundleHeaderProto { num_shards = 1, version { producer = 1 } }.
+    let mut header = Vec::new();
+    write_field_varint(1, 1, &mut header);
+    let mut version = Vec::new();
+    write_field_varint(1, 1, &mut version);
+    write_field_bytes(3, &version, &mut header);
+    entries.push((Vec::new(), header));
+    for (name, shape, values) in sorted {
+        let numel: usize = shape.iter().product();
+        if numel != values.len() {
+            return Err(err(format!(
+                "tf tensor {name}: shape {shape:?} needs {numel} values, got {}",
+                values.len()
+            )));
+        }
+        let offset = data.len();
+        for v in values {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let size = data.len() - offset;
+        let crc = masked_crc32c(&data[offset..]);
+        entries.push((
+            name.as_bytes().to_vec(),
+            encode_bundle_entry(shape, offset, size, crc),
+        ));
+    }
+    // Index file: data block, empty metaindex block, index block, footer.
+    let mut index = Vec::new();
+    let (data_off, data_size) = write_table_block(&entries, &mut index);
+    let (meta_off, meta_size) = write_table_block(&[], &mut index);
+    let last_key = entries.last().map(|(k, _)| k.clone()).unwrap_or_default();
+    let mut handle = Vec::new();
+    write_varint(data_off as u64, &mut handle);
+    write_varint(data_size as u64, &mut handle);
+    let (index_off, index_size) = write_table_block(&[(last_key, handle)], &mut index);
+    let mut footer = Vec::new();
+    write_varint(meta_off as u64, &mut footer);
+    write_varint(meta_size as u64, &mut footer);
+    write_varint(index_off as u64, &mut footer);
+    write_varint(index_size as u64, &mut footer);
+    footer.resize(FOOTER_LEN - 8, 0);
+    footer.extend_from_slice(&TABLE_MAGIC.to_le_bytes());
+    index.extend_from_slice(&footer);
+    crate::checkpoint_util::write_file_create_parents(&format!("{prefix}.index"), index)?;
+    crate::checkpoint_util::write_file_create_parents(
+        &format!("{prefix}.data-00000-of-00001"),
+        data,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +516,33 @@ mod tests {
             .unwrap();
         assert!(e.message().contains("CRC32C"), "{}", e.message());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn writer_reader_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("mmn_tf_write_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let prefix = dir.join("out").to_string_lossy().into_owned();
+        let arrays = vec![
+            ("beta".to_string(), vec![2], vec![0.25, -0.75]),
+            ("alpha/kernel".to_string(), vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        ];
+        write_tf_checkpoint_arrays(&prefix, &arrays).unwrap();
+        let back = read_tf_checkpoint_arrays(&prefix).unwrap();
+        let kernel = back.iter().find(|(n, _, _)| n == "alpha/kernel").unwrap();
+        assert_eq!(kernel.1, vec![2, 3]);
+        assert_eq!(kernel.2, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let beta = back.iter().find(|(n, _, _)| n == "beta").unwrap();
+        assert_eq!(beta.2, vec![0.25, -0.75]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn writer_shape_mismatch_errors() {
+        let dir = std::env::temp_dir();
+        let prefix = dir.join("mmn_tf_bad_write").to_string_lossy().into_owned();
+        let arrays = vec![("x".to_string(), vec![4], vec![1.0])];
+        assert!(write_tf_checkpoint_arrays(&prefix, &arrays).is_err());
     }
 
     #[test]

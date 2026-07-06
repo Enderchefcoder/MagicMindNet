@@ -101,6 +101,37 @@ pub fn packed_varints(buf: &[u8]) -> Result<Vec<u64>, MmnError> {
     Ok(out)
 }
 
+pub fn write_varint(mut value: u64, out: &mut Vec<u8>) {
+    loop {
+        let byte = (value & 0x7F) as u8;
+        value >>= 7;
+        if value == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
+}
+
+/// Emit a varint (wire type 0) field.
+pub fn write_field_varint(field: u64, value: u64, out: &mut Vec<u8>) {
+    write_varint(field << 3, out);
+    write_varint(value, out);
+}
+
+/// Emit a length-delimited (wire type 2) field.
+pub fn write_field_bytes(field: u64, body: &[u8], out: &mut Vec<u8>) {
+    write_varint((field << 3) | 2, out);
+    write_varint(body.len() as u64, out);
+    out.extend_from_slice(body);
+}
+
+/// Emit a fixed32 (wire type 5) field.
+pub fn write_field_fixed32(field: u64, value: u32, out: &mut Vec<u8>) {
+    write_varint((field << 3) | 5, out);
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
