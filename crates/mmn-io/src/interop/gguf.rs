@@ -405,70 +405,9 @@ pub fn write_gguf(
         out.extend_from_slice(&value.type_id().to_le_bytes());
         write_value(&mut out, value);
     }
-    // Encode tensor payloads (in parallel — quantization searches dominate),
-    // then lay out aligned offsets.
-    let encode_one = |t: &GgufWriteTensor<'_>| -> Result<Vec<u8>, MmnError> {
-        let numel: usize = t.shape.iter().product();
-        if numel != t.values.len() {
-            return Err(err(format!(
-                "GGUF tensor {} shape {:?} needs {numel} values, got {}",
-                t.name,
-                t.shape,
-                t.values.len()
-            )));
-        }
-        match t.ggml_type {
-            GgmlType::F32 => Ok(t
-                .values
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect::<Vec<u8>>()),
-            GgmlType::F16 => Ok(encode_f16(t.values)),
-            GgmlType::Q8_0 => quantize_q8_0(t.values),
-            GgmlType::Q4_0 => quantize_q4_0(t.values),
-            GgmlType::Q4_1 => quantize_q4_1(t.values),
-            GgmlType::Q5_0 => quantize_q5_0(t.values),
-            GgmlType::Q5_1 => quantize_q5_1(t.values),
-            GgmlType::Tq1_0 => quantize_tq1_0(t.values),
-            GgmlType::Tq2_0 => quantize_tq2_0(t.values),
-            GgmlType::Mxfp4 => quantize_mxfp4(t.values),
-            GgmlType::Q2K => quantize_q2_k(t.values),
-            GgmlType::Q3K => quantize_q3_k(t.values),
-            GgmlType::Q4K => quantize_q4_k(t.values),
-            GgmlType::Q5K => quantize_q5_k(t.values),
-            GgmlType::Q6K => quantize_q6_k(t.values),
-            GgmlType::Q8K => quantize_q8_k(t.values),
-            GgmlType::Iq4Nl => quantize_iq4_nl(t.values),
-            GgmlType::Iq4Xs => quantize_iq4_xs(t.values),
-            other => Err(err(format!(
-                "GGUF writer encodes F32/F16, Q4_0..Q8_0, Q2_K..Q8_K, IQ4_NL/IQ4_XS, TQ1_0/TQ2_0, or MXFP4, not {other:?}"
-            ))),
-        }
-    };
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(tensors.len().max(1));
-    let payloads: Vec<Vec<u8>> = if workers <= 1 || tensors.len() <= 1 {
-        tensors.iter().map(encode_one).collect::<Result<_, _>>()?
-    } else {
-        let chunk_size = tensors.len().div_ceil(workers);
-        let results: Vec<Result<Vec<Vec<u8>>, MmnError>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = tensors
-                .chunks(chunk_size)
-                .map(|group| scope.spawn(move || group.iter().map(encode_one).collect()))
-                .collect();
-            handles
-                .into_iter()
-                .map(|h| h.join().expect("gguf encode worker panicked"))
-                .collect()
-        });
-        let mut all = Vec::with_capacity(tensors.len());
-        for group in results {
-            all.extend(group?);
-        }
-        all
-    };
+    // Encode tensor payloads (block-parallel — quantization searches
+    // dominate), then lay out aligned offsets.
+    let payloads = encode_payloads(tensors)?;
     let mut offset = 0usize;
     let mut offsets = Vec::with_capacity(tensors.len());
     for payload in &payloads {
@@ -495,6 +434,151 @@ pub fn write_gguf(
         out.resize(out.len() + (padded - payload.len()), 0);
     }
     Ok(out)
+}
+
+/// Encode one contiguous run of values for a given GGML type.
+///
+/// Every supported encoder maps independent fixed-size blocks to fixed-size
+/// output, so any slice whose length is a multiple of the block size can be
+/// encoded standalone and concatenated.
+fn encode_values(ggml_type: GgmlType, values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    match ggml_type {
+        GgmlType::F32 => Ok(values
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<u8>>()),
+        GgmlType::F16 => Ok(encode_f16(values)),
+        GgmlType::Q8_0 => quantize_q8_0(values),
+        GgmlType::Q4_0 => quantize_q4_0(values),
+        GgmlType::Q4_1 => quantize_q4_1(values),
+        GgmlType::Q5_0 => quantize_q5_0(values),
+        GgmlType::Q5_1 => quantize_q5_1(values),
+        GgmlType::Tq1_0 => quantize_tq1_0(values),
+        GgmlType::Tq2_0 => quantize_tq2_0(values),
+        GgmlType::Mxfp4 => quantize_mxfp4(values),
+        GgmlType::Q2K => quantize_q2_k(values),
+        GgmlType::Q3K => quantize_q3_k(values),
+        GgmlType::Q4K => quantize_q4_k(values),
+        GgmlType::Q5K => quantize_q5_k(values),
+        GgmlType::Q6K => quantize_q6_k(values),
+        GgmlType::Q8K => quantize_q8_k(values),
+        GgmlType::Iq4Nl => quantize_iq4_nl(values),
+        GgmlType::Iq4Xs => quantize_iq4_xs(values),
+        other => Err(err(format!(
+            "GGUF writer encodes F32/F16, Q4_0..Q8_0, Q2_K..Q8_K, IQ4_NL/IQ4_XS, TQ1_0/TQ2_0, or MXFP4, not {other:?}"
+        ))),
+    }
+}
+
+/// Independent-block size (elements) for each encodable GGML type.
+fn encode_block_elems(ggml_type: GgmlType) -> usize {
+    match ggml_type {
+        GgmlType::F32 | GgmlType::F16 => 1,
+        GgmlType::Q8_0
+        | GgmlType::Q4_0
+        | GgmlType::Q4_1
+        | GgmlType::Q5_0
+        | GgmlType::Q5_1
+        | GgmlType::Mxfp4
+        | GgmlType::Iq4Nl => 32,
+        _ => 256,
+    }
+}
+
+/// Target elements per parallel encoding task (small enough to balance,
+/// large enough to amortize per-task overhead).
+const ENCODE_SEGMENT_ELEMS: usize = 64 * 1024;
+
+/// Encode all tensor payloads, splitting large tensors into block-aligned
+/// segments processed by a work-stealing worker pool (a handful of large
+/// matrices dominate real checkpoints, so per-tensor parallelism alone
+/// leaves cores idle).
+fn encode_payloads(tensors: &[GgufWriteTensor<'_>]) -> Result<Vec<Vec<u8>>, MmnError> {
+    for t in tensors {
+        let numel: usize = t.shape.iter().product();
+        if numel != t.values.len() {
+            return Err(err(format!(
+                "GGUF tensor {} shape {:?} needs {numel} values, got {}",
+                t.name,
+                t.shape,
+                t.values.len()
+            )));
+        }
+    }
+    // (tensor index, segment values); segments of one tensor stay in order.
+    let mut tasks: Vec<(usize, &[f32])> = Vec::new();
+    let mut segments_per_tensor = vec![0usize; tensors.len()];
+    for (i, t) in tensors.iter().enumerate() {
+        let block = encode_block_elems(t.ggml_type);
+        let seg = ENCODE_SEGMENT_ELEMS.div_ceil(block) * block;
+        if t.values.len() <= seg || !t.values.len().is_multiple_of(block) {
+            // Small tensors, and misaligned ones so the encoder itself
+            // reports its block-multiple error for the full tensor.
+            tasks.push((i, t.values));
+            segments_per_tensor[i] = 1;
+        } else {
+            for chunk in t.values.chunks(seg) {
+                tasks.push((i, chunk));
+                segments_per_tensor[i] += 1;
+            }
+        }
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(tasks.len().max(1));
+    let types: Vec<GgmlType> = tensors.iter().map(|t| t.ggml_type).collect();
+    let encoded: Vec<Result<Vec<u8>, MmnError>> = if workers <= 1 || tasks.len() <= 1 {
+        tasks
+            .iter()
+            .map(|(i, values)| encode_values(types[*i], values))
+            .collect()
+    } else {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let mut collected: Vec<(usize, Result<Vec<u8>, MmnError>)> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..workers)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            let mut done = Vec::new();
+                            loop {
+                                let idx =
+                                    next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some((tensor_idx, values)) = tasks.get(idx) else {
+                                    break;
+                                };
+                                done.push((idx, encode_values(types[*tensor_idx], values)));
+                            }
+                            done
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .flat_map(|h| h.join().expect("gguf encode worker panicked"))
+                    .collect()
+            });
+        collected.sort_by_key(|(idx, _)| *idx);
+        collected.into_iter().map(|(_, r)| r).collect()
+    };
+    let mut payloads: Vec<Vec<u8>> = Vec::with_capacity(tensors.len());
+    let mut cursor = 0usize;
+    for count in segments_per_tensor {
+        let mut payload = Vec::new();
+        for encoded_segment in encoded[cursor..cursor + count].iter() {
+            match encoded_segment {
+                Ok(bytes) => payload.extend_from_slice(bytes),
+                Err(e) => {
+                    return Err(MmnError::Other {
+                        message: e.to_string(),
+                    })
+                }
+            }
+        }
+        payloads.push(payload);
+        cursor += count;
+    }
+    Ok(payloads)
 }
 
 /// True when `bytes` begin with the GGUF magic.
@@ -613,5 +697,51 @@ mod tests {
         bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
         let file = read_gguf(&bytes).unwrap();
         assert_eq!(file.version, 2);
+    }
+
+    /// Segmented parallel encoding must be byte-identical to encoding the
+    /// whole tensor in one call (blocks are independent by construction).
+    #[test]
+    fn parallel_segmented_encode_matches_whole_tensor() {
+        // > ENCODE_SEGMENT_ELEMS so the writer splits into several segments.
+        let n = ENCODE_SEGMENT_ELEMS * 2 + 256 * 3;
+        let values: Vec<f32> = (0..n).map(|i| ((i * 37 % 511) as f32 - 255.0) * 0.01).collect();
+        for (ggml_type, reference) in [
+            (GgmlType::Q6K, quantize_q6_k(&values).unwrap()),
+            (GgmlType::Q8_0, quantize_q8_0(&values).unwrap()),
+            (GgmlType::F16, encode_f16(&values)),
+        ] {
+            let tensors = vec![GgufWriteTensor {
+                name: "big.weight".into(),
+                shape: vec![n / 256, 256],
+                values: &values,
+                ggml_type,
+            }];
+            let payloads = encode_payloads(&tensors).unwrap();
+            assert_eq!(
+                payloads[0], reference,
+                "segmented {ggml_type:?} encode diverged from whole-tensor encode"
+            );
+        }
+    }
+
+    /// A large tensor whose length is not a block multiple must still get
+    /// the encoder's own block-multiple error (single-task path).
+    #[test]
+    fn parallel_encode_misaligned_large_tensor_errors() {
+        let n = ENCODE_SEGMENT_ELEMS * 2 + 7;
+        let values = vec![0.5f32; n];
+        let tensors = vec![GgufWriteTensor {
+            name: "odd.weight".into(),
+            shape: vec![n],
+            values: &values,
+            ggml_type: GgmlType::Q8_0,
+        }];
+        let e = encode_payloads(&tensors).err().unwrap();
+        assert!(
+            e.message().contains("multiple"),
+            "expected block-multiple error, got: {}",
+            e.message()
+        );
     }
 }
