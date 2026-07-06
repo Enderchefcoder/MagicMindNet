@@ -22,6 +22,7 @@ pub mod inflate;
 pub mod npy;
 pub mod npz_chatbot;
 pub mod onnx;
+pub mod st_arrays;
 pub mod pickle;
 pub mod proto;
 pub mod sharded;

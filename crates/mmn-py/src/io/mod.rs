@@ -484,6 +484,18 @@ pub fn read_onnx(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_onnx_arrays(path).map_err(mmn_err_to_py)
 }
 
+/// Read every tensor in a `.safetensors` file (all spec dtypes, as f32).
+#[pyfunction]
+pub fn read_safetensors(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_safetensors_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named f32 arrays as a `.safetensors` file.
+#[pyfunction]
+pub fn write_safetensors(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_safetensors_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
 /// Write named arrays as an ONNX model (`onnx.load`-compatible).
 #[pyfunction]
 pub fn write_onnx(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {

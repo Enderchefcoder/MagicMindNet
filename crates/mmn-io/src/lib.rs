@@ -38,6 +38,10 @@ pub use interop::npz_chatbot::{
     export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_opts,
 };
 pub use interop::onnx::{read_onnx_arrays, write_onnx_arrays};
+pub use interop::st_arrays::{
+    read_safetensors_arrays, read_safetensors_arrays_bytes, write_safetensors_arrays,
+    write_safetensors_arrays_bytes,
+};
 pub use interop::torch_pt::{
     export_torch_pt, import_torch_pt, read_torch_arrays, write_torch_arrays,
 };

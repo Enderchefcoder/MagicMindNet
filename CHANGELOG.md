@@ -2,6 +2,27 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 9: default-format fast path, block-parallel GGUF writes, generic safetensors arrays)
+- **5–6x faster default checkpoint format**: the `mmn-safetensors-v1` /
+  `mmn-classifier-v1` / `mmn-diffusion-v1` JSON paths moved from `serde_json::Value`
+  trees to typed `TensorEntry` structs plus a hand-rolled structural scanner
+  (`mmn_json.rs`, tight digit loops for byte arrays, serde as validation fallback):
+  save ~337 ms → ~60 ms, load ~487 ms → ~80 ms on a 1.3M-param model; file bytes
+  unchanged
+- **Fast checkpoint detection**: `detect_checkpoint_kind` and the sharded-index
+  probe scan only the top-level `format` / `weight_map` keys instead of
+  `Value`-parsing whole multi-megabyte files (~208 ms → ~25 ms)
+- **Block-parallel GGUF quantized writes**: large tensors split into block-aligned
+  ~64K-element segments encoded by a work-stealing pool — q6_k/q4_k exports now
+  scale across cores even with few big matrices (~65 ms → ~38 ms on 4 cores);
+  segmented output is regression-tested byte-identical to whole-tensor encoding
+- **Generic safetensors arrays**: `ai.load_safetensors` reads every dtype in the
+  spec (BOOL through F64/I64/U64) into floats, `ai.save_safetensors` writes F32
+  files the official package loads — cross-validated both directions against
+  `safetensors.numpy` (and `safetensors.torch` for BF16)
+- Tests: +11 Rust (scanner, segmented-encode identity, st_arrays) and +18 pytest
+  (`test_interop_safetensors_arrays_py`)
+
 ### Added (interop wave 8: IQ4 encoders, vision GGUF export, SavedModel dirs)
 - **IQ4_NL / IQ4_XS encoders** (`gguf-iq4_nl` / `gguf-iq4_xs` exports): from-scratch
   port of ggml's `ntry` scale search over the non-linear codebook with binary-search

@@ -226,6 +226,21 @@ ai.save_onnx("out.onnx", weights)      # passes onnx.checker.check_model
 Validated against models built and saved by the official `onnx` package;
 our writer's output loads with `onnx.load` and passes the official checker.
 
+## Safetensors — generic arrays without the safetensors package
+
+Beyond the chatbot/classifier checkpoint bridges, `.safetensors` files work
+as a plain named-array container. The from-scratch codec reads **every dtype
+in the spec** (BOOL, U8/I8, I16/U16, F16, BF16, I32/U32, F32, F64, I64/U64)
+into floats and writes F32 tensors the official package loads:
+
+```python
+arrays = ai.load_safetensors("model.safetensors")   # {name: nested lists}
+ai.save_safetensors("out.safetensors", {"w": [[1.0, 2.0]], "b": [0.5]})
+```
+
+Cross-validated both directions against the official `safetensors` package
+(`safetensors.numpy` for all dtypes, `safetensors.torch` for BF16).
+
 ## NumPy `.npy` / `.npz` — also a TensorFlow bridge
 
 The NPY codec handles format 1.0/2.0 headers, every common dtype
@@ -282,6 +297,17 @@ recognize files by content, not extension:
 - The inflate decoder uses a **10-bit one-hit Huffman lookup table** over a
   64-bit bit accumulator (bit-by-bit canonical walk only for rare long
   codes) — the classic zlib fast path, from scratch.
+- The default `mmn-safetensors-v1` JSON checkpoint parses through a
+  **hand-rolled structural scanner** (typed `TensorEntry` structs, tight
+  digit loops for the byte arrays, serde only as validation fallback):
+  save ~337 ms → ~60 ms, load ~487 ms → ~80 ms for a 1.3M-param model.
+- Checkpoint **detection** reads only the top-level `format` /
+  `weight_map` keys structurally instead of `Value`-parsing multi-megabyte
+  JSON (~208 ms → ~25 ms on the same model).
+- GGUF quantized **writes** split large tensors into block-aligned ~64K
+  segments processed by a work-stealing pool — k-quant encoding uses every
+  core even when a checkpoint is dominated by a few big matrices
+  (byte-identical to whole-tensor encoding; regression-tested).
 
 ## Tensor ops (mmn-core)
 

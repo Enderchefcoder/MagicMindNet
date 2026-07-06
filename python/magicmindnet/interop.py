@@ -37,12 +37,14 @@ __all__ = [
     "load_npz",
     "load_onnx",
     "load_pt",
+    "load_safetensors",
     "load_tf_checkpoint",
     "save_h5",
     "save_npy",
     "save_npz",
     "save_onnx",
     "save_pt",
+    "save_safetensors",
     "save_tf_checkpoint",
 ]
 
@@ -165,6 +167,26 @@ def save_onnx(path, arrays):
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
     _native.write_onnx(path, packed)
+
+
+def load_safetensors(path):
+    """Read every tensor in a ``.safetensors`` file into ``{name: nested lists}``.
+
+    All dtypes in the safetensors spec (BOOL through F64/I64/U64) decode to
+    floats — no ``safetensors`` package needed.
+    """
+    return {
+        name: _nest(shape, flat) for name, shape, flat in _native.read_safetensors(path)
+    }
+
+
+def save_safetensors(path, arrays):
+    """Write named arrays as a ``.safetensors`` file (F32 tensors)."""
+    packed = []
+    for name, array in arrays.items():
+        shape, flat = _flatten(array)
+        packed.append((str(name), shape, flat))
+    _native.write_safetensors(path, packed)
 
 
 def save_h5(path, arrays):
