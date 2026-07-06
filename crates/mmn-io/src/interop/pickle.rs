@@ -204,14 +204,29 @@ impl<'a> Vm<'a> {
                 0x8a => {
                     let n = self.u8()? as usize;
                     let raw = self.take(n)?;
-                    let mut v: i64 = 0;
-                    for (i, &b) in raw.iter().enumerate() {
-                        v |= (b as i64) << (8 * i);
+                    if n > 8 {
+                        // Big integers (e.g. torch's legacy magic number) keep
+                        // their raw little-endian bytes for exact comparison.
+                        self.stack.push(PickleValue::Bytes(raw.to_vec()));
+                    } else {
+                        let mut v: i64 = 0;
+                        for (i, &b) in raw.iter().enumerate() {
+                            v |= (b as i64) << (8 * i);
+                        }
+                        // Sign-extend.
+                        if n > 0 && n < 8 && raw[n - 1] & 0x80 != 0 {
+                            v |= -1i64 << (8 * n);
+                        }
+                        self.stack.push(PickleValue::Int(v));
                     }
-                    // Sign-extend.
-                    if n > 0 && n < 8 && raw[n - 1] & 0x80 != 0 {
-                        v |= -1i64 << (8 * n);
-                    }
+                }
+                b'L' => {
+                    // LONG (text): decimal digits ending in 'L\n'.
+                    let line = self.line()?;
+                    let digits = line.trim_end_matches('L');
+                    let v: i64 = digits.parse().map_err(|e| {
+                        err(format!("pickle LONG {digits:?} not an i64: {e}"))
+                    })?;
                     self.stack.push(PickleValue::Int(v));
                 }
                 b'G' => {
@@ -395,13 +410,22 @@ fn reduce_value(callable: PickleValue, args: PickleValue) -> PickleValue {
 
 /// Parse a pickle byte stream into a value tree.
 pub fn parse_pickle(bytes: &[u8]) -> Result<PickleValue, MmnError> {
+    Ok(parse_pickle_prefix(bytes)?.0)
+}
+
+/// Parse one pickle from the front of `bytes`, returning the consumed length.
+///
+/// Legacy `torch.save` files concatenate several pickles followed by raw
+/// storage data; this lets callers walk that layout.
+pub fn parse_pickle_prefix(bytes: &[u8]) -> Result<(PickleValue, usize), MmnError> {
     let mut vm = Vm {
         bytes,
         pos: 0,
         stack: Vec::new(),
         memo: Vec::new(),
     };
-    vm.run()
+    let value = vm.run()?;
+    Ok((value, vm.pos))
 }
 
 /// Incremental pickle writer emitting a protocol-2 stream.
@@ -436,6 +460,10 @@ impl PickleWriter {
 
     pub fn tuple_from_mark(&mut self) {
         self.out.push(b't');
+    }
+
+    pub fn list_from_mark(&mut self) {
+        self.out.push(b'l');
     }
 
     pub fn empty_tuple(&mut self) {

@@ -5,8 +5,8 @@
 //! layout with the from-scratch [`super::zip`] and [`super::pickle`] modules
 //! and writes archives `torch.load` (including `weights_only=True`) accepts.
 
-use super::pickle::{parse_pickle, PickleValue, PickleWriter};
-use super::zip::{read_zip, write_zip_stored, ZipEntry};
+use super::pickle::{parse_pickle, parse_pickle_prefix, PickleValue, PickleWriter};
+use super::zip::{is_zip_bytes, read_zip, write_zip_stored, ZipEntry};
 use crate::checkpoint_util::write_file_create_parents;
 use crate::hf_safetensors::{
     chatbot_from_external_tensors, chatbot_meta_json, collect_named_tensors, hf_name_to_mmn,
@@ -239,10 +239,158 @@ fn find_pickle_entry(entries: &[ZipEntry]) -> Result<(&ZipEntry, String), MmnErr
     ))
 }
 
+/// Little-endian bytes of torch's legacy magic number 0x1950a86a20f9469cfc6c.
+const LEGACY_MAGIC_LE: [u8; 10] = [0x6c, 0xfc, 0x9c, 0x46, 0xf9, 0x20, 0x6a, 0xa8, 0x50, 0x19];
+
+/// True when `bytes` are a legacy (pre-1.6, non-zip) torch pickle file.
+///
+/// Matches the exact leading pattern: PROTO opcode, then a `LONG1` holding
+/// torch's 10-byte magic number (possibly behind a protocol-4 FRAME).
+pub fn is_legacy_torch_bytes(bytes: &[u8]) -> bool {
+    if bytes.len() < 16 || bytes[0] != 0x80 || bytes[1] > 5 {
+        return false;
+    }
+    let window = &bytes[..bytes.len().min(32)];
+    window.windows(12).any(|w| {
+        w[0] == 0x8a && w[1] == 10 && w[2..12] == LEGACY_MAGIC_LE
+    })
+}
+
+fn check_legacy_magic(value: &PickleValue) -> Result<(), MmnError> {
+    match value {
+        PickleValue::Bytes(raw) if raw.as_slice() == LEGACY_MAGIC_LE => Ok(()),
+        _ => Err(err(
+            "not a legacy torch checkpoint: magic number mismatch in first pickle",
+        )),
+    }
+}
+
+type NamedStubs = Vec<(String, TensorStub)>;
+
+fn stubs_from_state_dict(
+    pairs: &[(PickleValue, PickleValue)],
+) -> Result<(NamedStubs, Option<serde_json::Value>), MmnError> {
+    let mut stubs = Vec::new();
+    let mut meta = None;
+    for (key, value) in pairs {
+        let Some(name) = key.as_str() else { continue };
+        if name == META_KEY {
+            if let Some(json) = value.as_str() {
+                meta = Some(serde_json::from_str(json).map_err(|e| {
+                    err(format!("torch checkpoint {META_KEY} JSON invalid: {e}"))
+                })?);
+            }
+            continue;
+        }
+        if let Some(stub) = tensor_stub_from_reduce(value)? {
+            stubs.push((name.to_string(), stub));
+        }
+    }
+    Ok((stubs, meta))
+}
+
+fn arrays_from_stubs(
+    stubs: NamedStubs,
+    storages: &HashMap<&str, &[u8]>,
+) -> Result<Vec<super::NamedArray>, MmnError> {
+    let mut arrays = Vec::with_capacity(stubs.len());
+    for (name, stub) in stubs {
+        let raw = storages.get(stub.storage_key.as_str()).ok_or_else(|| {
+            err(format!(
+                "torch checkpoint missing storage blob {} for tensor {name}",
+                stub.storage_key
+            ))
+        })?;
+        let item = stub.dtype.item_size();
+        if !raw.len().is_multiple_of(item) {
+            return Err(err(format!(
+                "torch storage {} has {} bytes, not a multiple of item size {item}",
+                stub.storage_key,
+                raw.len()
+            )));
+        }
+        let values: Vec<f32> = raw.chunks_exact(item).map(|c| stub.dtype.decode(c)).collect();
+        let data = gather_strided(&values, stub.storage_offset, &stub.shape, &stub.stride)?;
+        arrays.push((name, stub.shape, data));
+    }
+    Ok(arrays)
+}
+
+/// Read a legacy (pre-1.6) `torch.save` file: magic + protocol + sys_info
+/// pickles, the object pickle, a storage-key list, then raw storage payloads.
+pub fn read_legacy_torch_arrays_bytes(
+    bytes: &[u8],
+) -> Result<(Vec<super::NamedArray>, Option<serde_json::Value>), MmnError> {
+    let (magic, used) = parse_pickle_prefix(bytes)?;
+    check_legacy_magic(&magic)?;
+    let mut pos = used;
+    let (_protocol, used) = parse_pickle_prefix(&bytes[pos..])?;
+    pos += used;
+    let (_sys_info, used) = parse_pickle_prefix(&bytes[pos..])?;
+    pos += used;
+    let (root, used) = parse_pickle_prefix(&bytes[pos..])?;
+    pos += used;
+    let (keys_value, used) = parse_pickle_prefix(&bytes[pos..])?;
+    pos += used;
+    let PickleValue::Dict(pairs) = root else {
+        return Err(err(
+            "legacy torch checkpoint does not contain a state dict (torch.save(model.state_dict(), path))",
+        ));
+    };
+    let PickleValue::List(key_items) = keys_value else {
+        return Err(err("legacy torch checkpoint missing storage key list"));
+    };
+    let (stubs, meta) = stubs_from_state_dict(&pairs)?;
+    let dtype_by_key: HashMap<&str, StorageDtype> = stubs
+        .iter()
+        .map(|(_, stub)| (stub.storage_key.as_str(), stub.dtype))
+        .collect();
+    // Storage payloads follow in key-list order: i64 element count + raw data.
+    let mut storage_data: HashMap<String, Vec<u8>> = HashMap::new();
+    for key_value in &key_items {
+        let key = key_value
+            .as_str()
+            .ok_or_else(|| err("legacy torch storage key is not a string"))?;
+        let dtype = dtype_by_key.get(key).copied().ok_or_else(|| {
+            err(format!(
+                "legacy torch storage key {key} not referenced by any tensor"
+            ))
+        })?;
+        let header = bytes
+            .get(pos..pos + 8)
+            .ok_or_else(|| err("legacy torch storage header truncated"))?;
+        let numel = i64::from_le_bytes([
+            header[0], header[1], header[2], header[3], header[4], header[5], header[6],
+            header[7],
+        ]);
+        if numel < 0 {
+            return Err(err(format!("legacy torch storage {key} has negative size")));
+        }
+        pos += 8;
+        let len = numel as usize * dtype.item_size();
+        let raw = bytes
+            .get(pos..pos + len)
+            .ok_or_else(|| err(format!("legacy torch storage {key} data truncated")))?;
+        pos += len;
+        storage_data.insert(key.to_string(), raw.to_vec());
+    }
+    let storages: HashMap<&str, &[u8]> = storage_data
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_slice()))
+        .collect();
+    Ok((arrays_from_stubs(stubs, &storages)?, meta))
+}
+
 /// Every named array in a `.pt` state dict, decoded to `(shape, f32 data)`.
+///
+/// Accepts both the zip-based format (torch >= 1.6) and the legacy pickle
+/// stream format, auto-detected from the leading bytes.
 pub fn read_torch_arrays_bytes(
     bytes: &[u8],
 ) -> Result<(Vec<super::NamedArray>, Option<serde_json::Value>), MmnError> {
+    if !is_zip_bytes(bytes) && is_legacy_torch_bytes(bytes) {
+        return read_legacy_torch_arrays_bytes(bytes);
+    }
     let entries = read_zip(bytes)?;
     let (pickle_entry, prefix) = find_pickle_entry(&entries)?;
     let root = parse_pickle(&pickle_entry.data)?;
@@ -260,40 +408,8 @@ pub fn read_torch_arrays_bytes(
                 .map(|key| (key, e.data.as_slice()))
         })
         .collect();
-    let mut arrays = Vec::new();
-    let mut meta = None;
-    for (key, value) in &pairs {
-        let Some(name) = key.as_str() else { continue };
-        if name == META_KEY {
-            if let Some(json) = value.as_str() {
-                meta = Some(serde_json::from_str(json).map_err(|e| {
-                    err(format!("torch checkpoint {META_KEY} JSON invalid: {e}"))
-                })?);
-            }
-            continue;
-        }
-        let Some(stub) = tensor_stub_from_reduce(value)? else {
-            continue;
-        };
-        let raw = storages.get(stub.storage_key.as_str()).ok_or_else(|| {
-            err(format!(
-                "torch checkpoint missing storage blob data/{} for tensor {name}",
-                stub.storage_key
-            ))
-        })?;
-        let item = stub.dtype.item_size();
-        if !raw.len().is_multiple_of(item) {
-            return Err(err(format!(
-                "torch storage {} has {} bytes, not a multiple of item size {item}",
-                stub.storage_key,
-                raw.len()
-            )));
-        }
-        let values: Vec<f32> = raw.chunks_exact(item).map(|c| stub.dtype.decode(c)).collect();
-        let data = gather_strided(&values, stub.storage_offset, &stub.shape, &stub.stride)?;
-        arrays.push((name.to_string(), stub.shape.clone(), data));
-    }
-    Ok((arrays, meta))
+    let (stubs, meta) = stubs_from_state_dict(&pairs)?;
+    Ok((arrays_from_stubs(stubs, &storages)?, meta))
 }
 
 /// Read every tensor in a `.pt` file (generic, model-agnostic).
@@ -500,6 +616,106 @@ mod tests {
         assert_eq!(model.shape.n_layer, 1);
         // SwiGLU gate x up fusion: 1.0 * 2.0 = 2.0.
         assert!((model.blocks[0].ffn.weight.data[[0, 0]] - 2.0).abs() < 1e-6);
+    }
+
+    fn legacy_pickle_int(w: &mut PickleWriter, v: i64) {
+        w.int(v);
+    }
+
+    /// Build a genuine legacy torch stream: 3 header pickles, the state dict,
+    /// the storage key list, then `i64 numel + raw f32` payloads.
+    fn build_legacy_torch(tensors: &[(&str, Vec<usize>, f32)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        // Pickle 1: magic number (LONG1 with 10 bytes).
+        out.extend_from_slice(&[0x80, 0x02, 0x8a, 10]);
+        out.extend_from_slice(&LEGACY_MAGIC_LE);
+        out.push(b'.');
+        // Pickle 2: protocol version.
+        let mut w = PickleWriter::new();
+        legacy_pickle_int(&mut w, 1001);
+        out.extend_from_slice(&w.finish());
+        // Pickle 3: sys info dict.
+        let mut w = PickleWriter::new();
+        w.empty_dict();
+        out.extend_from_slice(&w.finish());
+        // Pickle 4: the state dict with legacy persistent ids.
+        let mut w = PickleWriter::new();
+        w.empty_dict();
+        w.mark();
+        for (i, (name, shape, _fill)) in tensors.iter().enumerate() {
+            w.string(name);
+            write_tensor_reduce(&mut w, &i.to_string(), shape);
+        }
+        w.set_items();
+        out.extend_from_slice(&w.finish());
+        // Pickle 5: storage key list.
+        let mut w = PickleWriter::new();
+        w.mark();
+        for i in 0..tensors.len() {
+            w.string(&i.to_string());
+        }
+        w.list_from_mark();
+        out.extend_from_slice(&w.finish());
+        // Raw storages in key order.
+        for (_, shape, fill) in tensors {
+            let numel: usize = shape.iter().product();
+            out.extend_from_slice(&(numel as i64).to_le_bytes());
+            for _ in 0..numel {
+                out.extend_from_slice(&fill.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn legacy_torch_format_reads_state_dict() {
+        let bytes = build_legacy_torch(&[
+            ("w", vec![2, 3], 0.25),
+            ("b", vec![3], -1.5),
+        ]);
+        assert!(is_legacy_torch_bytes(&bytes));
+        let (arrays, meta) = read_torch_arrays_bytes(&bytes).unwrap();
+        assert!(meta.is_none());
+        assert_eq!(arrays.len(), 2);
+        assert_eq!(arrays[0].0, "w");
+        assert_eq!(arrays[0].1, vec![2, 3]);
+        assert!(arrays[0].2.iter().all(|&v| v == 0.25));
+        assert_eq!(arrays[1].2, vec![-1.5, -1.5, -1.5]);
+    }
+
+    #[test]
+    fn legacy_torch_chatbot_imports() {
+        let d = 8usize;
+        let vocab = 16usize;
+        let bytes = build_legacy_torch(&[
+            ("embed", vec![vocab, d], 0.5),
+            ("lm_head", vec![vocab, d], 0.5),
+            ("blocks.0.attn.q", vec![d, d], 0.1),
+            ("blocks.0.attn.k", vec![d, d], 0.1),
+            ("blocks.0.attn.v", vec![d, d], 0.1),
+            ("blocks.0.attn.out", vec![d, d], 0.1),
+            ("blocks.0.ffn", vec![d * 4, d], 0.2),
+            ("blocks.0.ffn2", vec![d, d * 4], 0.3),
+        ]);
+        let model = import_torch_pt_bytes(&bytes).unwrap();
+        assert_eq!(model.shape.vocab_size, vocab);
+        assert_eq!(model.shape.n_layer, 1);
+    }
+
+    #[test]
+    fn legacy_magic_mismatch_errors() {
+        let mut bytes = build_legacy_torch(&[("w", vec![1], 1.0)]);
+        bytes[4] ^= 0xFF; // corrupt the magic number
+        assert!(!is_legacy_torch_bytes(&bytes));
+        let e = read_legacy_torch_arrays_bytes(&bytes).err().unwrap();
+        assert!(e.message().contains("magic number"));
+    }
+
+    #[test]
+    fn legacy_truncated_storage_errors() {
+        let bytes = build_legacy_torch(&[("w", vec![4], 2.0)]);
+        let e = read_torch_arrays_bytes(&bytes[..bytes.len() - 8]).err().unwrap();
+        assert!(e.message().contains("truncated"));
     }
 
     #[test]

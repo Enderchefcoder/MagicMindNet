@@ -2,6 +2,7 @@
 
 use crate::hf_tensor_codec::{hf_err, is_hf_binary_bytes, HF_CHATBOT_FORMAT, HF_CLASSIFIER_FORMAT};
 use crate::interop::gguf::is_gguf_bytes;
+use crate::interop::torch_pt::is_legacy_torch_bytes;
 use crate::interop::zip::{is_zip_bytes, zip_entry_names};
 use mmn_core::MmnError;
 use safetensors::SafeTensors;
@@ -116,6 +117,9 @@ pub fn detect_checkpoint_kind(path: &str) -> Result<CheckpointKind, MmnError> {
     }
     if is_zip_bytes(&bytes) {
         return detect_zip_kind(&bytes);
+    }
+    if is_legacy_torch_bytes(&bytes) {
+        return Ok(CheckpointKind::ChatbotTorch);
     }
     if is_hf_binary_bytes(&bytes) {
         detect_binary_kind(&bytes)
