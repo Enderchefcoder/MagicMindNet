@@ -83,6 +83,8 @@ def test_global_formats_roundtrip_example_runs(run_example):
     assert "_roundtrip_global.pt: loaded via ai.load" in proc.stdout
     assert "_roundtrip_global.npz: loaded via ai.load" in proc.stdout
     assert "generic .npz / .pt array roundtrips ok" in proc.stdout
+    assert "decode ok: True" in proc.stdout
+    assert "from-scratch HDF5 parser" in proc.stdout
 
 
 def test_learned_pos_embed_roundtrip_example_runs(run_example):

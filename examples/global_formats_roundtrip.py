@@ -37,6 +37,23 @@ def main() -> None:
     assert ai.load_pt(str(HERE / "_roundtrip_arrays.pt")) == arrays
     print("generic .npz / .pt array roundtrips ok")
 
+    # Self-contained GGUF: weights + SentencePiece vocab in one file.
+    tok = ai.UnigramEncoder.train(["hello world", "hello there"], vocab_size=300)
+    packed = ai.Chatbot(vocab_size=tok.vocab_size, n_layer=1, d_model=16, seed=7)
+    sc_path = HERE / "_roundtrip_self_contained.gguf"
+    packed.save(str(sc_path), format="gguf-q8_0", unigram_encoder=tok)
+    info = ai.gguf_info(str(sc_path))
+    tok_back = ai.load_gguf_tokenizer(str(sc_path))
+    print(
+        f"{sc_path.name}: {info['tensor_count']} tensors, "
+        f"vocab {len(info['metadata']['tokenizer.ggml.tokens'])}, "
+        f"decode ok: {tok_back.decode(tok_back.encode('hello world')) == 'hello world'}"
+    )
+
+    # HDF5 (TensorFlow/Keras bridge) — read without h5py installed.
+    h5 = ai.load_h5(str(HERE.parent / "tests" / "fixtures" / "simple.h5"))
+    print(f"simple.h5: {sorted(h5)} read via from-scratch HDF5 parser")
+
 
 if __name__ == "__main__":
     main()

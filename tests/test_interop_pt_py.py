@@ -9,42 +9,17 @@ import io
 import pickle
 import struct
 import sys
-import types
 import zipfile
 from collections import OrderedDict
 
 import pytest
 
 import magicmindnet as ai
+from conftest import install_fake_torch as _install_fake_torch
 
 
 def make_bot(seed=5):
     return ai.Chatbot(vocab_size=48, n_layer=2, d_model=16, seed=seed)
-
-
-def _install_fake_torch():
-    """Register stand-in torch modules so CPython pickle can resolve globals."""
-    if "torch" in sys.modules:
-        return sys.modules["torch"], sys.modules["torch._utils"]
-    torch = types.ModuleType("torch")
-    torch_utils = types.ModuleType("torch._utils")
-
-    class FloatStorage:
-        pass
-
-    def _rebuild_tensor_v2(storage, offset, size, stride, requires_grad, hooks):
-        return {"storage": storage, "offset": offset, "size": size, "stride": stride}
-
-    FloatStorage.__module__ = "torch"
-    FloatStorage.__qualname__ = "FloatStorage"
-    _rebuild_tensor_v2.__module__ = "torch._utils"
-    _rebuild_tensor_v2.__qualname__ = "_rebuild_tensor_v2"
-    torch.FloatStorage = FloatStorage
-    torch._utils = torch_utils
-    torch_utils._rebuild_tensor_v2 = _rebuild_tensor_v2
-    sys.modules["torch"] = torch
-    sys.modules["torch._utils"] = torch_utils
-    return torch, torch_utils
 
 
 class _TorchStyleUnpickler(pickle.Unpickler):
