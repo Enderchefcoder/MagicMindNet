@@ -321,7 +321,7 @@ pub(crate) fn undo_deflate(raw: &[u8]) -> Result<Vec<u8>, MmnError> {
 }
 
 /// Undo the HDF5 shuffle filter (byte transpose by element size).
-fn undo_shuffle(raw: &[u8], elem_size: usize) -> Vec<u8> {
+pub(crate) fn undo_shuffle(raw: &[u8], elem_size: usize) -> Vec<u8> {
     if elem_size <= 1 || !raw.len().is_multiple_of(elem_size) {
         return raw.to_vec();
     }

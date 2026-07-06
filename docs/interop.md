@@ -354,9 +354,13 @@ same fusion pipeline as HF imports, so pre-GGUF models load and generate.
 
 Directory stores read completely: `.zarray` metadata, group trees
 (`/`-joined names), C-order chunk grids with edge padding, `fill_value`
-for missing chunks, zlib or uncompressed chunks, every numeric dtype.
-Writes produce group stores `zarr.open_group` reads (one zlib `<f4` chunk
-per array). Blosc-compressed stores get a clear re-encode hint:
+for missing chunks, every numeric dtype, and **blosc-compressed chunks —
+zarr's classic default** — through a from-scratch Blosc1 frame decoder
+(split byte-lane streams, byte shuffle, memcpy mode) with a **from-scratch
+LZ4 block decoder** inside, plus zlib-in-blosc, plain zlib, and
+uncompressed chunks. Writes produce group stores `zarr.open_group` reads
+(one zlib `<f4` chunk per array). blosclz/zstd/snappy inner codecs and
+bit-shuffle report clear errors naming the codec:
 
 ```python
 arrays = ai.load_zarr("weights.zarr")          # {"layer/kernel": [[...]]}

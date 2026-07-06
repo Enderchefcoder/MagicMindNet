@@ -45,6 +45,52 @@ def test_official_uncompressed_group_reads(tmp_path):
     np.testing.assert_allclose(loaded["layer/kernel"], [[1.0, -2.0], [3.5, 0.25]])
 
 
+@pytest.mark.parametrize(
+    "cname,shuffle_name",
+    [("lz4", "SHUFFLE"), ("lz4", "NOSHUFFLE"), ("zlib", "SHUFFLE")],
+)
+def test_blosc_compressed_stores_read(tmp_path, cname, shuffle_name):
+    from numcodecs import Blosc
+
+    store = str(tmp_path / f"blosc_{cname}_{shuffle_name}.zarr")
+    values = ((np.arange(30_000, dtype=np.float32) % 97) / 7.0).reshape(100, 300)
+    z = zarr.create_array(
+        store=store, shape=(100, 300), chunks=(40, 80), dtype="<f4",
+        zarr_format=2,
+        compressors=Blosc(cname=cname, clevel=5, shuffle=getattr(Blosc, shuffle_name)),
+    )
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_blosc_memcpy_small_chunks_read(tmp_path):
+    from numcodecs import Blosc
+
+    # Tiny random chunks are incompressible -> blosc memcpy mode.
+    store = str(tmp_path / "memcpy.zarr")
+    rng = np.random.default_rng(1)
+    values = rng.standard_normal((4, 4)).astype(np.float32)
+    z = zarr.create_array(
+        store=store, shape=(4, 4), chunks=(2, 2), dtype="<f4",
+        zarr_format=2, compressors=Blosc(cname="lz4", clevel=5, shuffle=Blosc.SHUFFLE),
+    )
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_zstd_compressed_store_rejected_clearly(tmp_path):
+    # zarr-python 3.x defaults v2 stores to plain zstd — unsupported, with
+    # a clear error naming the codec.
+    store = str(tmp_path / "zstd.zarr")
+    z = zarr.create_array(store=store, shape=(4,), chunks=(4,), dtype="<f4",
+                          zarr_format=2)
+    z[:] = np.ones(4, dtype=np.float32)
+    with pytest.raises((ValueError, RuntimeError), match="zstd"):
+        ai.load_zarr(store)
+
+
 def test_our_writer_opens_with_zarr_python(tmp_path):
     store = str(tmp_path / "ours.zarr")
     data = {"layer/kernel": [[1.0, -2.0], [3.5, 0.25]], "bias": [0.5, -0.5]}
@@ -80,16 +126,16 @@ def test_missing_chunks_use_fill_value(tmp_path):
     assert loaded[""] == [1.0, 2.0, 9.0, 9.0]
 
 
-def test_blosc_store_rejected_with_hint(tmp_path):
-    import json
-    import os
+def test_blosclz_codec_rejected_with_hint(tmp_path):
+    from numcodecs import Blosc
 
-    store = tmp_path / "blosc.zarr"
-    os.makedirs(store)
-    (store / ".zarray").write_text(json.dumps({
-        "chunks": [1], "compressor": {"id": "blosc", "cname": "lz4"},
-        "dtype": "<f4", "fill_value": 0.0, "filters": None,
-        "order": "C", "shape": [1], "zarr_format": 2,
-    }))
-    with pytest.raises((ValueError, RuntimeError), match="blosc"):
-        ai.load_zarr(str(store))
+    # blosclz (numcodecs' Blosc default cname) is the one blosc codec we
+    # don't decode; large repetitive chunks avoid memcpy mode.
+    store = str(tmp_path / "blosclz.zarr")
+    z = zarr.create_array(
+        store=store, shape=(10_000,), chunks=(10_000,), dtype="<f4",
+        zarr_format=2, compressors=Blosc(cname="blosclz", clevel=5, shuffle=Blosc.SHUFFLE),
+    )
+    z[:] = (np.arange(10_000, dtype=np.float32) % 97) / 7.0
+    with pytest.raises((ValueError, RuntimeError), match="blosclz"):
+        ai.load_zarr(store)

@@ -59,6 +59,12 @@
   both directions; blosc stores rejected with a re-encode hint
 - **npy decode fast paths**: bulk `<f4`/`<f8`/`<f2` decoding skips per-element
   dtype dispatch — `.npz` checkpoint loads ~34 ms → ~17 ms (1.3M params)
+- **From-scratch LZ4 + Blosc decoders**: Blosc1 frames (zarr's classic default
+  compressor) decode completely — header flags, per-block starts, split
+  byte-lane streams, byte shuffle, memcpy mode, LZ4 or zlib inner codecs —
+  so default `Blosc(cname="lz4")` zarr stores read without any C library;
+  validated against numcodecs fixtures + live zarr-python stores;
+  blosclz/zstd/snappy/bit-shuffle rejected with codec-naming errors
 
 ### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
 - **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp

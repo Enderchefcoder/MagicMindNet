@@ -2,11 +2,11 @@
 //! array store.
 //!
 //! Reads directory stores: `.zarray` JSON metadata per array (groups via
-//! `.zgroup` walk), C-order chunk files named `0.0` / `0/0`, `zlib`
-//! compression (the from-scratch inflate) or none, every numeric dtype,
+//! `.zgroup` walk), C-order chunk files named `0.0` / `0/0`, **blosc**
+//! (zarr's default — decoded by the from-scratch LZ4/zlib Blosc frame
+//! reader), `zlib`, or uncompressed chunks, every numeric dtype,
 //! `fill_value` for missing chunks. Writes zarr-python-readable v2 arrays
-//! with zlib chunks. Blosc-compressed stores are rejected with a clear
-//! re-encode hint.
+//! with zlib chunks.
 
 use super::deflate::deflate;
 use super::hdf5::{adler32, undo_deflate};
@@ -77,9 +77,9 @@ fn parse_zarray(path: &Path) -> Result<ZarrayMeta, MmnError> {
         ),
     };
     if let Some(id) = &compressor {
-        if id != "zlib" && id != "gzip" {
+        if id != "zlib" && id != "gzip" && id != "blosc" {
             return Err(err(format!(
-                "zarr compressor {id:?} not supported (zlib/none; re-encode with numcodecs.Zlib)"
+                "zarr compressor {id:?} not supported (blosc/zlib/none)"
             )));
         }
     }
@@ -111,6 +111,7 @@ fn decode_chunk(
 ) -> Result<Vec<f32>, MmnError> {
     let bytes = match meta.compressor.as_deref() {
         Some("zlib") | Some("gzip") => undo_deflate(raw)?,
+        Some("blosc") => super::blosc::blosc_decompress(raw)?,
         _ => raw.to_vec(),
     };
     let item = descr_item_size(&meta.descr)?;
@@ -404,21 +405,41 @@ mod tests {
     }
 
     #[test]
-    fn blosc_and_bad_stores_rejected() {
-        let dir = tmp("blosc");
+    fn unsupported_codec_and_bad_stores_rejected() {
+        // Blosc container with a zstd inner codec (flags bits 5-7 = 4).
+        let dir = tmp("zstd");
         fs::create_dir_all(&dir).unwrap();
         let meta = serde_json::json!({
-            "chunks": [1], "compressor": {"id": "blosc", "cname": "lz4"},
+            "chunks": [1], "compressor": {"id": "blosc", "cname": "zstd"},
             "dtype": "<f4", "fill_value": 0.0, "filters": null,
             "order": "C", "shape": [1], "zarr_format": 2,
         });
         fs::write(dir.join(".zarray"), meta.to_string()).unwrap();
+        let mut frame = vec![2u8, 1, 4 << 5, 4];
+        frame.extend_from_slice(&4u32.to_le_bytes()); // nbytes
+        frame.extend_from_slice(&4u32.to_le_bytes()); // blocksize
+        frame.extend_from_slice(&26u32.to_le_bytes()); // cbytes
+        frame.extend_from_slice(&20u32.to_le_bytes()); // bstart (after bstarts)
+        frame.extend_from_slice(&2u32.to_le_bytes()); // stream cbytes
+        frame.extend_from_slice(&[0u8, 0]);
+        fs::write(dir.join("0"), frame).unwrap();
         let e = read_zarr_arrays(dir.to_str().unwrap()).err().unwrap();
-        assert!(e.message().contains("blosc"), "got: {}", e.message());
+        assert!(e.message().contains("zstd"), "got: {}", e.message());
+        // Unknown top-level compressor id still rejects at metadata time.
+        let lzma = tmp("lzma");
+        fs::create_dir_all(&lzma).unwrap();
+        let meta = serde_json::json!({
+            "chunks": [1], "compressor": {"id": "lzma"},
+            "dtype": "<f4", "fill_value": 0.0, "filters": null,
+            "order": "C", "shape": [1], "zarr_format": 2,
+        });
+        fs::write(lzma.join(".zarray"), meta.to_string()).unwrap();
+        assert!(read_zarr_arrays(lzma.to_str().unwrap()).is_err());
         let empty = tmp("empty");
         fs::create_dir_all(&empty).unwrap();
         assert!(read_zarr_arrays(empty.to_str().unwrap()).is_err());
         let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&lzma);
         let _ = fs::remove_dir_all(&empty);
     }
 }
