@@ -5,8 +5,8 @@
 //! llama.cpp or ggml code is used anywhere.
 
 use super::gguf_quant::{
-    dequantize, encode_f16, quantize_q4_0, quantize_q4_1, quantize_q5_0, quantize_q5_1,
-    quantize_q8_0, quantize_tq2_0, GgmlType,
+    dequantize, encode_f16, quantize_mxfp4, quantize_q4_0, quantize_q4_1, quantize_q5_0,
+    quantize_q5_1, quantize_q8_0, quantize_tq1_0, quantize_tq2_0, GgmlType,
 };
 use super::gguf_quant_k_encode::{quantize_q4_k, quantize_q5_k, quantize_q6_k};
 use mmn_core::MmnError;
@@ -428,7 +428,9 @@ pub fn write_gguf(
             GgmlType::Q4_1 => quantize_q4_1(t.values)?,
             GgmlType::Q5_0 => quantize_q5_0(t.values)?,
             GgmlType::Q5_1 => quantize_q5_1(t.values)?,
+            GgmlType::Tq1_0 => quantize_tq1_0(t.values)?,
             GgmlType::Tq2_0 => quantize_tq2_0(t.values)?,
+            GgmlType::Mxfp4 => quantize_mxfp4(t.values)?,
             GgmlType::Q4K => quantize_q4_k(t.values)?,
             GgmlType::Q5K => quantize_q5_k(t.values)?,
             GgmlType::Q6K => quantize_q6_k(t.values)?,

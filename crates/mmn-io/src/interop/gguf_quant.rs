@@ -837,6 +837,75 @@ pub fn quantize_q5_1(values: &[f32]) -> Result<Vec<u8>, MmnError> {
     Ok(out)
 }
 
+/// Quantize into MXFP4 blocks (E8M0 scale + FP4 codebook), reference-exact.
+pub fn quantize_mxfp4(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    require_block_multiple(values, QK, "MXFP4")?;
+    let mut out = Vec::with_capacity(values.len() / QK * 17);
+    for block in values.chunks_exact(QK) {
+        let amax = block.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        let e: u8 = if amax > 0.0 {
+            (amax.log2().floor() as i32 - 2 + 127) as u8
+        } else {
+            0
+        };
+        let d = e8m0_to_f32_half(e);
+        out.push(e);
+        // Nearest codebook value (first index wins ties, like np.argmin).
+        let quantize_one = |v: f32| -> u8 {
+            let mut best = 0usize;
+            let mut best_err = f32::INFINITY;
+            for (i, &k) in KVALUES_MXFP4.iter().enumerate() {
+                let err_i = (d * k as f32 - v).abs();
+                if err_i < best_err {
+                    best_err = err_i;
+                    best = i;
+                }
+            }
+            best as u8
+        };
+        for j in 0..QK / 2 {
+            let lo = quantize_one(block[j]);
+            let hi = quantize_one(block[j + QK / 2]);
+            out.push(lo | (hi << 4));
+        }
+    }
+    Ok(out)
+}
+
+/// Quantize into ternary TQ1_0 blocks (5 trits/byte), reference-exact.
+pub fn quantize_tq1_0(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    require_block_multiple(values, QK_K, "TQ1_0")?;
+    let mut out = Vec::with_capacity(values.len() / QK_K * 54);
+    for block in values.chunks_exact(QK_K) {
+        let amax = block.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        let id = if amax != 0.0 { 1.0 / amax } else { 0.0 };
+        // Trits in 0..=2 (round half away from zero, then +1).
+        let trit = |v: f32| -> u16 { ((v * id).round() as i32 + 1) as u16 };
+        let scale = |q: u16| -> u8 { (q as u32 * 256).div_ceil(243) as u8 };
+        // Elements 0..160: 32 bytes, weights [81,27,9,3,1] over strides of 32.
+        for m in 0..32 {
+            let q: u16 = (0..5).map(|k| trit(block[k * 32 + m]) * [81, 27, 9, 3, 1][k]).sum();
+            out.push(scale(q));
+        }
+        // Elements 160..240: 16 bytes over strides of 16.
+        for m in 0..16 {
+            let q: u16 = (0..5)
+                .map(|k| trit(block[160 + k * 16 + m]) * [81, 27, 9, 3, 1][k])
+                .sum();
+            out.push(scale(q));
+        }
+        // Elements 240..256: 4 bytes over strides of 4, weights [81,27,9,3].
+        for m in 0..4 {
+            let q: u16 = (0..4)
+                .map(|k| trit(block[240 + k * 4 + m]) * [81, 27, 9, 3][k])
+                .sum();
+            out.push(scale(q));
+        }
+        out.extend_from_slice(&f16::from_f32(amax).to_le_bytes());
+    }
+    Ok(out)
+}
+
 /// Quantize into ternary TQ2_0 blocks ({-1,0,1} at 2 bits), ggml-exact.
 pub fn quantize_tq2_0(values: &[f32]) -> Result<Vec<u8>, MmnError> {
     require_block_multiple(values, QK_K, "TQ2_0")?;
@@ -1110,6 +1179,50 @@ mod tests {
         block.extend(std::iter::repeat_n(0xDDu8, 16));
         let out = dequantize(GgmlType::Mxfp4, &block, 32).unwrap();
         assert!(out.iter().all(|&v| (v + 12.0).abs() < 1e-3));
+    }
+
+    #[test]
+    fn mxfp4_quantize_roundtrip_close() {
+        let values: Vec<f32> = (0..64).map(|i| (i as f32 - 30.0) * 0.1).collect();
+        let packed = quantize_mxfp4(&values).unwrap();
+        assert_eq!(packed.len(), 34);
+        let back = dequantize(GgmlType::Mxfp4, &packed, 64).unwrap();
+        // FP4 is coarse: verify within one codebook step of the scale.
+        for (a, b) in values.iter().zip(&back) {
+            assert!((a - b).abs() < 1.1, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn tq1_0_quantize_roundtrip_exact_on_ternary() {
+        let values: Vec<f32> = (0..256).map(|i| ((i % 3) as f32) - 1.0).collect();
+        let packed = quantize_tq1_0(&values).unwrap();
+        assert_eq!(packed.len(), 54);
+        let back = dequantize(GgmlType::Tq1_0, &packed, 256).unwrap();
+        assert_eq!(back, values);
+    }
+
+    #[test]
+    fn tq2_0_quantize_roundtrip_exact_on_ternary() {
+        let values: Vec<f32> = (0..256).map(|i| (((i * 7) % 3) as f32) - 1.0).collect();
+        let packed = quantize_tq2_0(&values).unwrap();
+        let back = dequantize(GgmlType::Tq2_0, &packed, 256).unwrap();
+        assert_eq!(back, values);
+    }
+
+    #[test]
+    fn q4_1_q5_0_q5_1_quantize_roundtrip_close() {
+        let values: Vec<f32> = (0..64).map(|i| (i as f32 - 30.0) * 0.05).collect();
+        for (packed, ty, tol) in [
+            (quantize_q4_1(&values).unwrap(), GgmlType::Q4_1, 0.15),
+            (quantize_q5_0(&values).unwrap(), GgmlType::Q5_0, 0.12),
+            (quantize_q5_1(&values).unwrap(), GgmlType::Q5_1, 0.07),
+        ] {
+            let back = dequantize(ty, &packed, 64).unwrap();
+            for (a, b) in values.iter().zip(&back) {
+                assert!((a - b).abs() < tol, "{ty:?}: {a} vs {b}");
+            }
+        }
     }
 
     #[test]
