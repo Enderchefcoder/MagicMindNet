@@ -296,6 +296,8 @@ Lesson: libhdf5 reads B-tree/SNOD nodes at FIXED allocation sizes derived from s
 [X] 552 Rust / 1020 pytest; clippy 0; ruff clean
 [X] Wave 17: hand-rolled parallel JSON serializer (byte-identical to serde, regression test) + parallel tensor-entry span parsing — save 60->50ms, load 55->30ms (cumulative 337->50 / 487->30); save_gguf_arrays dtype (f16/quants) vs gguf-py dequantize
 [X] 554 Rust / 1024 pytest; clippy 0; ruff clean
+[X] Wave 18: Zarr v2 read/write (chunk grids, edge padding, fill_value, zlib/raw, group trees; crossval vs zarr-python v2 both ways; blosc rejected w/ hint; zarr in dev extras) + npy bulk <f4/<f8/<f2 decode (npz load 34->17ms)
+[X] 557 Rust / 1036 pytest; clippy 0; ruff clean
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
