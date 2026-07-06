@@ -3,9 +3,15 @@
 //! Implements the on-disk block layouts directly from the format definition —
 //! no llama.cpp / ggml code is linked. Supported: F32, F16, BF16, F64, ints,
 //! the classic quants (Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1), the full k-quant
-//! family (Q2_K/Q3_K/Q4_K/Q5_K/Q6_K/Q8_K), the non-linear lookup quants
-//! (IQ4_NL/IQ4_XS), ternary BitNet quants (TQ1_0/TQ2_0), and MXFP4.
+//! family (Q2_K/Q3_K/Q4_K/Q5_K/Q6_K/Q8_K), the lookup quants
+//! (IQ4_NL/IQ4_XS), the codebook-grid IQ family (IQ1_S/IQ1_M, IQ2_XXS/XS/S,
+//! IQ3_XXS/S — see [`super::gguf_quant_iq`]), ternary BitNet quants
+//! (TQ1_0/TQ2_0), MXFP4, and NVFP4.
 
+use super::gguf_quant_iq::{
+    dequant_iq1_m, dequant_iq1_s, dequant_iq2_s, dequant_iq2_xs, dequant_iq2_xxs,
+    dequant_iq3_s, dequant_iq3_xxs, dequant_nvfp4,
+};
 use half::{bf16, f16};
 use mmn_core::MmnError;
 
@@ -45,9 +51,17 @@ pub enum GgmlType {
     Q8K,
     Iq4Nl,
     Iq4Xs,
+    Iq2Xxs,
+    Iq2Xs,
+    Iq2S,
+    Iq3Xxs,
+    Iq3S,
+    Iq1S,
+    Iq1M,
     Tq1_0,
     Tq2_0,
     Mxfp4,
+    Nvfp4,
     I8,
     I16,
     I32,
@@ -73,11 +87,18 @@ impl GgmlType {
             13 => GgmlType::Q5K,
             14 => GgmlType::Q6K,
             15 => GgmlType::Q8K,
+            16 => GgmlType::Iq2Xxs,
+            17 => GgmlType::Iq2Xs,
+            18 => GgmlType::Iq3Xxs,
+            19 => GgmlType::Iq1S,
             20 => GgmlType::Iq4Nl,
-            23 => GgmlType::Iq4Xs,
+            21 => GgmlType::Iq3S,
+            22 => GgmlType::Iq2S,
+            29 => GgmlType::Iq1M,
             34 => GgmlType::Tq1_0,
             35 => GgmlType::Tq2_0,
             39 => GgmlType::Mxfp4,
+            40 => GgmlType::Nvfp4,
             24 => GgmlType::I8,
             25 => GgmlType::I16,
             26 => GgmlType::I32,
@@ -94,14 +115,9 @@ impl GgmlType {
                     "GGUF tensor type id {id} (repacked Q4_0_x_x / IQ4_NL_4_4) was removed from ggml; re-export the model without runtime repacking"
                 )));
             }
-            16..=19 | 21 | 22 | 29 => {
-                return Err(err(format!(
-                    "GGUF tensor type id {id} (IQ1/IQ2/IQ3 codebook-grid quant) is not supported yet; re-quantize to Q4_K_M / IQ4_XS / Q8_0"
-                )));
-            }
             other => {
                 return Err(err(format!(
-                    "GGUF tensor type id {other} unknown (supported: F32/F16/BF16/F64, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, Q2_K..Q8_K, IQ4_NL, IQ4_XS, TQ1_0, TQ2_0, MXFP4, ints)"
+                    "GGUF tensor type id {other} unknown (supported: F32/F16/BF16/F64, Q4_0..Q8_1, Q2_K..Q8_K, IQ1_S/M, IQ2_XXS/XS/S, IQ3_XXS/S, IQ4_NL/XS, TQ1_0, TQ2_0, MXFP4, NVFP4, ints)"
                 )));
             }
         })
@@ -125,9 +141,17 @@ impl GgmlType {
             GgmlType::Q8K => 15,
             GgmlType::Iq4Nl => 20,
             GgmlType::Iq4Xs => 23,
+            GgmlType::Iq2Xxs => 16,
+            GgmlType::Iq2Xs => 17,
+            GgmlType::Iq3Xxs => 18,
+            GgmlType::Iq1S => 19,
+            GgmlType::Iq3S => 21,
+            GgmlType::Iq2S => 22,
+            GgmlType::Iq1M => 29,
             GgmlType::Tq1_0 => 34,
             GgmlType::Tq2_0 => 35,
             GgmlType::Mxfp4 => 39,
+            GgmlType::Nvfp4 => 40,
             GgmlType::I8 => 24,
             GgmlType::I16 => 25,
             GgmlType::I32 => 26,
@@ -156,9 +180,17 @@ impl GgmlType {
             GgmlType::Q8K => (QK_K, 4 + QK_K + QK_K / 16 * 2),
             GgmlType::Iq4Nl => (QK, 2 + QK / 2),
             GgmlType::Iq4Xs => (QK_K, 2 + 2 + QK_K / 64 + QK_K / 2),
+            GgmlType::Iq2Xxs => (QK_K, 2 + QK_K / 4),
+            GgmlType::Iq2Xs => (QK_K, 2 + QK_K / 4 + QK_K / 32),
+            GgmlType::Iq2S => (QK_K, 2 + QK_K / 4 + QK_K / 16),
+            GgmlType::Iq3Xxs => (QK_K, 2 + 3 * QK_K / 8),
+            GgmlType::Iq3S => (QK_K, 2 + QK_K / 4 + QK_K / 32 + QK_K / 8 + QK_K / 64),
+            GgmlType::Iq1S => (QK_K, 2 + QK_K / 8 + QK_K / 16),
+            GgmlType::Iq1M => (QK_K, QK_K / 8 + QK_K / 16 + QK_K / 32),
             GgmlType::Tq1_0 => (QK_K, (QK_K - 4 * QK_K / 64) / 5 + QK_K / 64 + 2),
             GgmlType::Tq2_0 => (QK_K, QK_K / 4 + 2),
             GgmlType::Mxfp4 => (QK, 1 + QK / 2),
+            GgmlType::Nvfp4 => (64, 4 + QK),
             GgmlType::I8 => (1, 1),
             GgmlType::I16 => (1, 2),
             GgmlType::I32 => (1, 4),
@@ -615,9 +647,17 @@ pub fn dequantize(ty: GgmlType, data: &[u8], numel: usize) -> Result<Vec<f32>, M
         GgmlType::Q8K => dequant_q8_k(data, &mut out),
         GgmlType::Iq4Nl => dequant_iq4_nl(data, &mut out),
         GgmlType::Iq4Xs => dequant_iq4_xs(data, &mut out),
+        GgmlType::Iq2Xxs => dequant_iq2_xxs(data, &mut out),
+        GgmlType::Iq2Xs => dequant_iq2_xs(data, &mut out),
+        GgmlType::Iq2S => dequant_iq2_s(data, &mut out),
+        GgmlType::Iq3Xxs => dequant_iq3_xxs(data, &mut out),
+        GgmlType::Iq3S => dequant_iq3_s(data, &mut out),
+        GgmlType::Iq1S => dequant_iq1_s(data, &mut out),
+        GgmlType::Iq1M => dequant_iq1_m(data, &mut out),
         GgmlType::Tq1_0 => dequant_tq1_0(data, &mut out),
         GgmlType::Tq2_0 => dequant_tq2_0(data, &mut out),
         GgmlType::Mxfp4 => dequant_mxfp4(data, &mut out),
+        GgmlType::Nvfp4 => dequant_nvfp4(data, &mut out),
     }
     if out.len() != numel {
         return Err(err(format!(
@@ -959,15 +999,56 @@ mod tests {
     }
 
     #[test]
-    fn removed_and_grid_type_ids_error_clearly() {
+    fn removed_type_ids_error_clearly() {
         for id in [4u32, 5, 31, 32, 33, 36, 37, 38] {
             let e = GgmlType::from_id(id).err().unwrap();
             assert!(e.message().contains("removed"), "{id}: {}", e.message());
         }
-        for id in [16u32, 17, 18, 19, 21, 22, 29] {
-            let e = GgmlType::from_id(id).err().unwrap();
-            assert!(e.message().contains("not supported yet"), "{id}");
+    }
+
+    #[test]
+    fn iq_grid_type_ids_resolve() {
+        assert_eq!(GgmlType::from_id(16).unwrap(), GgmlType::Iq2Xxs);
+        assert_eq!(GgmlType::from_id(17).unwrap(), GgmlType::Iq2Xs);
+        assert_eq!(GgmlType::from_id(18).unwrap(), GgmlType::Iq3Xxs);
+        assert_eq!(GgmlType::from_id(19).unwrap(), GgmlType::Iq1S);
+        assert_eq!(GgmlType::from_id(21).unwrap(), GgmlType::Iq3S);
+        assert_eq!(GgmlType::from_id(22).unwrap(), GgmlType::Iq2S);
+        assert_eq!(GgmlType::from_id(29).unwrap(), GgmlType::Iq1M);
+        assert_eq!(GgmlType::from_id(40).unwrap(), GgmlType::Nvfp4);
+    }
+
+    #[test]
+    fn iq_block_layouts_match_spec_sizes() {
+        assert_eq!(GgmlType::Iq2Xxs.block_layout(), (256, 66));
+        assert_eq!(GgmlType::Iq2Xs.block_layout(), (256, 74));
+        assert_eq!(GgmlType::Iq2S.block_layout(), (256, 82));
+        assert_eq!(GgmlType::Iq3Xxs.block_layout(), (256, 98));
+        assert_eq!(GgmlType::Iq3S.block_layout(), (256, 110));
+        assert_eq!(GgmlType::Iq1S.block_layout(), (256, 50));
+        assert_eq!(GgmlType::Iq1M.block_layout(), (256, 56));
+        assert_eq!(GgmlType::Nvfp4.block_layout(), (64, 36));
+    }
+
+    #[test]
+    fn iq_dequant_dispatch_produces_full_blocks() {
+        for ty in [
+            GgmlType::Iq2Xxs,
+            GgmlType::Iq2Xs,
+            GgmlType::Iq2S,
+            GgmlType::Iq3Xxs,
+            GgmlType::Iq3S,
+            GgmlType::Iq1S,
+            GgmlType::Iq1M,
+        ] {
+            let (elems, bytes) = ty.block_layout();
+            let data = vec![0u8; bytes];
+            let out = dequantize(ty, &data, elems).unwrap();
+            assert_eq!(out.len(), elems, "{ty:?}");
+            assert!(out.iter().all(|v| v.is_finite()), "{ty:?}");
         }
+        let out = dequantize(GgmlType::Nvfp4, &[0u8; 36], 64).unwrap();
+        assert_eq!(out.len(), 64);
     }
 
     #[test]

@@ -8,14 +8,18 @@
 /// A named array: `(name, shape, C-ordered f32 data)`.
 pub type NamedArray = (String, Vec<usize>, Vec<f32>);
 
+pub mod deflate;
 pub mod gguf;
 pub mod gguf_chatbot;
 pub mod gguf_info;
+pub mod gguf_iq_grids;
 pub mod gguf_quant;
+pub mod gguf_quant_iq;
 pub mod hdf5;
 pub mod inflate;
 pub mod npy;
 pub mod npz_chatbot;
 pub mod pickle;
+pub mod sharded;
 pub mod torch_pt;
 pub mod zip;
