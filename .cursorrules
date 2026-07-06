@@ -294,6 +294,8 @@
 Lesson: libhdf5 reads B-tree/SNOD nodes at FIXED allocation sizes derived from superblock Ks — every from-scratch HDF5 writer node must pad to that size (group btree, SNOD, and chunk btree alike).
 [X] Wave 16: dtype-parameterized writes — encode_npy any dtype (f2/f4/f8, i1-i8, u1-u8, b1; numpy spellings), save_npy/save_npz dtype kwarg, safetensors f16/bf16 writes; all verified vs numpy.load / official safetensors
 [X] 552 Rust / 1020 pytest; clippy 0; ruff clean
+[X] Wave 17: hand-rolled parallel JSON serializer (byte-identical to serde, regression test) + parallel tensor-entry span parsing — save 60->50ms, load 55->30ms (cumulative 337->50 / 487->30); save_gguf_arrays dtype (f16/quants) vs gguf-py dequantize
+[X] 554 Rust / 1024 pytest; clippy 0; ruff clean
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
