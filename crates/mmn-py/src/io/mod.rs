@@ -1,9 +1,12 @@
 use mmn_io::{
     detect_checkpoint_kind, export_bin, export_classifier, export_diffusion,
-    export_hf_classifier_safetensors, export_hf_safetensors, export_safetensors, import_bin,
-    import_classifier, import_diffusion, import_hf_classifier_safetensors, import_hf_safetensors,
-    import_safetensors, merge_classifiers, merge_diffusion, merge_models, quantize_classifier,
-    quantize_diffusion, quantize_model, CheckpointKind, TokenizerSidecarRefs,
+    export_gguf_with_tokenizer, export_hf_classifier_safetensors, export_hf_safetensors,
+    export_npz, export_safetensors,
+    export_torch_pt, import_bin, import_classifier, import_diffusion, import_gguf,
+    import_hf_classifier_safetensors, import_hf_safetensors, import_npz, import_safetensors,
+    import_torch_pt, merge_classifiers, merge_diffusion, merge_models, quantize_classifier,
+    quantize_diffusion, quantize_model, read_npz_arrays, read_torch_arrays, write_torch_arrays,
+    CheckpointKind, NamedArray, TokenizerSidecarRefs,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -77,6 +80,39 @@ pub(crate) fn export_chatbot_to_path(
     bpe_encoder: Option<&PyBytePairEncoder>,
     unigram_encoder: Option<&PyUnigramEncoder>,
 ) -> PyResult<()> {
+    // GGUF embeds its vocabulary in-file (llama.cpp convention); no sidecars.
+    if let Some(quant) = match format {
+        "gguf" => Some("f32"),
+        "gguf-f16" | "gguf_f16" => Some("f16"),
+        "gguf-q8_0" | "gguf_q8_0" => Some("q8_0"),
+        "gguf-q4_0" | "gguf_q4_0" => Some("q4_0"),
+        "gguf-q4_1" | "gguf_q4_1" => Some("q4_1"),
+        "gguf-q5_0" | "gguf_q5_0" => Some("q5_0"),
+        "gguf-q5_1" | "gguf_q5_1" => Some("q5_1"),
+        "gguf-q2_k" | "gguf_q2_k" => Some("q2_k"),
+        "gguf-q3_k" | "gguf_q3_k" => Some("q3_k"),
+        "gguf-q4_k" | "gguf_q4_k" => Some("q4_k"),
+        "gguf-q5_k" | "gguf_q5_k" => Some("q5_k"),
+        "gguf-q6_k" | "gguf_q6_k" => Some("q6_k"),
+        "gguf-iq4_nl" | "gguf_iq4_nl" => Some("iq4_nl"),
+        "gguf-iq4_xs" | "gguf_iq4_xs" => Some("iq4_xs"),
+        _ => None,
+    } {
+        if bpe_encoder.is_some() {
+            return Err(PyValueError::new_err(
+                "GGUF embeds unigram vocabularies only; pass unigram_encoder= (or export BPE with safetensors sidecars)",
+            ));
+        }
+        return export_gguf_with_tokenizer(model, path, quant, unigram_encoder.map(|e| &e.inner))
+            .map_err(mmn_err_to_py);
+    }
+    if matches!(format, "bin" | "npz" | "numpy" | "pt" | "pytorch" | "torch")
+        && (bpe_encoder.is_some() || unigram_encoder.is_some())
+    {
+        return Err(PyValueError::new_err(
+            "bpe_encoder / unigram_encoder are only supported with safetensors or gguf export",
+        ));
+    }
     let (bpe_rel, uni_rel) = write_tokenizer_sidecars(path, bpe_encoder, unigram_encoder)?;
     let sidecars = TokenizerSidecarRefs {
         bpe: bpe_rel.as_deref(),
@@ -87,15 +123,12 @@ pub(crate) fn export_chatbot_to_path(
         "hf-safetensors" | "hf_safetensors" => {
             export_hf_safetensors(model, path, sidecars).map_err(mmn_err_to_py)
         }
-        "bin" => {
-            if bpe_encoder.is_some() || unigram_encoder.is_some() {
-                return Err(PyValueError::new_err(
-                    "bpe_encoder / unigram_encoder are only supported with safetensors export",
-                ));
-            }
-            export_bin(model, path).map_err(mmn_err_to_py)
-        }
-        _ => Err(PyValueError::new_err(format!("Unknown format: {format}"))),
+        "bin" => export_bin(model, path).map_err(mmn_err_to_py),
+        "npz" | "numpy" => export_npz(model, path).map_err(mmn_err_to_py),
+        "pt" | "pytorch" | "torch" => export_torch_pt(model, path).map_err(mmn_err_to_py),
+        _ => Err(PyValueError::new_err(format!(
+            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, gguf-f16, gguf-q8_0, gguf-q4_0, npz, pt"
+        ))),
     }
 }
 
@@ -108,7 +141,13 @@ pub(crate) fn import_chatbot_from_path(
         "safetensors" => import_safetensors(path, 0).map_err(mmn_err_to_py),
         "hf-safetensors" | "hf_safetensors" => import_hf_safetensors(path).map_err(mmn_err_to_py),
         "bin" => import_bin(path).map_err(mmn_err_to_py),
-        _ => Err(PyValueError::new_err(format!("Unknown format: {format}"))),
+        f if f.starts_with("gguf") => import_gguf(path).map_err(mmn_err_to_py),
+        "npz" | "numpy" => import_npz(path).map_err(mmn_err_to_py),
+        "pt" | "pytorch" | "torch" => import_torch_pt(path).map_err(mmn_err_to_py),
+        "sharded" => mmn_io::import_sharded(path).map_err(mmn_err_to_py),
+        _ => Err(PyValueError::new_err(format!(
+            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, npz, pt, sharded"
+        ))),
     }
 }
 
@@ -283,6 +322,26 @@ pub fn load_checkpoint(py: Python<'_>, path: &str) -> PyResult<PyObject> {
             let inner = import_bin(path).map_err(mmn_err_to_py)?;
             Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
         }
+        CheckpointKind::ChatbotGguf => {
+            let inner = import_gguf(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
+        CheckpointKind::ChatbotNpz => {
+            let inner = import_npz(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
+        CheckpointKind::ChatbotTorch => {
+            let inner = import_torch_pt(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
+        CheckpointKind::ChatbotSharded => {
+            let inner = mmn_io::import_sharded(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
+        CheckpointKind::ChatbotGgmlLegacy => {
+            let inner = mmn_io::import_ggml_legacy_chatbot(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
         CheckpointKind::Classifier => {
             let inner = import_classifier(path).map_err(mmn_err_to_py)?;
             Ok(PyClassifier { inner }.into_pyobject(py)?.into_any().unbind())
@@ -292,4 +351,363 @@ pub fn load_checkpoint(py: Python<'_>, path: &str) -> PyResult<PyObject> {
             Ok(PyDiffusion { inner }.into_pyobject(py)?.into_any().unbind())
         }
     }
+}
+
+/// Read a NumPy `.npy` file into `(shape, flat f32 values)`.
+#[pyfunction]
+pub fn read_npy(path: &str) -> PyResult<(Vec<usize>, Vec<f32>)> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| PyValueError::new_err(format!("cannot read npy {path}: {e}")))?;
+    let arr = mmn_io::decode_npy(&bytes).map_err(mmn_err_to_py)?;
+    Ok((arr.shape, arr.data))
+}
+
+/// Write a NumPy `.npy` file from `(shape, flat f32 values)` in any
+/// supported dtype (values convert element-wise).
+#[pyfunction]
+#[pyo3(signature = (path, shape, data, dtype = "f4"))]
+pub fn write_npy(path: &str, shape: Vec<usize>, data: Vec<f32>, dtype: &str) -> PyResult<()> {
+    let bytes = mmn_io::encode_npy(&shape, &data, dtype).map_err(mmn_err_to_py)?;
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        }
+    }
+    std::fs::write(path, bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Read every array in an `.npz` archive as `[(name, shape, values), ...]`.
+#[pyfunction]
+pub fn read_npz(path: &str) -> PyResult<Vec<NamedArray>> {
+    read_npz_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays to an `.npz` archive readable by `numpy.load`
+/// (`compress=True` matches `np.savez_compressed`).
+#[pyfunction]
+#[pyo3(signature = (path, arrays, compress=false, dtype="f4"))]
+pub fn write_npz(
+    path: &str,
+    arrays: Vec<NamedArray>,
+    compress: bool,
+    dtype: &str,
+) -> PyResult<()> {
+    mmn_io::write_npz_arrays_dtype(path, &arrays, compress, dtype).map_err(mmn_err_to_py)
+}
+
+/// Read every tensor in a PyTorch `.pt` state dict as `[(name, shape, values), ...]`.
+#[pyfunction]
+pub fn read_pt(path: &str) -> PyResult<Vec<NamedArray>> {
+    read_torch_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Dequantize a raw GGML block payload (`type_name` e.g. "Q4_K", "IQ2_XXS").
+#[pyfunction]
+pub fn dequantize_ggml(type_name: &str, data: Vec<u8>, numel: usize) -> PyResult<Vec<f32>> {
+    let ty = ggml_type_by_name(type_name)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown GGML type {type_name:?}")))?;
+    mmn_io::dequantize_ggml(ty, &data, numel).map_err(mmn_err_to_py)
+}
+
+fn ggml_type_by_name(name: &str) -> Option<mmn_io::GgmlType> {
+    use mmn_io::GgmlType as T;
+    Some(match name.to_ascii_uppercase().as_str() {
+        "F32" => T::F32,
+        "F16" => T::F16,
+        "BF16" => T::BF16,
+        "F64" => T::F64,
+        "Q4_0" => T::Q4_0,
+        "Q4_1" => T::Q4_1,
+        "Q5_0" => T::Q5_0,
+        "Q5_1" => T::Q5_1,
+        "Q8_0" => T::Q8_0,
+        "Q8_1" => T::Q8_1,
+        "Q2_K" => T::Q2K,
+        "Q3_K" => T::Q3K,
+        "Q4_K" => T::Q4K,
+        "Q5_K" => T::Q5K,
+        "Q6_K" => T::Q6K,
+        "Q8_K" => T::Q8K,
+        "IQ4_NL" => T::Iq4Nl,
+        "IQ4_XS" => T::Iq4Xs,
+        "IQ2_XXS" => T::Iq2Xxs,
+        "IQ2_XS" => T::Iq2Xs,
+        "IQ2_S" => T::Iq2S,
+        "IQ3_XXS" => T::Iq3Xxs,
+        "IQ3_S" => T::Iq3S,
+        "IQ1_S" => T::Iq1S,
+        "IQ1_M" => T::Iq1M,
+        "TQ1_0" => T::Tq1_0,
+        "TQ2_0" => T::Tq2_0,
+        "MXFP4" => T::Mxfp4,
+        "NVFP4" => T::Nvfp4,
+        "I8" => T::I8,
+        "I16" => T::I16,
+        "I32" => T::I32,
+        "I64" => T::I64,
+        _ => return None,
+    })
+}
+
+/// GGUF file inspection: metadata + tensor summaries as a JSON string.
+#[pyfunction]
+pub fn gguf_info_json(path: &str) -> PyResult<String> {
+    let info = mmn_io::gguf_info_json(path).map_err(mmn_err_to_py)?;
+    Ok(info.to_string())
+}
+
+/// Extract the SentencePiece vocabulary embedded in a GGUF file.
+#[pyfunction]
+pub fn load_gguf_tokenizer(path: &str) -> PyResult<crate::tokenizer::PyUnigramEncoder> {
+    let inner = mmn_io::import_gguf_tokenizer(path).map_err(mmn_err_to_py)?;
+    Ok(crate::tokenizer::PyUnigramEncoder { inner })
+}
+
+/// Extract the byte-level BPE ("gpt2") vocabulary embedded in a GGUF file.
+#[pyfunction]
+pub fn load_gguf_bpe_tokenizer(path: &str) -> PyResult<crate::tokenizer::PyGpt2BpeEncoder> {
+    let inner = mmn_io::import_gguf_bpe_tokenizer(path).map_err(mmn_err_to_py)?;
+    Ok(crate::tokenizer::PyGpt2BpeEncoder { inner })
+}
+
+/// Read every dataset in an HDF5 file as `[(path, shape, values), ...]`.
+#[pyfunction]
+pub fn read_h5(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_h5_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read weights from a Keras `.keras` / `.weights.h5` / `.h5` file.
+#[pyfunction]
+pub fn read_keras(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_keras_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read every tensor in a TF checkpoint v2 (`prefix` or `prefix.index`).
+#[pyfunction]
+pub fn read_tf_checkpoint(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_tf_checkpoint_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read every graph initializer (weight) in an ONNX model.
+#[pyfunction]
+pub fn read_onnx(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_onnx_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read every tensor in a `.safetensors` file (all spec dtypes, as f32).
+#[pyfunction]
+pub fn read_safetensors(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_safetensors_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read a Flax msgpack checkpoint into `/`-joined named arrays.
+#[pyfunction]
+pub fn read_flax(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_flax_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Dequantize every tensor in a GGUF file into named f32 arrays.
+#[pyfunction]
+pub fn read_gguf_arrays(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_gguf_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays as a GGUF file in any encodable GGML type.
+#[pyfunction]
+#[pyo3(signature = (path, arrays, dtype = "f32"))]
+pub fn write_gguf_arrays(path: &str, arrays: Vec<NamedArray>, dtype: &str) -> PyResult<()> {
+    mmn_io::write_gguf_arrays_dtype(path, &arrays, dtype).map_err(mmn_err_to_py)
+}
+
+/// Detect and read any supported tensor container; returns
+/// `(format_name, arrays)`.
+#[pyfunction]
+pub fn read_arrays_auto(path: &str) -> PyResult<(String, Vec<NamedArray>)> {
+    let (format, arrays) = mmn_io::read_arrays_auto(path).map_err(mmn_err_to_py)?;
+    Ok((format.as_str().to_string(), arrays))
+}
+
+/// One tensor as `(name, shape, little-endian f32 bytes)`.
+type NamedByteArray = (String, Vec<usize>, Py<pyo3::types::PyBytes>);
+
+/// Write named arrays given as little-endian f32 bytes (the numpy save
+/// fast path: `ndarray.tobytes()` instead of building float lists).
+#[pyfunction]
+pub fn write_arrays_bytes(
+    path: &str,
+    format: &str,
+    entries: Vec<(String, Vec<usize>, Vec<u8>)>,
+) -> PyResult<()> {
+    let mut arrays: Vec<NamedArray> = Vec::with_capacity(entries.len());
+    for (name, shape, bytes) in entries {
+        if !bytes.len().is_multiple_of(4) {
+            return Err(PyValueError::new_err(format!(
+                "array {name}: byte length {} is not a multiple of 4 (expected f32 data)",
+                bytes.len()
+            )));
+        }
+        let values: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let numel: usize = shape.iter().product();
+        if numel != values.len() {
+            return Err(PyValueError::new_err(format!(
+                "array {name}: shape {shape:?} needs {numel} values, got {}",
+                values.len()
+            )));
+        }
+        arrays.push((name, shape, values));
+    }
+    match format {
+        "npz" => mmn_io::write_npz_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "pt" => {
+            let bytes = write_torch_arrays(&arrays, None).map_err(mmn_err_to_py)?;
+            if let Some(parent) = Path::new(path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                }
+            }
+            std::fs::write(path, bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+        }
+        "h5" => mmn_io::write_h5_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "onnx" => mmn_io::write_onnx_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "safetensors" => mmn_io::write_safetensors_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "flax" => mmn_io::write_flax_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "gguf" => mmn_io::write_gguf_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "tf-checkpoint" => {
+            mmn_io::write_tf_checkpoint_arrays(path, &arrays).map_err(mmn_err_to_py)
+        }
+        "pickle" => mmn_io::write_pickle_arrays(path, &arrays).map_err(mmn_err_to_py),
+        "zarr" => mmn_io::write_zarr_arrays(path, &arrays).map_err(mmn_err_to_py),
+        other => Err(PyValueError::new_err(format!(
+            "write_arrays_bytes: unknown format {other:?}"
+        ))),
+    }
+}
+
+/// Like `read_arrays_auto` but values come back as little-endian f32 bytes
+/// (the numpy fast path: `np.frombuffer` instead of building float lists).
+#[pyfunction]
+pub fn read_arrays_auto_bytes(
+    py: Python<'_>,
+    path: &str,
+) -> PyResult<(String, Vec<NamedByteArray>)> {
+    let (format, arrays) = mmn_io::read_arrays_auto(path).map_err(mmn_err_to_py)?;
+    let mut out = Vec::with_capacity(arrays.len());
+    for (name, shape, values) in arrays {
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        out.push((
+            name,
+            shape,
+            pyo3::types::PyBytes::new(py, &bytes).into(),
+        ));
+    }
+    Ok((format.as_str().to_string(), out))
+}
+
+/// Read every weight tensor in a TFLite flatbuffer model.
+#[pyfunction]
+pub fn read_tflite(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_tflite_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Collect every numpy array in a pickle file (pdparams/sklearn/dicts).
+#[pyfunction]
+pub fn read_pickle_arrays(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_pickle_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read a Zarr v2 directory store into named arrays.
+#[pyfunction]
+pub fn read_zarr(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_zarr_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Write named f32 arrays as a Zarr group store (v2 zlib or v3 gzip).
+#[pyfunction]
+#[pyo3(signature = (path, arrays, zarr_format = 2))]
+pub fn write_zarr(path: &str, arrays: Vec<NamedArray>, zarr_format: u8) -> PyResult<()> {
+    mmn_io::write_zarr_arrays_format(path, &arrays, zarr_format).map_err(mmn_err_to_py)
+}
+
+/// Write a sharded safetensors checkpoint (HF weight_map index + shards).
+#[pyfunction]
+pub fn write_safetensors_sharded(
+    index_path: &str,
+    arrays: Vec<NamedArray>,
+    max_shard_bytes: usize,
+) -> PyResult<()> {
+    mmn_io::write_sharded_safetensors(index_path, &arrays, max_shard_bytes)
+        .map_err(mmn_err_to_py)
+}
+
+/// Write named f32 arrays as a numpy-deserializable pickle dict.
+#[pyfunction]
+pub fn write_pickle_arrays(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_pickle_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Read a legacy GGML/GGMF/GGJT file; returns
+/// `(container_name, hparams, vocab_tokens, arrays)`.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn read_ggml_legacy(
+    path: &str,
+) -> PyResult<(String, Vec<i32>, Vec<(Vec<u8>, f32)>, Vec<NamedArray>)> {
+    let file = mmn_io::read_ggml_legacy(path).map_err(mmn_err_to_py)?;
+    Ok((
+        file.container.as_str().to_string(),
+        file.hparams.to_vec(),
+        file.vocab,
+        file.arrays,
+    ))
+}
+
+/// Write named f32 arrays as a Flax msgpack pytree.
+#[pyfunction]
+pub fn write_flax(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_flax_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays as a `.safetensors` file (F32/F16/BF16).
+#[pyfunction]
+#[pyo3(signature = (path, arrays, dtype="f32"))]
+pub fn write_safetensors(path: &str, arrays: Vec<NamedArray>, dtype: &str) -> PyResult<()> {
+    mmn_io::write_safetensors_arrays_dtype(path, &arrays, dtype).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays as an ONNX model (`onnx.load`-compatible).
+#[pyfunction]
+pub fn write_onnx(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_onnx_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Write a TF checkpoint v2 (`tf.train.load_checkpoint`-compatible).
+#[pyfunction]
+pub fn write_tf_checkpoint(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    mmn_io::write_tf_checkpoint_arrays(path, &arrays).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays as an HDF5 file (h5py/Keras-readable), optionally
+/// gzip-compressed (one deflate chunk per dataset).
+#[pyfunction]
+#[pyo3(signature = (path, arrays, compress = false))]
+pub fn write_h5(path: &str, arrays: Vec<NamedArray>, compress: bool) -> PyResult<()> {
+    mmn_io::write_h5_arrays_opts(path, &arrays, compress).map_err(mmn_err_to_py)
+}
+
+/// Write named arrays as a `torch.load`-compatible `.pt` state dict.
+#[pyfunction]
+pub fn write_pt(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
+    let bytes = write_torch_arrays(&arrays, None).map_err(mmn_err_to_py)?;
+    if let Some(parent) = Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        }
+    }
+    std::fs::write(path, bytes).map_err(|e| PyValueError::new_err(e.to_string()))
 }

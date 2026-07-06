@@ -1,0 +1,43 @@
+//! Global model-format interop, implemented from scratch.
+//!
+//! - [`gguf`] / [`gguf_chatbot`] — GGUF container + llama.cpp-name bridge
+//! - [`torch_pt`] / [`pickle`] — PyTorch `.pt` archives + pickle VM
+//! - [`npy`] / [`npz_chatbot`] — NumPy `.npy` codec + `.npz` checkpoints
+//! - [`zip`] / [`inflate`] — ZIP container + DEFLATE decompressor
+
+/// A named array: `(name, shape, C-ordered f32 data)`.
+pub type NamedArray = (String, Vec<usize>, Vec<f32>);
+
+pub mod deflate;
+pub mod gguf;
+pub mod gguf_chatbot;
+pub mod gguf_info;
+pub mod gguf_iq_grids;
+pub mod gguf_quant;
+pub mod gguf_quant_iq;
+pub mod gguf_quant_k_encode;
+pub mod hdf5;
+pub mod hdf5_write;
+pub mod inflate;
+pub mod npy;
+pub mod npz_chatbot;
+pub mod arrays_auto;
+pub mod blosc;
+pub mod blosclz;
+pub mod flax;
+pub mod ggml_legacy;
+pub mod lz4;
+pub mod tflite;
+pub mod msgpack;
+pub mod onnx;
+pub mod pickle_arrays;
+pub mod st_arrays;
+pub mod zarr;
+pub mod zstd;
+pub mod pickle;
+pub mod proto;
+pub mod sharded;
+pub mod snappy;
+pub mod tf_checkpoint;
+pub mod torch_pt;
+pub mod zip;

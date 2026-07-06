@@ -6,10 +6,10 @@ license.workspace = true
 
 [dependencies]
 mmn-core.workspace = true
+mmn-data.workspace = true
 mmn-models.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ndarray.workspace = true
-safetensors.workspace = true
 half.workspace = true

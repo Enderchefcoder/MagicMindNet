@@ -1845,7 +1845,7 @@ mod chatbot_tests {
         let padded = targets_with_vision_prefix(&[20, 30, 40], 1, 256);
         let patch = vision_rgb_patch_from_text("scene");
         let loss_with = model
-            .loss_on_batch_with_patches(&tokens, &padded, Some(&[patch.clone()]))
+            .loss_on_batch_with_patches(&tokens, &padded, Some(std::slice::from_ref(&patch)))
             .unwrap();
         let mut no_cross = model;
         no_cross.vision_cross_attn = None;
@@ -1865,7 +1865,7 @@ mod chatbot_tests {
             .loss_on_batch_with_patches(
                 &tokens,
                 &targets_with_vision_prefix(&[6, 7, 8], 1, 256),
-                Some(&[p1.clone()]),
+                Some(std::slice::from_ref(&p1)),
             )
             .unwrap();
         let loss_two = model
@@ -2038,6 +2038,18 @@ impl Diffusion {
             vae: mmn_nn::VaeEncoder::new(),
             vae_decoder: mmn_nn::VaeDecoder::new(),
             unet: mmn_nn::UNet2D::new(),
+            latent_channels: 4,
+        }
+    }
+
+    /// Seeded init: the same seed reproduces the same VAE/UNet weights.
+    pub fn new_with_seed(seed: u64) -> Self {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        Self {
+            vae: mmn_nn::VaeEncoder::new_with_rng(&mut rng),
+            vae_decoder: mmn_nn::VaeDecoder::new_with_rng(&mut rng),
+            unet: mmn_nn::UNet2D::new_with_rng(&mut rng),
             latent_channels: 4,
         }
     }
@@ -2332,6 +2344,16 @@ mod diffusion_tests {
         let x = Tensor::randn(&[1, 3, 8, 8], false);
         let out = d.training_step(&x, 3).unwrap();
         assert!(out.data.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn seeded_init_is_reproducible_and_seed_dependent() {
+        let a = Diffusion::new_with_seed(5);
+        let b = Diffusion::new_with_seed(5);
+        let c = Diffusion::new_with_seed(6);
+        assert_eq!(a.unet.down.weight.data, b.unet.down.weight.data);
+        assert_eq!(a.vae.conv1.weight.data, b.vae.conv1.weight.data);
+        assert_ne!(a.unet.down.weight.data, c.unet.down.weight.data);
     }
 
     #[test]

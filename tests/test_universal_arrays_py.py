@@ -1,0 +1,180 @@
+"""Universal array IO: ai.load_arrays / ai.save_arrays / ai.load_gguf_arrays.
+
+One loader detects every supported container by content; save_arrays infers
+the writer from the extension. Cross-checks against official packages where
+they are installed (numpy, gguf).
+"""
+
+import numpy as np
+import pytest
+
+import magicmindnet as ai
+
+DATA = {"w": [[1.0, -2.0], [3.5, 0.25]], "b": [0.5, 0.0, -0.5]}
+
+
+@pytest.mark.parametrize(
+    "ext,expected_format",
+    [
+        ("npz", "npz"),
+        ("pt", "pt"),
+        ("pth", "pt"),
+        ("h5", "h5"),
+        ("hdf5", "h5"),
+        ("onnx", "onnx"),
+        ("safetensors", "safetensors"),
+        ("msgpack", "flax"),
+        ("gguf", "gguf"),
+    ],
+)
+def test_save_arrays_roundtrips_every_extension(tmp_path, ext, expected_format):
+    path = str(tmp_path / f"arrays.{ext}")
+    ai.save_arrays(path, DATA)
+    assert ai.detect_arrays_format(path) == expected_format
+    back = ai.load_arrays(path)
+    assert back["w"] == DATA["w"]
+    assert back["b"] == DATA["b"]
+
+
+def test_save_arrays_explicit_format_overrides_extension(tmp_path):
+    path = str(tmp_path / "weights.bin")
+    ai.save_arrays(path, DATA, format="safetensors")
+    assert ai.detect_arrays_format(path) == "safetensors"
+    assert ai.load_arrays(path)["w"] == DATA["w"]
+
+
+def test_save_arrays_tf_checkpoint_format(tmp_path):
+    prefix = str(tmp_path / "ckpt")
+    ai.save_arrays(prefix, DATA, format="tf-checkpoint")
+    back = ai.load_arrays(prefix)
+    assert back["w"] == DATA["w"]
+
+
+def test_save_arrays_unknown_extension_errors(tmp_path):
+    with pytest.raises(ValueError, match="cannot infer a format"):
+        ai.save_arrays(str(tmp_path / "weights.xyz"), DATA)
+
+
+def test_load_arrays_single_npy(tmp_path):
+    path = str(tmp_path / "single.npy")
+    ai.save_npy(path, [[7.0, 8.0]])
+    assert ai.detect_arrays_format(path) == "npy"
+    assert ai.load_arrays(path) == {"arr": [[7.0, 8.0]]}
+
+
+def test_load_arrays_official_numpy_npz(tmp_path):
+    path = str(tmp_path / "np.npz")
+    np.savez(path, w=np.array(DATA["w"], dtype=np.float32))
+    loaded = ai.load_arrays(path)
+    assert loaded["w"] == DATA["w"]
+
+
+def test_load_arrays_rejects_junk(tmp_path):
+    path = tmp_path / "junk.bin"
+    path.write_bytes(b"absolutely not a tensor container")
+    with pytest.raises((ValueError, RuntimeError), match="unrecognized tensor container"):
+        ai.load_arrays(str(path))
+
+
+def test_save_safetensors_sharded_roundtrip(tmp_path):
+    index = str(tmp_path / "model.safetensors.index.json")
+    data = {f"layer.{i}.weight": [[float(i * 10 + j) for j in range(64)]] for i in range(6)}
+    # 64 f32 = 256 bytes per tensor; 600-byte budget forces several shards.
+    ai.save_safetensors_sharded(index, data, max_shard_size=600)
+    shard_files = sorted(p.name for p in tmp_path.glob("*.safetensors"))
+    assert len(shard_files) >= 2
+    assert shard_files[0].startswith("model-00001-of-")
+    assert ai.detect_arrays_format(index) == "sharded"
+    assert ai.load_arrays(index) == data
+
+    from safetensors.numpy import load_file as st_load
+
+    official = st_load(str(tmp_path / shard_files[0]))
+    assert set(official).issubset(set(data))
+
+
+def test_sharded_index_metadata_total_size(tmp_path):
+    import json
+
+    index = str(tmp_path / "model.safetensors.index.json")
+    ai.save_safetensors_sharded(index, {"w": [[1.0, 2.0]]}, max_shard_size=10**9)
+    meta = json.load(open(index))
+    assert meta["metadata"]["total_size"] == 8
+    assert meta["weight_map"] == {"w": "model-00001-of-00001.safetensors"}
+
+
+def test_save_arrays_numpy_fast_path_byte_identical(tmp_path):
+    data_np = {"w": np.array(DATA["w"], dtype=np.float32),
+               "b": np.array(DATA["b"], dtype=np.float32)}
+    for ext in ["safetensors", "npz", "gguf", "msgpack"]:
+        p_lists = str(tmp_path / f"lists.{ext}")
+        p_np = str(tmp_path / f"numpy.{ext}")
+        ai.save_arrays(p_lists, DATA)
+        ai.save_arrays(p_np, data_np)
+        assert open(p_lists, "rb").read() == open(p_np, "rb").read(), ext
+
+
+def test_load_arrays_numpy_fast_path(tmp_path):
+    path = str(tmp_path / "arrays.safetensors")
+    ai.save_arrays(path, DATA)
+    arrays = ai.load_arrays(path, numpy=True)
+    assert isinstance(arrays["w"], np.ndarray)
+    assert arrays["w"].dtype == np.float32
+    assert arrays["w"].flags.writeable
+    np.testing.assert_allclose(arrays["w"], DATA["w"])
+    np.testing.assert_allclose(arrays["b"], DATA["b"])
+    # Both paths agree across a second format too.
+    gguf_path = str(tmp_path / "arrays.gguf")
+    ai.save_arrays(gguf_path, DATA)
+    fast = ai.load_arrays(gguf_path, numpy=True)
+    slow = ai.load_arrays(gguf_path)
+    for name in DATA:
+        np.testing.assert_allclose(fast[name], np.array(slow[name], dtype=np.float32))
+
+
+def test_gguf_arrays_roundtrip_and_official_load(tmp_path):
+    path = str(tmp_path / "arrays.gguf")
+    ai.save_gguf_arrays(path, DATA)
+    back = ai.load_gguf_arrays(path)
+    assert back == DATA
+
+    gguf = pytest.importorskip("gguf")
+    reader = gguf.GGUFReader(path)
+    names = {t.name for t in reader.tensors}
+    assert names == {"w", "b"}
+    w = next(t for t in reader.tensors if t.name == "w")
+    np.testing.assert_allclose(
+        np.array(w.data, dtype=np.float32).reshape(2, 2), DATA["w"]
+    )
+
+
+@pytest.mark.parametrize("dtype", ["f16", "q8_0", "q4_k"])
+def test_save_gguf_arrays_dtype_official_reads(tmp_path, dtype):
+    gguf = pytest.importorskip("gguf")
+    path = str(tmp_path / f"arrays_{dtype}.gguf")
+    # 256-wide rows satisfy every block-multiple requirement.
+    values = [[(i % 17) / 8.0 - 1.0 for i in range(256)] for _ in range(2)]
+    ai.save_gguf_arrays(path, {"w": values}, dtype=dtype)
+    ours = ai.load_gguf_arrays(path)["w"]
+    reader = gguf.GGUFReader(path)
+    tensor = next(t for t in reader.tensors if t.name == "w")
+    official = gguf.dequantize(tensor.data, tensor.tensor_type).reshape(2, 256)
+    np.testing.assert_allclose(np.array(ours, dtype=np.float32), official, atol=1e-6)
+    tolerance = {"f16": 1e-3, "q8_0": 0.02, "q4_k": 0.2}[dtype]
+    np.testing.assert_allclose(official, np.array(values, dtype=np.float32), atol=tolerance)
+
+
+def test_save_gguf_arrays_bad_dtype_errors(tmp_path):
+    with pytest.raises((ValueError, RuntimeError), match="not supported"):
+        ai.save_gguf_arrays(str(tmp_path / "x.gguf"), {"w": [1.0]}, dtype="q9_z")
+
+
+def test_load_gguf_arrays_dequantizes_quantized_model(tmp_path):
+    # A quantized chatbot checkpoint is also a plain GGUF tensor container.
+    bot = ai.Chatbot(vocab_size=64, n_layer=1, d_model=64)
+    path = str(tmp_path / "bot.gguf")
+    bot.save(path, format="gguf-q8_0")
+    arrays = ai.load_gguf_arrays(path)
+    embed = arrays["token_embd.weight"]
+    assert len(embed) == 64 and len(embed[0]) == 64
+    assert ai.detect_arrays_format(path) == "gguf"

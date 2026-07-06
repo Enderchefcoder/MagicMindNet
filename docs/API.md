@@ -36,6 +36,9 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Models | `Chatbot`, `Classifier`, `Diffusion` |
 | Training | `TrainConfig`, `Train`, `TrainClassifier`, `TrainDiffusion`, `RL`, `SPIN` |
 | IO | **`load`** (universal), `export`, `import_model`, `merge`, `quantize`, `export_classifier`, `import_classifier`, `merge_classifier`, `quantize_classifier`, `export_diffusion`, `import_diffusion`, `merge_diffusion` |
+| Array IO | `load_arrays`/`save_arrays`/`detect_arrays_format` (universal, content-detected), plus `save_npy`/`load_npy`, `save_npz`/`load_npz`, `save_pt`/`load_pt`, `save_h5`/`load_h5`, `load_keras`, `save_tf_checkpoint`/`load_tf_checkpoint`, `save_onnx`/`load_onnx`, `save_safetensors`/`load_safetensors`, `save_flax`/`load_flax`, `save_gguf_arrays`/`load_gguf_arrays`, `load_tflite`, `load_ggml_legacy` (NumPy/PyTorch/TF/TFLite/ONNX/safetensors/JAX/GGUF interchange, none of those packages needed) |
+| GGUF tools | `gguf_info`, `load_gguf_tokenizer`, `load_gguf_bpe_tokenizer` |
+| Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
 | Resource | `limit`, `limit_percent` |
 | Errors | `CPUError`, `CUDAError`, `DataMismatchError`, `DataMissingRowError`, `ModelMismatchError` |
@@ -310,10 +313,11 @@ See `examples/diffusion_train.py`, `examples/diffusion_edit_train.py`, `examples
 ## Checkpoints & merge
 
 **Universal loader** — detects the model family (Chatbot / Classifier /
-Diffusion) and the format (JSON, binary HF safetensors, bin stub) from the file:
+Diffusion) and the format (JSON, binary HF safetensors, bin stub, GGUF,
+PyTorch `.pt`, NumPy `.npz`) from the file contents:
 
 ```python
-model = ai.load("anything.mmn")
+model = ai.load("anything.mmn")   # or .safetensors / .gguf / .pt / .npz
 ```
 
 Model-specific loaders (`Chatbot.load`, `Classifier.load`, `Diffusion.load`)
@@ -329,8 +333,17 @@ raise `ValueError` naming the actual family when handed the wrong file.
 | `load_bpe_sidecar(checkpoint_path)` | — | Load `mmn-bpe-v1` sibling referenced in meta |
 | `load_unigram_sidecar(checkpoint_path)` | — | Load `mmn-unigram-v1` sibling referenced in meta |
 | `export(bot, "bin", path)` | `mmn-bin-v1` | Architecture meta only |
+| `export(bot, "gguf", path)` | GGUF v3 (F32) | From-scratch container; llama.cpp tensor names; `unigram_encoder=` embeds the vocab |
+| `export(bot, "gguf-f16" \| "gguf-q8_0" \| "gguf-q4_0", path)` | GGUF v3 | Half-precision / block-quantized weights |
+| `export(bot, "gguf-q4_k" \| "gguf-q5_k" \| "gguf-q6_k", path)` | GGUF v3 | From-scratch k-quant encoders (row-wise; narrow tensors stay F32) |
+| `export(bot, "npz", path)` | NumPy `.npz` | `numpy.load`-compatible; `meta.json` entry |
+| `export(bot, "pt", path)` | PyTorch state dict | `torch.load`-compatible; `_mmn_meta` entry |
 | `import_model("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary; strict tensor validation |
 | `import_model("hf-safetensors", [path])` | `mmn-hf-safetensors-v1` | Binary HF safetensors only |
+| `import_model("gguf", [path])` | GGUF v2/v3 | Parallel dequant of **every current GGML type**: classic quants, Q2_K–Q8_K, IQ1_S/M, IQ2_XXS/XS/S, IQ3_XXS/S, IQ4_NL/XS, TQ1_0/TQ2_0, MXFP4, NVFP4, F16/BF16 — cross-validated against llama.cpp's `gguf` package |
+| `import_model("npz", [path])` | NumPy `.npz` | MMN or HF tensor names; stored or deflate entries |
+| `import_model("pt", [path])` | PyTorch `.pt`/`.pth` | From-scratch pickle VM; zip and legacy pre-1.6 formats; HF llama-style state dicts adapt |
+| `import_model("sharded", [index])` | HF `*.index.json` | `weight_map` shards (safetensors or torch), resolved next to the index |
 | `export_classifier(clf, "safetensors", path)` | `mmn-classifier-v1` | backbone + head (JSON) |
 | `export_classifier(clf, "hf-safetensors", path)` | `mmn-hf-classifier-v1` | backbone + head (binary HF) |
 | `import_classifier("safetensors", [path])` | JSON or binary | **First path only**; auto-detects HF binary |
@@ -356,6 +369,52 @@ Cross-import (chatbot ↔ classifier) is rejected. Full IO matrix: [checkpoint_c
 ai.limit("50%")       # 1–100; also accepts "50" without %
 pct = ai.limit_percent()
 ```
+
+### Array file IO (NumPy / PyTorch interchange)
+
+No numpy or torch installation needed; objects with `.tolist()` (numpy
+arrays, torch tensors) are accepted anywhere an array is:
+
+```python
+ai.save_npy("x.npy", [[1.0, 2.0]])
+x = ai.load_npy("x.npy")                       # nested lists
+
+ai.save_npz("many.npz", {"w": [[1.0]], "b": [0.5]})
+arrays = ai.load_npz("many.npz")               # {name: nested lists}
+
+ai.save_pt("state.pt", {"w": [[1.0]]})         # torch.load-compatible
+tensors = ai.load_pt("state.pt")               # zip + legacy pre-1.6 formats
+
+weights = ai.load_h5("model.weights.h5")       # HDF5 without h5py (incl. gzip chunks)
+weights = ai.load_keras("model.keras")         # Keras v3 archive
+arrays = ai.load_tf_checkpoint("ckpt")         # TF checkpoint v2, no TF needed
+weights = ai.load_onnx("model.onnx")           # ONNX initializers, no onnx needed
+
+ai.save_h5("out.h5", weights)                  # h5py-readable
+ai.save_tf_checkpoint("out", arrays)           # tf.train.load_checkpoint-readable
+ai.save_onnx("out.onnx", weights)              # passes onnx.checker
+
+tensors = ai.load_safetensors("m.safetensors") # every spec dtype, no package needed
+ai.save_safetensors("out.safetensors", tensors)  # loads with safetensors.numpy
+
+params = ai.load_flax("state.msgpack")         # Flax/JAX pytree, no msgpack needed
+ai.save_flax("out.msgpack", params)            # flax.serialization.from_bytes reads it
+
+arrays = ai.load_arrays("weights.anything")    # universal: detects any container
+ai.save_arrays("out.gguf", arrays)             # writer inferred from extension
+tensors = ai.load_gguf_arrays("model.gguf")    # dequantize every GGUF tensor (v1-v3)
+
+weights = ai.load_tflite("model.tflite")       # flatbuffers, no TF needed
+old = ai.load_ggml_legacy("model.ggjt")        # pre-GGUF llama.cpp containers
+
+info = ai.gguf_info("model.gguf")              # header-only inspection
+tok = ai.load_gguf_tokenizer("model.gguf")     # embedded SentencePiece vocab
+bpe = ai.load_gguf_bpe_tokenizer("llama3.gguf")  # gpt2-style byte-level BPE
+ai.save_npz("small.npz", arrays, compress=True)  # from-scratch DEFLATE
+bot = ai.load("pytorch_model.bin.index.json")  # sharded HF checkpoints
+```
+
+Details: [interop.md](interop.md).
 
 ---
 

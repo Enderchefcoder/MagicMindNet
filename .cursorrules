@@ -16,7 +16,28 @@
 - PyO3 `panic!` in `#[new]` surfaces as `pyo3_runtime.PanicException` — user-facing constructors must return `PyResult` and raise `ValueError` instead.
 - Rust `println!` bypasses Python's buffered stdout; flush `sys.stdout` before Rust-side progress prints so output interleaves correctly (see `flush_python_stdout` in mmn-py train dispatch).
 - Cloud VM rust default was 1.83; deps need edition2024 → `rustup default stable` (1.96) before `maturin develop`.
-- This linux VM needs `sudo apt-get install python3.12-venv` before `python3 -m venv .venv`.
+- This linux VM needs `sudo apt-get install python3.12-venv` before `python3 -m venv .venv`; run `sudo apt-get update` first or the package is "not available".
+- GGUF stores dims GGML-style (`ne[0]` fastest-varying): reverse them for row-major ndarray shapes; tensor data section aligns to `general.alignment` (default 32).
+- torch.save `.pt` = stored ZIP with `<root>/data.pkl` (pickle proto 2) + `<root>/data/<key>` raw storage blobs; persistent id tuple is `('storage', StorageClass, key, location, numel)`; CPython's pickler verifies globals are importable, so tests must install fake `torch` modules in `sys.modules` before pickling torch-style objects.
+- `np.savez` writes stored (uncompressed) zip entries; `np.savez_compressed` uses deflate — the from-scratch inflate in `mmn-io interop` covers both.
+- mmn-py error convention: `MmnError::Other` surfaces as `RuntimeError`; pytest error assertions should use `(RuntimeError, ValueError)` tuples like existing IO tests.
+- k-quant layouts (bytes/superblock of 256): Q2_K=84, Q3_K=110, Q4_K=144, Q5_K=176, Q6_K=210, Q8_K=292; IQ4_XS=136; TQ1_0=54, TQ2_0=66, MXFP4=17/32-block. Q3_K packs 6-bit scales via the aux/kmask shuffle; Q4_K/Q5_K share get_scale_min_k4.
+- Legacy torch magic 0x1950a86a20f9469cfc6c pickles as LONG1 with 10 bytes; CPython pickles registered via fake sys.modules entries must be shared across test files (conftest.install_fake_torch) or class identity checks fail.
+- h5py default ("earliest") writes superblock v0 + v1 object headers + symbol-table groups + contiguous layout v3 — the minimal HDF5 read path.
+- The official `gguf` pip package (gguf-py) has numpy dequant traits for all 24 GGML types incl. IQ grids (stored as 2-/4-bit-packed grid_hex) — ideal cross-validation oracle; its quantize only covers classic quants + TQ/MXFP4 (k-quants raise NotImplementedError).
+- IQ block sizes: IQ2_XXS=66, IQ2_XS=74, IQ2_S=82, IQ3_XXS=98, IQ3_S=110, IQ1_S=50, IQ1_M=56 (d packed in scale nibbles), NVFP4=(64,36) with unsigned-E4M3 scales; ksigns is generatable (7 bits + parity bit).
+- DEFLATE compressor gotcha: save the old hash head BEFORE overwriting for prev-chain links, or matches self-reference and the chain breaks.
+- ggml quantization is ROW-wise: ne[0] (fastest dim) must be a block-size multiple; gguf-py raises on total-count-only alignment. ggml nearest_int = round-half-to-even (`f32::round_ties_even`).
+- TF checkpoint v2 .index = LevelDB table (no compression by default): 48-byte footer (2 varint handles + magic 0xdb4775248b80fb57 LE), block trailer = type byte + masked crc32c(block+type); mask = rotate_right(15) + 0xa282ead8; values = BundleEntryProto (dtype f1, shape f2, shard f3, offset f4, size f5, crc32c fixed32 f6).
+- tensorflow-cpu installs fine in this VM (~600MB) for local validation; keep it OUT of dev extras — commit real-TF fixtures instead and importorskip live tests.
+- ggml classic-quant encoders round by truncation after +0.5 ((int8_t)(x+0.5f)), NOT round_ties_even; matching this makes our blocks byte-identical to gguf-py's quantize.
+- HDF5 chunk B-tree keys carry rank+1 dims (trailing element-size); chunk data is filtered per chunk with a filter mask; gzip filter = zlib wrapper (2-byte header + deflate + big-endian adler32).
+- Test float roundtrips with power-of-two denominators — 1/89 isn't f32-representable and 'exact equality' tests fail for storage reasons, not codec bugs.
+- libhdf5 reads group B-tree/SNOD nodes at their FULL fixed allocation (btree 24+(2K+1)*8+2K*8=544 with K_internal=16; SNOD 8+2*K_leaf*40=328 with K_leaf=4) — writers must pad nodes or h5py errors with 'addr overflow'.
+- HDF5 f32 datatype bit fields per h5py: [0x11, 0x20, 0x1F, 0x00] (v1 float, normalized-msb, sign loc 31) + offset0/prec32/exp23,8/man0,23/bias127; include a v2 fill-value message (02 02 02 01 + size 0).
+- TF bundle writer needs SORTED keys ('' header first) — LevelDB tables are ordered; BundleHeaderProto field3 = VersionDef{producer=1}.
+- safetensors container: u64 header_len + JSON {name: {dtype, shape, data_offsets}} (+ __metadata__ string map); pad header with spaces so 8+len is 8-aligned; offsets validated against shape*dtype_size.
+- Q3_K packs scale l>>4 high bits as scales[8 + j%4] |= high << (2*(j/4)); Q2_K uses use_mad=true qkx2 with weights=|x|.
 
 # Scratchpad
 
@@ -186,6 +207,110 @@
 [X] diffusion_benchmark example, masked fixed-t loss regression, eval_mean_loss edit --train; 311 Rust / 631 pytest, verify_gate
 [X] Diffusion parameters getter, quantize roundtrip example, roundtrip pytest; 313 Rust / 635 pytest, verify_gate
 [X] Image dataset path resolvers, merge_diffusion demo, classifier IO guard; 314 Rust / 640 pytest, verify_gate
+
+## Task: Global interop — GGUF from scratch, PyTorch .pt, NumPy npy/npz, universal load
+[X] mmn-io interop core: zip.rs (reader/writer + crc32), inflate.rs (RFC1951), npy.rs codec
+[X] GGUF from scratch: container read/write, quant dequant (Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q4_K/Q6_K, F16/BF16), llama name map -> Chatbot
+[X] PyTorch .pt: pickle VM reader + writer, torch zip layout, state_dict -> Chatbot
+[X] npz chatbot checkpoint (tensors as .npy + meta.json) — numpy/TF interchange
+[X] detect.rs: GGUF/ZIP magic, new CheckpointKind variants; ai.load() universal
+[X] mmn-core elementwise ops expansion + tests (elementwise.rs)
+[X] mmn-py: export/import formats gguf/gguf-q8_0/npz/pt, read/write npy/npz/pt fns, interop.py, stubs
+[X] Docs: docs/interop.md, checkpoint_coverage, checkpoints, API, README, CHANGELOG; examples/global_formats_roundtrip.py
+[X] 395 Rust / 772 pytest green; ruff clean; verify_gate
+
+## Task: Interop wave 2 — full quant coverage, HDF5, legacy torch, GGUF tokenizers, perf
+[X] GGUF quants: Q2_K/Q3_K/Q5_K/Q8_K/Q8_1 + IQ4_NL/IQ4_XS + TQ1_0/TQ2_0 + MXFP4; writer f16/q4_0; removed-id errors
+[X] GGUF extras: gguf_info (header-only incremental read), load_gguf_tokenizer (SentencePiece->UnigramEncoder), embedded-vocab export (self-contained gguf)
+[X] Legacy torch (pre-1.6): pickle prefix parsing, magic check, raw storage section, detect + auto-read
+[X] From-scratch HDF5 reader (superblock v0/1, v1 object headers, B-tree/SNOD groups, compact/contiguous) -> ai.load_h5 / ai.load_keras; tests/fixtures/simple.h5
+[X] Perf: parallel GGUF dequant (thread::scope), OnceLock CRC table, unigram Viterbi hash index
+[X] 427 Rust / 796 pytest green; clippy 0; smoke OK
+
+## Task: Interop wave 3 — IQ grids, gguf-py crossval, gpt2 BPE, sharded HF, deflate compressor
+[X] IQ1_S/M, IQ2_XXS/XS/S, IQ3_XXS/S dequant with packed codebook grids (gguf_iq_grids.rs) + NVFP4 (id 40)
+[X] Cross-validation vs official gguf-py: all 24 quant types on random payloads + reference-quantized floats + GGUFReader parses our files; _native.dequantize_ggml
+[X] Gpt2BpeEncoder (bytes<->unicode, ranked merges, approx pretokenizer) + load_gguf_bpe_tokenizer + TextEncoderRef::Gpt2
+[X] Sharded HF: import_sharded(*.index.json), ChatbotSharded detect, st+pt shards mix
+[X] From-scratch DEFLATE compressor (fixed-Huffman + hash-chain LZ77) -> save_npz(compress=True), zlib-verified
+[X] Parallel torch storage decode; 451 Rust / 839 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 4 — k-quant encoders, TF checkpoint v2, real-TF validation, perf
+[X] Q4_K/Q5_K/Q6_K encoders (make_qx_quants / make_qkx2_quants ports, round_ties_even nearest_int); gguf-py decodes our blocks identically; Q6_K < 2% rel RMSE
+[X] Row-wise quant rule: fastest dim must be block multiple (gguf-py rejected total-count-based quantization) — narrow tensors fall back F32
+[X] TF checkpoint v2 reader from scratch: LevelDB table (prefix blocks, varint handles, masked CRC-32C), BundleEntryProto protobuf, multi-shard, checksum verify -> ai.load_tf_checkpoint
+[X] Real-TF validation: fixtures tests/fixtures/tf/ (TF 2.21 keras + ckpt) in CI; live importorskip tests match get_weights / load_checkpoint exactly (tensorflow-cpu NOT in dev extras)
+[X] Parallel zip entry inflation; examples/interop_benchmark.py (Q4_K = 7x smaller than F32)
+[X] 464 Rust / 852 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 5 — ONNX, chunked HDF5, byte-exact encoders, fast inflate
+[X] ONNX reader: shared interop/proto.rs walker + onnx.rs initializer extraction; validated vs official onnx package
+[X] Chunked HDF5: B-tree v1 chunk index (edge clipping), gzip filter (zlib + adler32 via our inflate), shuffle filter; fixtures/chunked.h5 + live h5py odd shapes
+[X] Byte-exact classic quant encoders Q4_1/Q5_0/Q5_1/TQ2_0 (ggml truncating rounding); gguf-py re-quantization fixed-point verified; gguf-q4_1/q5_0/q5_1 exports
+[X] Fast inflate: 10-bit Huffman LUT over 64-bit accumulator; take_bytes buffered
+[X] 473 Rust / 862 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 6 — writers for HDF5/TF-ckpt/ONNX (bidirectional everything)
+[X] HDF5 writer: superblock v0, fixed-alloc B-tree(544B)/SNOD(328B) nodes (libhdf5 requires full node allocation!), heap free-lists, h5py-exact f32 datatype; h5py.File reads output
+[X] TF ckpt v2 writer: sorted LevelDB table + masked crc32c + footer; tf.train.load_checkpoint reads output; full circle TF->us->TF bit-exact
+[X] ONNX writer: proto emit helpers; passes onnx.checker.check_model
+[X] MXFP4 + TQ1_0 reference-exact encoders; parallel HDF5 chunk decompression
+[X] 483 Rust / 876 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 7 — zero format deps, complete k-quant encoders
+[X] From-scratch st_codec.rs replaces the safetensors crate (drop-in API: SafeTensors/TensorView/Dtype/serialize); dep removed from Cargo.lock; official safetensors pkg cross-reads both ways
+[X] Q2_K (MAD qkx2), Q3_K (make_q3_quants iterative + 6-bit scale shuffle), Q8_K encoders; gguf-q2_k/q3_k exports; strict Q2->Q8 quality ladder test
+[X] Parallel GGUF tensor payload encoding
+[X] 492 Rust / 884 pytest; clippy 0; smoke OK
+
+## Task: Interop wave 8 — IQ4 encoders, vision GGUF, SavedModel
+[X] IQ4_NL/IQ4_XS encoders (ntry codebook scale search, binary-search nearest); gguf-iq4_nl/xs exports; gguf-py decode identity
+[X] Vision GGUF export via v.* mmproj-style names + mmn.vision flag; roundtrips
+[X] SavedModel dir support in load_tf_checkpoint (variables/variables); live tf.saved_model.save validated
+[X] Parallel hf-safetensors import decode; from_id<->type_id roundtrip guard (caught dropped IQ4_XS id)
+[X] 499 Rust / 891 pytest; clippy 0; smoke OK
+
+## Task: Interop waves 9-11 — perf fast paths + safetensors/Flax/universal arrays
+[X] Wave 9a: typed TensorEntry structs + hand-rolled mmn_json scanner for the default JSON formats (save 337->60ms, load 487->80ms @1.3M params, bytes unchanged); detect + shard-index probe scan only top-level keys (208->25ms)
+[X] Wave 9b: block-parallel GGUF quantize encoding — work-stealing ~64K-element segments, byte-identical to whole-tensor (q6_k save 65->38ms on 4 cores)
+[X] Wave 10a: st_arrays.rs — generic safetensors arrays, every spec dtype BOOL..U64 -> f32; ai.load_safetensors/save_safetensors; crossval vs safetensors.numpy
+[X] Wave 10b: from-scratch msgpack codec (all wire types) + flax.rs pytree bridge (ExtType 1/3, dtype.name incl bfloat16); ai.load_flax/save_flax; crossval vs pip msgpack
+[X] Wave 11: arrays_auto.rs — ai.load_arrays content detection (gguf/pt/pt-legacy/npz/keras/npy/h5/safetensors/flax/onnx/tf-checkpoint), ai.save_arrays extension inference, GGUF as plain array container (read_gguf_arrays dequantizes everything)
+[X] 524 Rust / 952 pytest; clippy 0; ruff clean; msgpack+safetensors added to dev extras
+[X] Wave 12a: GGUF v1 (u32 counts) + legacy GGML/GGMF/GGJT reader incl. original f32-scale q4_0/q4_1 pair-packed blocks (pre-GGJT-v2) vs modern GGJT v2/v3 blocks
+[X] Wave 12b: TFLite from-scratch flatbuffer walker (Model schema, inline + TF>=2.13 out-of-band buffers, per-tensor/per-channel int8 dequant); committed simple.tflite fixture + live TF conversion tests
+[X] Wave 12c: TorchScript constants.pkl archives read as constants.N; ai.load("model.ggjt") adapts legacy llama names to Chatbot and generates
+[X] 540 Rust / 964 pytest; clippy 0; ruff clean
+[X] Wave 13a: numpy arrays in any pickle — _reconstruct+BUILD (proto 2-4, latin-1 _codecs bytes), proto-5 _frombuffer + BYTEARRAY8, NEWOBJ/NEWOBJ_EX, numpy scalars, big-endian, Fortran->C, sklearn __dict__ walk; covers PaddlePaddle .pdparams; writer pickle.load+numpy reads
+[X] Wave 13b: ai.load_arrays(path, numpy=True) — read_arrays_auto_bytes + np.frombuffer, 80ms -> 7ms @1.3M values; numpy stays optional via top-level try-import
+[X] 545 Rust / 991 pytest; clippy 0; ruff clean; ci_local OK (one mmn-train diffusion loss test flaked once under parallel load, passed on rerun + full gate)
+[X] Wave 14a: sharded safetensors WRITE (greedy packing + HF weight_map index, official safetensors opens shards) + generic read_sharded_arrays; load_arrays detects "sharded"
+[X] Wave 14b: save_arrays numpy tobytes fast path (write_arrays_bytes, byte-identical, ~2x)
+[X] Wave 14c: FIXED the diffusion flake — Diffusion::new_with_seed + seeded Conv2d/VAE/UNet ctors; denoise loss tests seeded (seed 11), 3x stable
+[X] 549 Rust / 995 pytest; clippy 0 (workspace); ruff clean
+[X] Wave 15a: ZIP64 read — EOCD64 + locator + 0x0001 extras; validated vs zipfile force_zip64 + hand-built archive; covers >4GB npz/pt
+[X] Wave 15b: gzip HDF5 WRITE — chunk B-tree v1 must be padded to libhdf5 default indexed-K=32 allocation (addr-overflow otherwise); v1 deflate pipeline; zlib wrap; h5py full circle
+[X] 552 Rust / 1000 pytest; clippy 0; ruff clean
+Lesson: libhdf5 reads B-tree/SNOD nodes at FIXED allocation sizes derived from superblock Ks — every from-scratch HDF5 writer node must pad to that size (group btree, SNOD, and chunk btree alike).
+[X] Wave 16: dtype-parameterized writes — encode_npy any dtype (f2/f4/f8, i1-i8, u1-u8, b1; numpy spellings), save_npy/save_npz dtype kwarg, safetensors f16/bf16 writes; all verified vs numpy.load / official safetensors
+[X] 552 Rust / 1020 pytest; clippy 0; ruff clean
+[X] Wave 17: hand-rolled parallel JSON serializer (byte-identical to serde, regression test) + parallel tensor-entry span parsing — save 60->50ms, load 55->30ms (cumulative 337->50 / 487->30); save_gguf_arrays dtype (f16/quants) vs gguf-py dequantize
+[X] 554 Rust / 1024 pytest; clippy 0; ruff clean
+[X] Wave 18: Zarr v2 read/write (chunk grids, edge padding, fill_value, zlib/raw, group trees; crossval vs zarr-python v2 both ways; blosc rejected w/ hint; zarr in dev extras) + npy bulk <f4/<f8/<f2 decode (npz load 34->17ms)
+[X] 557 Rust / 1036 pytest; clippy 0; ruff clean
+[X] Wave 19: from-scratch LZ4 block decoder + Blosc1 frame decoder (split byte-lane streams w/ single-stream fallback since c-blosc split modes vary, byte shuffle, memcpy, zlib-in-blosc) — default Blosc(lz4) zarr stores read; numcodecs fixtures + live matrix; blosclz/zstd/snappy/bitshuffle rejected by name
+[X] 567 Rust / 1041 pytest; clippy 0; ruff clean
+Lesson: zarr-python 3.x defaults NEW v2 stores to plain zstd (not blosc); classic blosc default needs explicit compressors=Blosc(...). numcodecs Blosc default cname is blosclz, zarr classic default was lz4.
+[X] Wave 20: blosclz decoder (FastLZ-family, byte-verified vs c-blosc captures) + bit-shuffle undo (bitplane transpose, 8*typesize region + raw tail) + Zarr v3 read (zarr.json nodes, c/ chunk keys, bytes+gzip/blosc chains, RFC-1952 gzip w/ CRC); v3 zstd rejected by name
+[X] 571 Rust / 1049 pytest; clippy 0; ruff clean
+[X] Wave 21: FROM-SCRATCH ZSTD (RFC 8878) — frames/blocks, Huffman literals (direct + FSE weights, 1/4-stream), FSE sequences (predefined/RLE/custom/repeat), backward bitstream, repeat offsets; zarr v2+v3 DEFAULTS + blosc-zstd + numcodecs levels 1-22 all read
+[X] 577 Rust / 1053 pytest; clippy 0; ruff clean
+Lesson: zstd predefined ML default distribution is 46 ones + SEVEN -1s (indexes 46-52), NOT 17 -1s from 36 — when implementing from spec memory, fetch the authoritative table (misremembering cost a debugging session; seq-level rem-arithmetic tracing found it).
+[X] Wave 22: zstd 2x (u64 window loads + peek-window Huffman, 120->240 MB/s literal-heavy) + snappy decoder (raw block format, cramjam fixtures, blosc codec 2) + zarr v2 standalone numcodecs LZ4 (size-prefixed blocks); cramjam in dev extras
+[X] 580 Rust / 1055 pytest; clippy 0; ruff clean — every blosc inner codec + every zarr-python compressor now decodes
+[X] Wave 23: zarr v3 sharding_indexed read (CRC-32C index, inner codec chains, sparse shards) + v3 WRITE (zarr.json + gzip chunks) + fuzz roundtrip suite (found: zarr rank-0 conventions v2 chunks[]+key "0" / v3 bare key "c"; zarr missing in numpy fast path; msgpack->flax alias)
+[X] 580 Rust / 1088 pytest; clippy 0; ruff clean. NOTE: one unidentified mmn-train test flaked once under full parallel load (526/580 partial run), 4 subsequent runs clean — watch for recurrence; seeded diffusion fix from wave 14 rules those out.
+Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
 [X] mmn-train: optimizer validation (adamw/muon/hybrid, ValueError on typo), verbose epoch logging, Train* return per-epoch mean losses

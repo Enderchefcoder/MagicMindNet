@@ -16,6 +16,12 @@ echo "== examples/checkpoint_roundtrip =="
 echo "== examples/hf_safetensors_roundtrip =="
 "$PY" examples/hf_safetensors_roundtrip.py
 
+echo "== examples/global_formats_roundtrip =="
+"$PY" examples/global_formats_roundtrip.py
+
+echo "== examples/interop_benchmark =="
+"$PY" examples/interop_benchmark.py
+
 echo "== examples/rope_roundtrip =="
 "$PY" examples/rope_roundtrip.py
 

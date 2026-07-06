@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn bpe_shorter_encoding_on_repeated_pattern() {
         let enc = BytePairEncoder::train(&["aaaa", "aaaa", "aaaa"], 512, 4);
-        let raw_len = "aaaa".bytes().count();
+        let raw_len = "aaaa".len();
         let bpe_len = enc.encode("aaaa").len();
         assert!(bpe_len <= raw_len);
     }

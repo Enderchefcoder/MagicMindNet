@@ -1,8 +1,11 @@
 //! Checkpoint file inspection: which model family does a file store?
 
 use crate::hf_tensor_codec::{hf_err, is_hf_binary_bytes, HF_CHATBOT_FORMAT, HF_CLASSIFIER_FORMAT};
+use crate::interop::gguf::is_gguf_bytes;
+use crate::interop::torch_pt::is_legacy_torch_bytes;
+use crate::interop::zip::{is_zip_bytes, zip_entry_names};
 use mmn_core::MmnError;
-use safetensors::SafeTensors;
+use crate::st_codec::SafeTensors;
 use std::fs;
 
 /// Model family stored in a checkpoint file.
@@ -16,17 +19,50 @@ pub enum CheckpointKind {
     Diffusion,
     /// `mmn-bin-v1` architecture stub (no weights).
     ChatbotBin,
+    /// GGUF container (llama.cpp-convention chatbot weights).
+    ChatbotGguf,
+    /// NumPy `.npz` archive of chatbot weights.
+    ChatbotNpz,
+    /// PyTorch `.pt` / `.pth` state-dict archive of chatbot weights.
+    ChatbotTorch,
+    /// Sharded HF checkpoint index (`*.index.json` + shard files).
+    ChatbotSharded,
+    /// Legacy pre-GGUF llama.cpp container (GGML/GGMF/GGJT).
+    ChatbotGgmlLegacy,
 }
 
 impl CheckpointKind {
     /// Human-readable family name for error messages.
     pub fn family(&self) -> &'static str {
         match self {
-            CheckpointKind::Chatbot | CheckpointKind::ChatbotBin => "Chatbot",
+            CheckpointKind::Chatbot
+            | CheckpointKind::ChatbotBin
+            | CheckpointKind::ChatbotGguf
+            | CheckpointKind::ChatbotNpz
+            | CheckpointKind::ChatbotTorch
+            | CheckpointKind::ChatbotSharded
+            | CheckpointKind::ChatbotGgmlLegacy => "Chatbot",
             CheckpointKind::Classifier => "Classifier",
             CheckpointKind::Diffusion => "Diffusion",
         }
     }
+}
+
+fn detect_zip_kind(bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
+    let names = zip_entry_names(bytes)?;
+    if names
+        .iter()
+        .any(|n| n == "data.pkl" || n.ends_with("/data.pkl"))
+    {
+        return Ok(CheckpointKind::ChatbotTorch);
+    }
+    if names.iter().any(|n| n.ends_with(".npy") || n == "meta.json") {
+        return Ok(CheckpointKind::ChatbotNpz);
+    }
+    Err(MmnError::Other {
+        message: "zip archive is neither a torch checkpoint (data.pkl) nor an npz archive (.npy entries)"
+            .into(),
+    })
 }
 
 fn detect_binary_kind(bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
@@ -51,10 +87,18 @@ fn detect_json_kind(bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
     let text = std::str::from_utf8(bytes).map_err(|e| MmnError::Other {
         message: format!("checkpoint is neither binary safetensors nor UTF-8 JSON: {e}"),
     })?;
-    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
-        message: format!("checkpoint JSON parse failed: {e}"),
-    })?;
-    match v["format"].as_str() {
+    // Structural scan first: reads only the top-level `"format"` key instead
+    // of materializing multi-megabyte tensor arrays into a `Value` tree.
+    let format: Option<String> = match crate::mmn_json::top_level_format(text) {
+        Some(found) => found,
+        None => {
+            let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
+                message: format!("checkpoint JSON parse failed: {e}"),
+            })?;
+            v["format"].as_str().map(str::to_string)
+        }
+    };
+    match format.as_deref() {
         Some("mmn-safetensors-v1") => Ok(CheckpointKind::Chatbot),
         Some("mmn-classifier-v1") => Ok(CheckpointKind::Classifier),
         Some("mmn-diffusion-v1") => Ok(CheckpointKind::Diffusion),
@@ -81,6 +125,21 @@ pub fn detect_checkpoint_kind(path: &str) -> Result<CheckpointKind, MmnError> {
         return Err(MmnError::Other {
             message: format!("checkpoint {path} is empty"),
         });
+    }
+    if is_gguf_bytes(&bytes) {
+        return Ok(CheckpointKind::ChatbotGguf);
+    }
+    if crate::interop::ggml_legacy::is_ggml_legacy_bytes(&bytes) {
+        return Ok(CheckpointKind::ChatbotGgmlLegacy);
+    }
+    if is_zip_bytes(&bytes) {
+        return detect_zip_kind(&bytes);
+    }
+    if is_legacy_torch_bytes(&bytes) {
+        return Ok(CheckpointKind::ChatbotTorch);
+    }
+    if crate::interop::sharded::is_shard_index_bytes(&bytes) {
+        return Ok(CheckpointKind::ChatbotSharded);
     }
     if is_hf_binary_bytes(&bytes) {
         detect_binary_kind(&bytes)
@@ -157,6 +216,46 @@ mod tests {
             detect_checkpoint_kind(bpath.to_str().unwrap()).unwrap(),
             CheckpointKind::ChatbotBin
         );
+    }
+
+    #[test]
+    fn detects_gguf_npz_and_torch() {
+        let model = Chatbot::new_with_seed(false, None, 32, Some(1), Some(8), Some(4));
+        let gguf = tmp_path("bot.gguf");
+        crate::export_gguf(&model, gguf.to_str().unwrap(), "f32").unwrap();
+        assert_eq!(
+            detect_checkpoint_kind(gguf.to_str().unwrap()).unwrap(),
+            CheckpointKind::ChatbotGguf
+        );
+        let npz = tmp_path("bot.npz");
+        crate::export_npz(&model, npz.to_str().unwrap()).unwrap();
+        assert_eq!(
+            detect_checkpoint_kind(npz.to_str().unwrap()).unwrap(),
+            CheckpointKind::ChatbotNpz
+        );
+        let pt = tmp_path("bot.pt");
+        crate::export_torch_pt(&model, pt.to_str().unwrap()).unwrap();
+        assert_eq!(
+            detect_checkpoint_kind(pt.to_str().unwrap()).unwrap(),
+            CheckpointKind::ChatbotTorch
+        );
+        for kind in [
+            CheckpointKind::ChatbotGguf,
+            CheckpointKind::ChatbotNpz,
+            CheckpointKind::ChatbotTorch,
+        ] {
+            assert_eq!(kind.family(), "Chatbot");
+        }
+    }
+
+    #[test]
+    fn unrecognized_zip_errors() {
+        let path = tmp_path("weird.zip");
+        let bytes =
+            crate::write_zip_stored(&[("readme.txt".to_string(), b"hi".to_vec())]).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let err = detect_checkpoint_kind(path.to_str().unwrap()).unwrap_err();
+        assert!(err.message().contains("neither a torch checkpoint"));
     }
 
     #[test]

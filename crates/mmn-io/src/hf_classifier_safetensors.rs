@@ -1,14 +1,14 @@
 //! Hugging Face binary safetensors interchange for `Classifier`.
 
 use crate::checkpoint_util::{
-    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry,
+    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry, TensorMap,
     write_file_create_parents,
 };
 use crate::hf_tensor_codec::{hf_err, tensor_bytes_f32, tensor_from_view};
 use mmn_core::{MmnError, Tensor};
 use mmn_models::Classifier;
-use safetensors::tensor::{Dtype, TensorView};
-use safetensors::{serialize, SafeTensors};
+use crate::st_codec::{Dtype, TensorView};
+use crate::st_codec::{serialize, SafeTensors};
 use std::collections::HashMap;
 use std::fs;
 
@@ -112,12 +112,11 @@ pub fn import_hf_classifier_safetensors_bytes(bytes: &[u8]) -> Result<Classifier
     load_classifier_from_tensors(mmn_tensors, &meta)
 }
 
-fn tensors_to_json_map(tensors: &HashMap<String, Tensor>) -> serde_json::Value {
-    let mut map = serde_json::Map::new();
-    for (k, t) in tensors {
-        map.insert(k.clone(), tensor_to_entry(t));
-    }
-    serde_json::Value::Object(map)
+fn tensors_to_entry_map(tensors: &HashMap<String, Tensor>) -> TensorMap {
+    tensors
+        .iter()
+        .map(|(k, t)| (k.clone(), tensor_to_entry(t)))
+        .collect()
 }
 
 fn load_classifier_from_tensors(
@@ -132,25 +131,11 @@ fn load_classifier_from_tensors(
         Vec::new()
     };
     let input_dim = meta["input_dim"].as_u64().map(|v| v as usize);
-    let json_tensors = tensors_to_json_map(&tensors);
+    let json_tensors = tensors_to_entry_map(&tensors);
     let backbone_entry = require_tensor_entry(&json_tensors, "backbone")?;
     let head_entry = require_tensor_entry(&json_tensors, "head")?;
-    let backbone_shape: Vec<usize> = backbone_entry["shape"]
-        .as_array()
-        .ok_or_else(|| MmnError::Other {
-            message: "backbone missing shape".into(),
-        })?
-        .iter()
-        .filter_map(|v| v.as_u64().map(|n| n as usize))
-        .collect();
-    let head_shape: Vec<usize> = head_entry["shape"]
-        .as_array()
-        .ok_or_else(|| MmnError::Other {
-            message: "head missing shape".into(),
-        })?
-        .iter()
-        .filter_map(|v| v.as_u64().map(|n| n as usize))
-        .collect();
+    let backbone_shape = backbone_entry.shape.clone();
+    let head_shape = head_entry.shape.clone();
     if backbone_shape.len() != 2 || head_shape.len() != 2 {
         return Err(MmnError::Other {
             message: "classifier backbone/head must be rank-2".into(),

@@ -12,6 +12,8 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 | [bpe_roundtrip.py](bpe_roundtrip.py) | BPE `save`/`load` parity + optional `--train` with `bpe_encoder` |
 | [rl_spin.py](rl_spin.py) | `RL` then `SPIN` on fixture QA |
 | [checkpoint_roundtrip.py](checkpoint_roundtrip.py) | Chatbot export/import parity |
+| [global_formats_roundtrip.py](global_formats_roundtrip.py) | GGUF / PyTorch `.pt` / NumPy `.npz` roundtrips + generic array IO via `ai.load` |
+| [interop_benchmark.py](interop_benchmark.py) | Save/load timing + file size across every format (incl. k-quants) |
 | [learned_pos_embed_roundtrip.py](learned_pos_embed_roundtrip.py) | Learned `pos_embed` export/import + mean-loss parity (optional `--train`) |
 | [rope_roundtrip.py](rope_roundtrip.py) | RoPE chatbot export/import + mean-loss parity (optional `--train`) |
 | [classifier_roundtrip.py](classifier_roundtrip.py) | Classifier export/import parity |

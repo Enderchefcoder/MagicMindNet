@@ -18,13 +18,24 @@ use errors::{
     CPUError, CUDAError, DataMismatchError, DataMissingRowError, ModelMismatchError,
 };
 use io::{
-    export, export_classifier_model, export_diffusion_model, import_classifier_model,
-    import_diffusion_model, import_model, load_checkpoint, merge, merge_classifier,
+    dequantize_ggml, export, export_classifier_model, export_diffusion_model, gguf_info_json,
+    import_classifier_model, import_diffusion_model, import_model, load_checkpoint,
+    load_gguf_bpe_tokenizer, load_gguf_tokenizer, merge, merge_classifier,
     merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
+    read_arrays_auto, read_arrays_auto_bytes, read_flax, read_gguf_arrays, read_ggml_legacy,
+    read_h5, read_keras,
+    read_npy, read_npz, read_pickle_arrays, read_tflite, read_zarr, write_arrays_bytes,
+    write_safetensors_sharded,
+    read_onnx, read_pt, read_safetensors,
+    read_tf_checkpoint, write_h5,
+    write_flax, write_gguf_arrays, write_npy, write_npz, write_onnx, write_pickle_arrays,
+    write_zarr,
+    write_pt, write_safetensors,
+    write_tf_checkpoint,
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
-use tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
+use tokenizer::{PyBytePairEncoder, PyGpt2BpeEncoder, PyUnigramEncoder};
 use train::{RL, SPIN, Train, TrainClassifier, TrainDiffusion};
 use train_config::PyTrainConfig;
 use vision::{vision_rgb_patch_from_image_path_py, vision_rgb_patches_from_image_path_py};
@@ -39,6 +50,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDatasetImageEdit>()?;
     m.add_class::<PyBytePairEncoder>()?;
     m.add_class::<PyUnigramEncoder>()?;
+    m.add_class::<PyGpt2BpeEncoder>()?;
     m.add_class::<PyChatbot>()?;
     m.add_class::<PyClassifier>()?;
     m.add_class::<PyDiffusion>()?;
@@ -64,6 +76,39 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(import_diffusion_model, m)?)?;
     m.add_function(wrap_pyfunction!(merge_diffusion_model, m)?)?;
     m.add_function(wrap_pyfunction!(quantize_diffusion_model, m)?)?;
+    m.add_function(wrap_pyfunction!(read_npy, m)?)?;
+    m.add_function(wrap_pyfunction!(write_npy, m)?)?;
+    m.add_function(wrap_pyfunction!(read_npz, m)?)?;
+    m.add_function(wrap_pyfunction!(write_npz, m)?)?;
+    m.add_function(wrap_pyfunction!(read_pt, m)?)?;
+    m.add_function(wrap_pyfunction!(write_pt, m)?)?;
+    m.add_function(wrap_pyfunction!(gguf_info_json, m)?)?;
+    m.add_function(wrap_pyfunction!(dequantize_ggml, m)?)?;
+    m.add_function(wrap_pyfunction!(load_gguf_tokenizer, m)?)?;
+    m.add_function(wrap_pyfunction!(load_gguf_bpe_tokenizer, m)?)?;
+    m.add_function(wrap_pyfunction!(read_h5, m)?)?;
+    m.add_function(wrap_pyfunction!(read_keras, m)?)?;
+    m.add_function(wrap_pyfunction!(read_tf_checkpoint, m)?)?;
+    m.add_function(wrap_pyfunction!(read_onnx, m)?)?;
+    m.add_function(wrap_pyfunction!(read_safetensors, m)?)?;
+    m.add_function(wrap_pyfunction!(read_flax, m)?)?;
+    m.add_function(wrap_pyfunction!(read_gguf_arrays, m)?)?;
+    m.add_function(wrap_pyfunction!(write_gguf_arrays, m)?)?;
+    m.add_function(wrap_pyfunction!(read_arrays_auto, m)?)?;
+    m.add_function(wrap_pyfunction!(read_arrays_auto_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(read_tflite, m)?)?;
+    m.add_function(wrap_pyfunction!(read_pickle_arrays, m)?)?;
+    m.add_function(wrap_pyfunction!(write_safetensors_sharded, m)?)?;
+    m.add_function(wrap_pyfunction!(write_arrays_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(read_zarr, m)?)?;
+    m.add_function(wrap_pyfunction!(write_zarr, m)?)?;
+    m.add_function(wrap_pyfunction!(write_pickle_arrays, m)?)?;
+    m.add_function(wrap_pyfunction!(read_ggml_legacy, m)?)?;
+    m.add_function(wrap_pyfunction!(write_flax, m)?)?;
+    m.add_function(wrap_pyfunction!(write_safetensors, m)?)?;
+    m.add_function(wrap_pyfunction!(write_onnx, m)?)?;
+    m.add_function(wrap_pyfunction!(write_tf_checkpoint, m)?)?;
+    m.add_function(wrap_pyfunction!(write_h5, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patch_from_image_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patches_from_image_path_py, m)?)?;
     m.add("vision_rgb_patch_from_image_path", m.getattr("vision_rgb_patch_from_image_path_py")?)?;

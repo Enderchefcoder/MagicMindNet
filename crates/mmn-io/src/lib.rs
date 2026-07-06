@@ -8,6 +8,9 @@ mod hf_adapt;
 mod hf_classifier_safetensors;
 mod hf_safetensors;
 mod hf_tensor_codec;
+mod interop;
+mod mmn_json;
+mod st_codec;
 mod tensor_merge;
 
 pub use chatbot_io::{
@@ -15,6 +18,70 @@ pub use chatbot_io::{
     TokenizerSidecarRefs,
 };
 pub use detect::{detect_checkpoint_kind, CheckpointKind};
+pub use interop::gguf::{
+    is_gguf_bytes, read_gguf, read_gguf_header_file, write_gguf, GgufValue, GgufWriteTensor,
+};
+pub use interop::gguf_chatbot::{
+    export_gguf, export_gguf_with_tokenizer, gguf_name_to_mmn, import_gguf, mmn_name_to_gguf,
+};
+pub use interop::gguf_info::{gguf_info_json, import_gguf_bpe_tokenizer, import_gguf_tokenizer};
+pub use interop::gguf_quant::{dequantize as dequantize_ggml, GgmlType};
+pub use interop::hdf5::{read_h5_arrays, read_h5_arrays_bytes, read_keras_arrays};
+pub use interop::hdf5_write::{write_h5_arrays, write_h5_arrays_bytes_opts, write_h5_arrays_opts};
+pub use interop::deflate::deflate;
+pub use interop::inflate::inflate;
+pub use interop::npy::{decode_npy, encode_npy, encode_npy_f32, NpyArray};
+pub use interop::pickle::{parse_pickle, parse_pickle_prefix, PickleValue, PickleWriter};
+pub use interop::sharded::{
+    import_sharded, is_shard_index_bytes, read_sharded_arrays, write_sharded_safetensors,
+};
+pub use interop::tf_checkpoint::{read_tf_checkpoint_arrays, write_tf_checkpoint_arrays};
+pub use interop::npz_chatbot::{
+    export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_dtype,
+    write_npz_arrays_opts,
+};
+pub use interop::arrays_auto::{
+    detect_array_format, read_arrays_auto, read_gguf_arrays, read_gguf_arrays_bytes,
+    write_gguf_arrays, write_gguf_arrays_dtype, ArrayFormat,
+};
+pub use interop::ggml_legacy::{
+    import_ggml_legacy_chatbot, import_ggml_legacy_chatbot_bytes, is_ggml_legacy_bytes,
+    read_ggml_legacy, read_ggml_legacy_bytes, LegacyGgmlContainer,
+    LegacyGgmlFile,
+};
+pub use interop::tflite::{is_tflite_bytes, read_tflite_arrays, read_tflite_arrays_bytes};
+pub use interop::flax::{
+    read_flax_arrays, read_flax_arrays_bytes, write_flax_arrays, write_flax_arrays_bytes,
+};
+pub use interop::msgpack::{
+    decode as decode_msgpack, encode as encode_msgpack, Value as MsgpackValue,
+};
+pub use interop::onnx::{read_onnx_arrays, write_onnx_arrays};
+pub use interop::pickle_arrays::{
+    read_pickle_arrays, read_pickle_arrays_bytes, write_pickle_arrays,
+    write_pickle_arrays_bytes,
+};
+pub use interop::blosc::blosc_decompress;
+pub use interop::lz4::lz4_decompress_block;
+pub use interop::zarr::{is_zarr_dir, read_zarr_arrays, write_zarr_arrays, write_zarr_arrays_format};
+pub use interop::snappy::snappy_decompress;
+pub use interop::zstd::zstd_decompress;
+pub use interop::st_arrays::{
+    read_safetensors_arrays, read_safetensors_arrays_bytes, write_safetensors_arrays,
+    write_safetensors_arrays_bytes, write_safetensors_arrays_bytes_dtype,
+    write_safetensors_arrays_dtype,
+};
+pub use interop::torch_pt::{
+    export_torch_pt, import_torch_pt, read_torch_arrays, write_torch_arrays,
+};
+pub use interop::zip::{
+    crc32, is_zip_bytes, read_zip, read_zip_entry, write_zip, write_zip_stored, zip_entry_names,
+};
+pub use interop::NamedArray;
+pub use st_codec::{
+    serialize as serialize_safetensors, Dtype as StDtype, SafeTensors as SafeTensorsFile,
+    TensorView as StTensorView,
+};
 pub use hf_classifier_safetensors::{
     export_hf_classifier_safetensors, hf_classifier_name_to_mmn, import_hf_classifier_safetensors,
     import_hf_classifier_safetensors_bytes, HF_CLASSIFIER_FORMAT,

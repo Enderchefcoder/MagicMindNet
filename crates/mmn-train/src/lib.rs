@@ -1088,7 +1088,9 @@ mod tests {
         let ds = DatasetImageGen::load(&manifest).unwrap();
         let path = ds.resolve_image_path(&ds.samples[0].image_path);
         let x = mmn_data::rgb_nchw_tensor_from_image_path(&path).unwrap();
-        let mut model = Diffusion::new();
+        // Seeded init: at lr=0.05 an unlucky random init can overshoot in 12
+        // steps, so keep the run reproducible.
+        let mut model = Diffusion::new_with_seed(11);
         let before = model.denoise_loss(&x, 7).unwrap();
         let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
         let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
@@ -1186,7 +1188,8 @@ mod tests {
         let ds = DatasetImageGen::load(&manifest).unwrap();
         let path = ds.resolve_image_path(&ds.samples[0].image_path);
         let x = mmn_data::rgb_nchw_tensor_from_image_path(&path).unwrap();
-        let mut model = Diffusion::new();
+        // Seeded init keeps the loss-decrease assertion deterministic.
+        let mut model = Diffusion::new_with_seed(11);
         let before = mean_denoise_loss(&model, &ds, 7).unwrap();
         assert_eq!(before, model.denoise_loss(&x, 7).unwrap());
         let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
@@ -1223,7 +1226,9 @@ mod tests {
         let mask_path = ds.resolve_mask_path(&sample.mask_image);
         let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path).unwrap();
         let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path).unwrap();
-        let mut model = Diffusion::new();
+        // Seeded init makes the loss-decrease assertion deterministic (an
+        // unlucky random init can overshoot at lr=0.05).
+        let mut model = Diffusion::new_with_seed(11);
         let before = mean_denoise_loss_masked(&model, &ds, 5).unwrap();
         let w_before = model.unet.down.weight.data[[0, 0, 0, 0]];
         let mut adamw = mmn_optim::AdamW::new(AdamWConfig {
@@ -1658,7 +1663,7 @@ mod tests {
             .iter()
             .flat_map(|s| vec![s.input.clone(), s.output.clone()])
             .collect();
-        texts.extend(std::iter::repeat("hello hello hello world".to_string()).take(24));
+        texts.extend(std::iter::repeat_n("hello hello hello world".to_string(), 24));
         let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
         let bpe = BytePairEncoder::train(&refs, 512, 16);
         assert!(bpe.merge_count() > 0);
@@ -1689,7 +1694,7 @@ mod tests {
             .iter()
             .flat_map(|s| vec![s.input.clone(), s.output.clone()])
             .collect();
-        texts.extend(std::iter::repeat("hello hello hello world".to_string()).take(24));
+        texts.extend(std::iter::repeat_n("hello hello hello world".to_string(), 24));
         let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
         let uni = UnigramEncoder::train(&refs, 512);
         assert!(uni.piece_count() > 256);

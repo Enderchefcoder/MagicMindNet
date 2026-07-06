@@ -55,6 +55,37 @@ def project_python() -> str:
     return sys.executable
 
 
+def install_fake_torch():
+    """Register stand-in torch modules so CPython pickle can resolve globals.
+
+    Idempotent: repeated calls return the same module objects so classes
+    pickled by reference stay identical across tests.
+    """
+    import types
+
+    if "torch" in sys.modules:
+        return sys.modules["torch"], sys.modules["torch._utils"]
+    torch = types.ModuleType("torch")
+    torch_utils = types.ModuleType("torch._utils")
+
+    class FloatStorage:
+        pass
+
+    def _rebuild_tensor_v2(storage, offset, size, stride, requires_grad, hooks):
+        return {"storage": storage, "offset": offset, "size": size, "stride": stride}
+
+    FloatStorage.__module__ = "torch"
+    FloatStorage.__qualname__ = "FloatStorage"
+    _rebuild_tensor_v2.__module__ = "torch._utils"
+    _rebuild_tensor_v2.__qualname__ = "_rebuild_tensor_v2"
+    torch.FloatStorage = FloatStorage
+    torch._utils = torch_utils
+    torch_utils._rebuild_tensor_v2 = _rebuild_tensor_v2
+    sys.modules["torch"] = torch
+    sys.modules["torch._utils"] = torch_utils
+    return torch, torch_utils
+
+
 def run_example_script(
     script: str,
     *script_args: str,

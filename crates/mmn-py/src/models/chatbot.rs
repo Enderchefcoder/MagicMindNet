@@ -151,8 +151,9 @@ impl PyChatbot {
         })
     }
 
-    /// Save this chatbot to `path` ("safetensors" JSON by default,
-    /// "hf-safetensors" binary, or "bin" architecture stub).
+    /// Save this chatbot to `path`. Formats: "safetensors" (JSON, default),
+    /// "hf-safetensors" (binary), "bin" (architecture stub), "gguf" /
+    /// "gguf-q8_0" (GGUF), "npz" (NumPy), or "pt" (PyTorch state dict).
     #[pyo3(signature = (path, format="safetensors", bpe_encoder=None, unigram_encoder=None))]
     fn save(
         &self,
@@ -177,6 +178,10 @@ impl PyChatbot {
                     "Use Classifier.load() / Diffusion.load() or the universal ai.load().",
                 )? {
                     mmn_io::CheckpointKind::ChatbotBin => "bin".to_string(),
+                    mmn_io::CheckpointKind::ChatbotGguf => "gguf".to_string(),
+                    mmn_io::CheckpointKind::ChatbotNpz => "npz".to_string(),
+                    mmn_io::CheckpointKind::ChatbotTorch => "pt".to_string(),
+                    mmn_io::CheckpointKind::ChatbotSharded => "sharded".to_string(),
                     _ => "safetensors".to_string(),
                 }
             }

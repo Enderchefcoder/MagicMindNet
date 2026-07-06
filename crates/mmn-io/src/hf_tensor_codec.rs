@@ -2,8 +2,8 @@
 
 use half::{bf16, f16};
 use mmn_core::{MmnError, Tensor};
-use safetensors::tensor::{Dtype, TensorView};
-use safetensors::SafeTensorError;
+use crate::st_codec::{Dtype, TensorView};
+use crate::st_codec::SafeTensorError;
 
 pub const HF_CHATBOT_FORMAT: &str = "mmn-hf-safetensors-v1";
 pub const HF_CLASSIFIER_FORMAT: &str = "mmn-hf-classifier-v1";

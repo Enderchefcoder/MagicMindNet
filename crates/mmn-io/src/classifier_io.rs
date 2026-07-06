@@ -1,18 +1,18 @@
 use crate::checkpoint_util::{
     expect_tensor_shape, quantize_tensor, require_tensor_entry, tensor_from_entry, tensor_to_entry,
-    write_file_create_parents,
+    write_file_create_parents, TensorMap,
 };
 use crate::tensor_merge::average_tensors;
 use mmn_core::MmnError;
 use mmn_models::Classifier;
-use std::collections::HashMap;
 use std::fs;
 
 /// Hidden width for `Classifier` backbone/head (must match `mmn_models::Classifier`).
 const CLASSIFIER_HIDDEN: usize = 128;
 
+
 pub fn export_classifier(model: &Classifier, path: &str) -> Result<(), MmnError> {
-    let mut map = HashMap::new();
+    let mut map = TensorMap::new();
     map.insert(
         "backbone".to_string(),
         tensor_to_entry(&model.backbone.weight),
@@ -25,12 +25,8 @@ pub fn export_classifier(model: &Classifier, path: &str) -> Result<(), MmnError>
     if let Some(seed) = model.init_seed {
         meta["seed"] = serde_json::json!(seed);
     }
-    let wrapper = serde_json::json!({
-        "tensors": map,
-        "format": "mmn-classifier-v1",
-        "meta": meta,
-    });
-    write_file_create_parents(path, wrapper.to_string())?;
+    let text = crate::mmn_json::write_checkpoint("mmn-classifier-v1", &meta, &map);
+    write_file_create_parents(path, text)?;
     Ok(())
 }
 
@@ -48,15 +44,15 @@ pub fn import_classifier(path: &str) -> Result<Classifier, MmnError> {
 }
 
 fn import_classifier_json(text: &str) -> Result<Classifier, MmnError> {
-    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| MmnError::Other {
+    let ckpt = crate::mmn_json::parse_checkpoint(text).map_err(|e| MmnError::Other {
         message: e.to_string(),
     })?;
-    if v["format"].as_str() != Some("mmn-classifier-v1") {
+    if ckpt.format.as_deref() != Some("mmn-classifier-v1") {
         return Err(MmnError::Other {
             message: "Expected mmn-classifier-v1 checkpoint".into(),
         });
     }
-    let meta = &v["meta"];
+    let meta = &ckpt.meta;
     let labels: Vec<String> = meta["labels"]
         .as_array()
         .ok_or_else(|| MmnError::Other {
@@ -77,7 +73,7 @@ fn import_classifier_json(text: &str) -> Result<Classifier, MmnError> {
     let n_labels = labels.len();
     let mut model = Classifier::with_labels(labels, input_dim);
     model.init_seed = init_seed;
-    let tensors = &v["tensors"];
+    let tensors = &ckpt.tensors;
     model.backbone.weight = tensor_from_entry(require_tensor_entry(tensors, "backbone")?)?;
     model.head.weight = tensor_from_entry(require_tensor_entry(tensors, "head")?)?;
     expect_tensor_shape(&model.backbone.weight, &[CLASSIFIER_HIDDEN, input_dim], "backbone")?;

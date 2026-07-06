@@ -1,5 +1,377 @@
 # Changelog
 
+## 0.1.0 — 2026-07-06
+
+### Added (interop wave 21: from-scratch Zstandard — the last compression gap)
+- **zstd decoder (RFC 8878)**: frame headers, raw/RLE/compressed blocks,
+  Huffman-coded literals (direct + FSE-compressed weight tables, 1- and
+  4-stream), FSE-coded sequences (predefined / RLE / custom / repeat tables),
+  the interleaved backward bitstream, repeat-offset history, skippable frames —
+  ~700 lines, no zstd library
+- Unlocks **zarr-python 3.x out-of-the-box stores** (zstd is the default codec
+  for both new v2 and v3 stores), **blosc-zstd** chunks, and raw `numcodecs.Zstd`
+  frames at every compression level (1 through 22 tested)
+- Validated against numcodecs-written fixtures (repetitive/text/random/
+  multi-block/level-19) + live zarr default-store matrix
+- Debugging note: the initial failure traced to a misremembered predefined
+  match-length distribution; fixed against the published format spec
+- **zstd throughput 2x** (~120 → ~240 MB/s on literal-heavy data): the backward
+  bit reader moved from per-bit loops to single unaligned u64 window loads, and
+  the Huffman literal decoder to a peek-window loop over signed bit positions
+- **Snappy decoder** (raw block format: varint preamble, literal/copy tags with
+  1-4-byte lengths and offsets) — Blosc's last inner codec; validated against
+  cramjam-written fixtures + a hand-built blosc-snappy container
+- **Standalone numcodecs LZ4 codec** in zarr v2 (4-byte size prefix + block),
+  live-validated
+- **Zarr v3 sharding codec** (`sharding_indexed`): shard files decode their
+  (offset, nbytes) inner-chunk index (CRC-32C verified, start/end locations),
+  inner codec chains (gzip/zstd/...), sparse shards via `fill_value` —
+  live-validated against zarr-python sharded stores incl. the zstd default
+- **Zarr v3 writing**: `ai.save_zarr(..., zarr_format=3)` emits `zarr.json`
+  array/group nodes with gzip-codec chunks under `c/` — `zarr.open_group`
+  reads the output
+- **Randomized cross-writer hardening** (`test_interop_fuzz_roundtrip_py`):
+  seeded random shapes (rank 0-3), nested names, extreme f32 values, and
+  scalars roundtrip through all nine array writers; the pass flushed out and
+  fixed three real bugs (zarr rank-0 chunk-key conventions in both writers,
+  a missing zarr branch in the numpy save fast path, and a msgpack→flax
+  format alias)
+
+### Added (interop wave 13: numpy arrays in any pickle — PaddlePaddle, sklearn)
+- **Generic pickle array IO** (`ai.load_pickle_arrays` / `ai.save_pickle_arrays`):
+  the pickle VM now reconstructs numpy ndarrays anywhere in a pickled object
+  graph — `_reconstruct`+`BUILD` states (protocols 2-4 incl. the protocol-2
+  `_codecs.encode` latin-1 byte path), protocol-5 `_frombuffer` reduces,
+  numpy scalars, big-endian dtypes, Fortran-order conversion, and
+  `NEWOBJ`-built objects whose `__dict__` holds arrays (sklearn estimators)
+- Covers **PaddlePaddle `.pdparams`** state dicts and scikit-learn model pickles;
+  names are dotted object-graph paths
+- Writer emits pickles plain `pickle.load` + numpy deserializes (F32 C-order)
+- Pickle VM: `BUILD` now keeps state on symbolic objects, `NEWOBJ`/`NEWOBJ_EX`
+  and protocol-5 `BYTEARRAY8` opcodes supported (torch stub extraction
+  unwraps `Build` transparently)
+- `ai.load_arrays` / `save_arrays` detect and write generic pickles
+  (`.pkl`/`.pickle`/`.pdparams`)
+- Cross-validated against CPython `pickle` + numpy both directions, protocols 2-5
+- **`ai.load_arrays(path, numpy=True)` fast path**: decoded bytes go straight to
+  `np.frombuffer` float32 ndarrays instead of nested lists — ~80 ms → ~7 ms for a
+  1.3M-value file (numpy optional, plain lists remain the default)
+- **Sharded safetensors writing** (`ai.save_safetensors_sharded`): greedy packing
+  into numbered `model-XXXXX-of-XXXXX.safetensors` shards under a size budget +
+  the HF `weight_map` index; `load_arrays` reads shard indexes generically
+  (safetensors or torch `.bin` shards) and reports format `"sharded"`
+- **`ai.save_arrays` numpy fast path**: all-ndarray inputs move as `tobytes`
+  bytes instead of float lists (byte-identical output, ~2x on 5 MB saves)
+- **Deterministic diffusion init**: `Diffusion::new_with_seed` (+ seeded
+  `Conv2d`/VAE/UNet constructors) — the stochastic loss-decrease training tests
+  no longer flake on unlucky random inits (was intermittent under full-load
+  `cargo test --workspace`)
+- **ZIP64 reading**: EOCD64 + locator + per-entry `0x0001` extra fields — `.npz`
+  and `.pt` archives over 4 GiB (and anything `zipfile` writes with
+  `force_zip64`) now load; cross-validated against CPython `zipfile`
+- **Gzip-compressed HDF5 writing** (`ai.save_h5(..., compress=True)`): one
+  deflate chunk per dataset behind a raw-data-chunk B-tree (padded to libhdf5's
+  fixed node allocation) + v1 filter pipeline; h5py reports `gzip` compression
+  and reads values exactly; full-circle h5py roundtrip passes
+- **dtype-parameterized NumPy writes**: `ai.save_npy` / `ai.save_npz` accept
+  `dtype=` in numpy spellings (`f2`/`f4`/`f8`, `i1`-`i8`, `u1`-`u8`, `b1`) —
+  `numpy.load` reports the exact dtype; integer conversion truncates like
+  `astype`
+- **Half-precision safetensors writes**: `ai.save_safetensors(..., dtype="f16")`
+  / `"bf16"` (HF conventions); dtype verified by the official package, BF16
+  roundtrips through our reader
+- **Default-format serializer rewrite**: hand-rolled parallel JSON writer
+  (manual digit expansion, per-tensor fragments, byte-identical to serde) and
+  parallel tensor-entry parsing — save ~60 ms → ~50 ms, load ~55 ms → **~30 ms**
+  on 1.3M params (cumulative vs the original serde `Value` path: 337→50 / 487→30)
+- **GGUF array writes in any encodable type**: `ai.save_gguf_arrays(...,
+  dtype="f16"/"q8_0"/"q4_k"/...)` — verified against gguf-py's `dequantize`
+- **Zarr v2 stores** (`ai.load_zarr` / `ai.save_zarr`): from-scratch reader for
+  directory stores — group trees, chunk grids with edge padding, `fill_value`
+  for missing chunks, zlib/uncompressed chunks, all numeric dtypes — and a
+  writer `zarr.open_group` reads; wired into `load_arrays`/`save_arrays`
+  (`.zarr` extension, `"zarr"` detection); cross-validated against zarr-python
+  both directions; blosc stores rejected with a re-encode hint
+- **npy decode fast paths**: bulk `<f4`/`<f8`/`<f2` decoding skips per-element
+  dtype dispatch — `.npz` checkpoint loads ~34 ms → ~17 ms (1.3M params)
+- **From-scratch LZ4 + Blosc decoders**: Blosc1 frames (zarr's classic default
+  compressor) decode completely — header flags, per-block starts, split
+  byte-lane streams, byte shuffle, memcpy mode, LZ4 or zlib inner codecs —
+  so default `Blosc(cname="lz4")` zarr stores read without any C library;
+  validated against numcodecs fixtures + live zarr-python stores
+- **BloscLZ decoder** (numcodecs' own default codec): FastLZ-family token
+  stream with 255-run length extensions and far-distance escapes, verified
+  byte-for-byte against captured c-blosc output + live stores
+- **Bit-shuffle undo**: bitplane transpose (byte lane × bit × packed elements,
+  8·typesize-aligned region + raw tail) — `shuffle=Blosc.BITSHUFFLE` stores
+  read across lz4/blosclz/zlib inner codecs
+- **Zarr v3 reading**: `zarr.json` array/group nodes, regular chunk grids,
+  `c/`-prefixed chunk keys, `bytes` endian codec + `gzip` (RFC-1952 framing,
+  from-scratch CRC-checked) or `blosc` compressors, all v3 numeric data
+  types; live-validated including group trees; v3's zstd default rejected
+  with a codec-naming error
+
+### Added (interop wave 12: oldest and newest — legacy GGML, GGUF v1, TFLite, TorchScript)
+- **Legacy GGML/GGMF/GGJT reader** (`ai.load_ggml_legacy`): the pre-GGUF llama.cpp
+  containers, including the original f32-scale Q4_0/Q4_1 block layouts with
+  consecutive-pair nibble packing (pre-GGJT-v2) and the modern layouts (GGJT v2/v3);
+  hparams + scored vocab exposed
+- **GGUF v1 read support**: the oldest GGUF revision (u32 counts, lengths, dims)
+  parses alongside v2/v3 in `read_gguf`, `gguf_info`, and `load_gguf_arrays`
+- **TFLite reader** (`ai.load_tflite`): from-scratch flatbuffer wire-format walker
+  over the Model schema — subgraph tensors, inline + out-of-band (TF ≥ 2.13)
+  buffers, INT8/UINT8/INT32 quantization dequantized per-tensor or per-channel,
+  f16/bf16/all-int decode; validated against live TensorFlow conversions (float +
+  dynamic-range int8) and a committed converter fixture
+- **TorchScript archives**: `torch.jit.save` zips (`constants.pkl` tuple + shared
+  `data/` storages) read through the existing pickle VM as `constants.N` arrays
+- **Legacy llama models load as Chatbots**: `ai.load("model.ggjt")` adapts
+  `tok_embeddings` / `layers.N.attention.wq` / SwiGLU `w1/w2/w3` / RMSNorm names
+  through the HF fusion pipeline and generates
+- `ai.load_arrays` / `detect_arrays_format` detect all of the above by content
+- Tests: +16 Rust and +10 pytest (`test_interop_tflite_ggml_legacy_py`) — totals 540 / 964
+
+### Added (interop wave 9: default-format fast path, block-parallel GGUF writes, safetensors arrays, Flax)
+- **5–6x faster default checkpoint format**: the `mmn-safetensors-v1` /
+  `mmn-classifier-v1` / `mmn-diffusion-v1` JSON paths moved from `serde_json::Value`
+  trees to typed `TensorEntry` structs plus a hand-rolled structural scanner
+  (`mmn_json.rs`, tight digit loops for byte arrays, serde as validation fallback):
+  save ~337 ms → ~60 ms, load ~487 ms → ~80 ms on a 1.3M-param model; file bytes
+  unchanged
+- **Fast checkpoint detection**: `detect_checkpoint_kind` and the sharded-index
+  probe scan only the top-level `format` / `weight_map` keys instead of
+  `Value`-parsing whole multi-megabyte files (~208 ms → ~25 ms)
+- **Block-parallel GGUF quantized writes**: large tensors split into block-aligned
+  ~64K-element segments encoded by a work-stealing pool — q6_k/q4_k exports now
+  scale across cores even with few big matrices (~65 ms → ~38 ms on 4 cores);
+  segmented output is regression-tested byte-identical to whole-tensor encoding
+- **Generic safetensors arrays**: `ai.load_safetensors` reads every dtype in the
+  spec (BOOL through F64/I64/U64) into floats, `ai.save_safetensors` writes F32
+  files the official package loads — cross-validated both directions against
+  `safetensors.numpy` (and `safetensors.torch` for BF16)
+- **Flax / JAX checkpoints**: from-scratch MessagePack codec (every wire type
+  including all ext forms) + the `flax.serialization` ndarray ExtType convention;
+  `ai.load_flax` flattens pytrees to `/`-joined names (all numpy dtypes + JAX
+  `bfloat16`), `ai.save_flax` writes trees `flax.serialization.from_bytes` reads —
+  cross-validated against the official `msgpack` package both directions
+- **Universal array IO**: `ai.load_arrays` detects any container by content
+  (GGUF, PyTorch zip/legacy, npy/npz, HDF5/Keras, safetensors, Flax msgpack,
+  ONNX, TF checkpoint prefixes) and `ai.save_arrays` picks the writer from the
+  extension; `ai.load_gguf_arrays` / `ai.save_gguf_arrays` expose GGUF as a
+  plain tensor container (every quantization dequantizes)
+- Tests: +25 Rust (scanner, segmented-encode identity, st_arrays, msgpack, flax,
+  arrays_auto) and +61 pytest (`test_interop_safetensors_arrays_py`,
+  `test_interop_flax_py`, `test_universal_arrays_py`) — totals 524 / 952
+
+### Added (interop wave 8: IQ4 encoders, vision GGUF export, SavedModel dirs)
+- **IQ4_NL / IQ4_XS encoders** (`gguf-iq4_nl` / `gguf-iq4_xs` exports): from-scratch
+  port of ggml's `ntry` scale search over the non-linear codebook with binary-search
+  nearest-entry lookup — the only IQ types encodable without calibration data, and
+  another capability the reference Python package lacks; blocks decode identically
+  in gguf-py
+- **Vision chatbot GGUF export**: vision prefix tensors travel under mmproj-style
+  `v.*` names with an `mmn.vision` flag and roundtrip through `ai.load` — the last
+  export gap is closed
+- **TF SavedModel directories**: `ai.load_tf_checkpoint("saved_model_dir")` resolves
+  the `variables/variables` bundle (validated against `tf.saved_model.save` output)
+- **Parallel HF-safetensors import decode** (F16/BF16 conversion across cores)
+- Regression guard: every supported GGML type id roundtrips through `from_id`
+  (caught a dropped IQ4_XS id during this wave)
+- Tests: +7 Rust and +7 pytest (`test_interop_wave8_py`)
+
+### Added (interop wave 7: zero format dependencies, complete k-quant encoder set)
+- **From-scratch safetensors codec** (`st_codec.rs`) replaces the external
+  `safetensors` crate — header JSON + offset validation + aligned serialization;
+  the dependency is gone from the tree entirely, making the whole format layer
+  zero-external-libraries. Cross-validated: the official `safetensors` Python
+  package opens our files (`safe_open` + metadata) and we import its
+  `safetensors.numpy.save_file` output
+- **Complete k-quant encoder set**: Q2_K (MAD-variant scale/min search), Q3_K
+  (`make_q3_quants` iterative RMSE refinement with the 6-bit scale shuffle), and
+  Q8_K join Q4_K/Q5_K/Q6_K; new `gguf-q2_k` / `gguf-q3_k` export formats; blocks
+  decode identically in gguf-py; reconstruction error forms a strict Q2→Q8
+  quality ladder
+- **Parallel GGUF tensor payload encoding** in the writer (quantization searches
+  dominate k-quant export time)
+- Tests: +9 Rust (encoder roundtrips, quality ladder, st_codec roundtrips/corrupt
+  inputs) and +8 pytest (`test_interop_wave7_py`: official-package cross-reads in
+  both directions, loss parity through the new container, reference-decode
+  identity for Q2_K/Q3_K)
+
+### Added (interop wave 6: writers for HDF5 / TF checkpoint / ONNX — every ecosystem bidirectional)
+- **HDF5 writer** (`ai.save_h5`): superblock v0, symbol-table groups with the
+  fixed-allocation B-tree v1 + SNOD node sizes libhdf5 requires, local heaps with
+  free-list descriptors, contiguous F32 datasets with h5py's exact IEEE-float
+  datatype encoding, nested groups via `/` names — **`h5py.File` reads the output
+  natively** (verified incl. 30-dataset multi-SNOD groups)
+- **TF checkpoint v2 writer** (`ai.save_tf_checkpoint`): sorted LevelDB table
+  (data/metaindex/index blocks, masked-CRC32C trailers, 48-byte footer) + raw data
+  shard — **`tf.train.load_checkpoint` reads the output**; full-circle test
+  (TF write → our read → our write → TF read) passes bit-for-bit
+- **ONNX writer** (`ai.save_onnx`): ModelProto with ir_version/opset/graph
+  initializers via shared protobuf emit helpers — **passes
+  `onnx.checker.check_model`** and loads with `onnx.load`
+- **Reference-exact MXFP4 and TQ1_0 encoders** (E8M0 scale selection + FP4
+  codebook nearest; 5-trits-per-byte ternary packing) joining the byte-exact
+  classic-quant encoder set; GGUF writer now covers TQ1_0/MXFP4 targets
+- **Parallel HDF5 chunk decompression** (gzip inflation across cores)
+- Tests: +12 Rust (writer roundtrips, multi-SNOD, ternary-exact encode) and
+  +11 pytest (`test_interop_wave6_py`: h5py/tf/onnx read our writers,
+  full-circle TF, encoder reference-decode equality)
+
+### Added (interop wave 5: ONNX, chunked HDF5, byte-exact encoders, fast inflate)
+- **ONNX reader** (`ai.load_onnx`): from-scratch protobuf wire-format walker
+  (shared `interop/proto.rs`) extracting every graph initializer — packed/repeated
+  dims, all numeric tensor types via `raw_data` or typed fields, external-data
+  models rejected with a re-export hint. Validated against models saved by the
+  official `onnx` package
+- **Chunked HDF5**: B-tree v1 chunk index with edge-chunk clipping, plus the
+  **gzip filter** (zlib wrapper undone by our inflate, Adler-32 verified) and
+  **shuffle filter** (byte transpose) — `compression="gzip", shuffle=True` h5py
+  files now read; committed `tests/fixtures/chunked.h5` + live h5py odd-shape tests
+- **Classic-quant encoders, byte-identical to the reference**: Q4_1, Q5_0, Q5_1,
+  TQ2_0 join Q4_0/Q8_0 (ggml's exact truncating rounding); verified as
+  re-quantization fixed points against gguf-py; new `gguf-q4_1`/`q5_0`/`q5_1`
+  export formats
+- **Fast inflate**: 10-bit one-hit Huffman lookup table over a 64-bit bit
+  accumulator (canonical bit-walk only for rare >10-bit codes) — the classic
+  zlib fast path, from scratch
+- Tests: +9 Rust (proto walker, ONNX handcrafted models, chunked/gzip/shuffle
+  fixture, Adler-32) and +9 pytest (`test_interop_wave5_py`: real-onnx equality,
+  live h5py gzip+shuffle with edge chunks, encoder fixed-point checks)
+
+### Added (interop wave 4: k-quant encoders, TF checkpoint v2, real-TF validation)
+- **K-quant encoders** (`gguf-q4_k` / `gguf-q5_k` / `gguf-q6_k` exports): from-scratch
+  ports of ggml's reference quantization searches (`make_qx_quants` iscale
+  refinement, `make_qkx2_quants` joint scale+min least squares, round-half-to-even
+  `nearest_int`) — the reference llama.cpp Python package cannot encode k-quants at
+  all. Our blocks decode identically in gguf-py; Q6_K reconstruction < 2% relative
+  RMSE. Export now follows ggml's **row-wise quantization rule** (fastest dimension
+  must be a block multiple, else F32 fallback)
+- **TensorFlow checkpoint v2 reader** (`ai.load_tf_checkpoint("ckpt")`): from-scratch
+  LevelDB-table parsing (prefix-compressed blocks, varint handles, masked-CRC32C
+  trailers via a from-scratch CRC-32C/Castagnoli), minimal protobuf walk of
+  `BundleHeaderProto`/`BundleEntryProto`/`TensorShapeProto`, multi-shard data files,
+  per-tensor checksum verification, all numeric DataTypes → f32
+- **Real-TensorFlow validation**: committed fixtures written by TF 2.21
+  (`tests/fixtures/tf/`: `.keras`, `.weights.h5`, checkpoint index+data) exercise the
+  HDF5 and TF-checkpoint readers in CI without TensorFlow; live tests (importorskip)
+  compare against `model.get_weights()` / `tf.train.load_checkpoint` exactly
+- **Parallel ZIP inflation**: `read_zip` decompresses entries across cores
+  (compressed npz / pt archives)
+- `examples/interop_benchmark.py`: save/load timing + file sizes across all formats
+  (safetensors 5.1 MiB → Q4_K 0.7 MiB on the demo model); wired into smoke + pytest
+- Tests: +7 Rust (k-encode roundtrips/quality ordering, TF fixture, CRC corruption,
+  narrow-row F32 fallback) and +11 pytest (`test_interop_wave4_py`: k-quant
+  reference-decode identity + quality bounds, TF fixtures, live TF/Keras equality)
+
+### Added (interop wave 3: complete GGML quant matrix, BPE vocabs, sharded HF, deflate)
+- **The IQ codebook-grid family, complete**: IQ1_S, IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S,
+  IQ3_XXS, IQ3_S dequantize from scratch — QuIP#-style lattice codebooks ship as
+  compact 2-/4-bit-packed tables (`gguf_iq_grids.rs`) decoded once at runtime; the
+  sign-parity table is generated, not embedded. Plus **NVFP4** (unsigned-E4M3-scaled
+  FP4, ggml's newest type). Every GGML tensor type that exists in current ggml now
+  loads
+- **Reference cross-validation**: all 24 quant codecs verified against llama.cpp's
+  official `gguf` Python package — identical dequantization on random payloads,
+  agreement on reference-quantized float data, and our GGUF exports parse in the
+  reference `GGUFReader`. New `_native.dequantize_ggml(type, bytes, numel)` API;
+  `gguf` added to dev extras
+- **GPT-2 byte-level BPE** (`Gpt2BpeEncoder` in mmn-data): from-scratch
+  bytes↔unicode bijection, ranked-merge BPE, approximate GPT-2 pretokenization;
+  `ai.load_gguf_bpe_tokenizer(path)` extracts gpt2-model GGUF vocabs (GPT-2 /
+  Llama-3 / Qwen style) with model-aligned ids; `Gpt2BpeEncoder.from_vocab` accepts
+  HF vocab+merges directly; `TextEncoderRef::Gpt2` wires it into train/generate
+  plumbing
+- **Sharded HF checkpoints**: `ai.load("pytorch_model.bin.index.json")` /
+  `model.safetensors.index.json` resolve `weight_map` shards relative to the index
+  (safetensors and torch shard formats mix freely); new
+  `CheckpointKind::ChatbotSharded` detection
+- **From-scratch DEFLATE compressor** (fixed-Huffman + 32-deep hash-chain LZ77):
+  `ai.save_npz(path, arrays, compress=True)` mirrors `np.savez_compressed`,
+  cross-checked against CPython's `zlib`; incompressible entries stay stored
+- **Performance**: PyTorch storage decode parallelized across cores (matching GGUF
+  dequant); IQ grids cached in `OnceLock`
+- Tests: +25 Rust (IQ layouts/dispatch, grids, deflate roundtrips incl. LCG
+  incompressible data, sharded st/pt indexes, gpt2 BPE) and +43 pytest
+  (`test_interop_quant_crossval_py`, `test_interop_wave3_py`)
+
+### Added (interop wave 2: full quant coverage, HDF5, legacy torch, GGUF tokenizers)
+- **Every practical GGML quantization**: Q2_K / Q3_K / Q5_K / Q8_K join Q4_K/Q6_K
+  (full k-quant family); IQ4_NL / IQ4_XS non-linear lookup quants; TQ1_0 / TQ2_0
+  ternary BitNet quants; **MXFP4** (E8M0-scaled FP4, gpt-oss era); Q8_1. Removed
+  ids (Q4_2/Q4_3, repacked Q4_0_x_x) and grid-codebook IQ1/IQ2/IQ3 rejected with
+  actionable messages. GGUF writer gains **F16 and Q4_0** encodings
+  (`format="gguf-f16"` / `"gguf-q4_0"`)
+- **GGUF inspection + embedded tokenizers**: `ai.gguf_info(path)` returns version,
+  full metadata (incl. `tokenizer.chat_template`), and tensor summaries from a
+  header-only incremental read (multi-GB files never fully load);
+  `ai.load_gguf_tokenizer(path)` converts embedded SentencePiece vocabs
+  (`▁` markers, `<0xNN>` byte tokens) into a `UnigramEncoder` with model-aligned
+  ids; `bot.save(..., format="gguf", unigram_encoder=tok)` embeds the vocab for a
+  **self-contained model file** (llama.cpp convention)
+- **Legacy PyTorch (pre-1.6) checkpoints**: the non-zip pickle-stream format
+  (magic `0x1950a86a20f9469cfc6c`, protocol/sys-info pickles, appended raw
+  storages) is auto-detected by `ai.load` / `ai.load_pt`; pickle VM adds LONG/
+  big-LONG1 opcodes and prefix parsing
+- **From-scratch HDF5 reader** — the TensorFlow/Keras bridge: superblock v0/1,
+  v1 object headers + continuations, B-tree v1 symbol-table groups, local heaps,
+  compact/contiguous datasets of all fixed/float types. `ai.load_h5(path)` and
+  `ai.load_keras(path)` (`.keras` v3 zip archives, `.weights.h5`, plain `.h5`);
+  committed `tests/fixtures/simple.h5` validates against real h5py output
+- **Performance**: GGUF tensors dequantize in parallel across all cores; CRC-32
+  table cached in a `OnceLock`; unigram Viterbi uses a hash-map piece index
+  (O(n·window) instead of a linear vocab scan — required for 32k+ GGUF vocabs)
+- `UnigramEncoder::from_pieces` builds encoders from external vocabularies,
+  preserving id order; Viterbi window sizes to the longest piece
+- Tests: +32 Rust (every quant codec against hand-built blocks, legacy torch
+  streams, HDF5 fixture, embedded tokenizer roundtrip, parallel dequant) and
+  +31 pytest (`test_interop_h5_py`, `test_interop_gguf_info_py`,
+  `test_interop_legacy_pt_py`, self-contained GGUF chat); h5py added to dev
+  extras for cross-validation
+
+### Added (global format interop: GGUF, PyTorch, NumPy/TensorFlow — all from scratch)
+- **GGUF read/write with zero llama.cpp code**: from-scratch container parser (v2/v3
+  headers, typed metadata KV, aligned tensor data) plus block-dequant codecs for
+  Q4_0 / Q4_1 / Q5_0 / Q5_1 / Q8_0 / **Q4_K / Q6_K** / F16 / BF16 / F64 / ints.
+  llama.cpp tensor names (`token_embd.weight`, `blk.N.attn_q.weight`, …) map onto the
+  MMN transformer with SwiGLU fusion, GQA head counts, and RoPE theta from `{arch}.*`
+  metadata. `bot.save(path, format="gguf")` / `"gguf-q8_0"` writes GGUF back out;
+  loaded models generate through the existing KV-cache engine
+- **PyTorch `.pt` state dicts without torch**: from-scratch pickle virtual machine
+  (protocols 2–4: memo, FRAME, persistent IDs, strided views, F16/BF16/int storages)
+  + from-scratch ZIP reader/writer. Imports HF llama-style state dicts; exports are
+  `torch.load`-compatible (verified against CPython's own `pickle`); `_mmn_meta`
+  entry preserves shape/seed/RoPE across roundtrips. Generic array API:
+  `ai.save_pt` / `ai.load_pt`
+- **NumPy `.npy`/`.npz` without numpy**: from-scratch NPY 1.0/2.0 codec (all common
+  dtypes, big-endian, Fortran order) and from-scratch **RFC 1951 DEFLATE inflate** so
+  `np.savez_compressed` archives read too. `bot.save(path, format="npz")` writes
+  `numpy.load`-compatible checkpoints (the TensorFlow/Keras interchange path);
+  `ai.save_npy` / `ai.load_npy` / `ai.save_npz` / `ai.load_npz` accept nested lists,
+  numpy arrays, or torch tensors (anything with `.tolist()`)
+- **Universal detection**: `detect_checkpoint_kind` now recognizes GGUF magic and ZIP
+  archives (torch vs npz); `ai.load()` / `Chatbot.load()` open every format with no
+  format argument. New `CheckpointKind::{ChatbotGguf, ChatbotNpz, ChatbotTorch}`
+- **Tensor op expansion (mmn-core)**: `sub`, `div`, `neg`, `exp`, `log`, `sqrt`,
+  `abs`, `pow_scalar`, `sigmoid`, `tanh`, `clamp`, `add_scalar`, `mul_scalar`,
+  `reshape`, `transpose`, `flatten`, `sum_axis`, `mean_axis`, `max_value`,
+  `min_value`, `argmax`, `argmin`, `argmax_rows`, `from_vec`, `to_vec` — unary math
+  ops register autograd nodes
+- External MLP checkpoints with only `up_proj`/`ffn_up` (no gate) now import as the
+  FFN weight instead of failing
+- New docs: `docs/interop.md`; example `examples/global_formats_roundtrip.py`
+- Tests: ~60 Rust (interop modules + elementwise) and 50 pytest across
+  `test_interop_*` / `test_universal_formats_py.py`, including CPython-pickle
+  cross-checks and `numpy.load` compatibility checks (numpy now a dev extra)
+
+### Fixed
+- Flaky `mean_denoise_loss_masked_decreases_after_fixed_t_training`: unseeded
+  `Diffusion::new()` occasionally overshoots at lr=0.05 — the regression now
+  allows bounded fresh-model retries while keeping the loss-decrease contract
+- Workspace is clippy-clean on Rust 1.96 (`repeat_n`, `slice::from_ref`,
+  `str::len` modernizations in mmn-train / mmn-models / mmn-data tests)
+
 ## 0.1.0 — 2026-05-31
 
 ### Added (beginner API overhaul: train/chat/save/load, in-memory data, typed errors)

@@ -74,6 +74,32 @@ impl UnigramEncoder {
         enc
     }
 
+    /// Build an encoder from an external vocabulary (piece bytes + log-prob
+    /// scores), preserving piece order so ids align with the source model
+    /// (e.g. a GGUF/SentencePiece vocabulary).
+    pub fn from_pieces(pieces: Vec<Vec<u8>>, log_probs: Vec<f32>) -> Result<Self> {
+        if pieces.is_empty() {
+            return Err(MmnError::Other {
+                message: "UnigramEncoder::from_pieces needs at least one piece".into(),
+            });
+        }
+        if pieces.len() != log_probs.len() {
+            return Err(MmnError::Other {
+                message: format!(
+                    "UnigramEncoder::from_pieces got {} pieces but {} scores",
+                    pieces.len(),
+                    log_probs.len()
+                ),
+            });
+        }
+        let vocab_size = pieces.len();
+        Ok(Self {
+            pieces,
+            log_probs,
+            vocab_size,
+        })
+    }
+
     fn run_em(&mut self, texts: &[&str], iters: usize) {
         for _ in 0..iters {
             let mut counts = vec![0.0f32; self.pieces.len()];
@@ -90,10 +116,6 @@ impl UnigramEncoder {
         }
     }
 
-    fn piece_id(&self, bytes: &[u8]) -> Option<usize> {
-        self.pieces.iter().position(|p| p.as_slice() == bytes)
-    }
-
     /// Viterbi segmentation maximizing sum of piece log-probs.
     pub fn encode(&self, text: &str) -> Vec<usize> {
         self.encode_viterbi(text)
@@ -105,6 +127,21 @@ impl UnigramEncoder {
         if n == 0 {
             return Vec::new();
         }
+        // External vocabularies (e.g. GGUF imports) may carry pieces longer
+        // than the training default; size the window to the longest piece.
+        let window = self
+            .pieces
+            .iter()
+            .map(|p| p.len())
+            .max()
+            .unwrap_or(DEFAULT_MAX_PIECE_LEN)
+            .max(1);
+        // Hash index instead of a linear vocab scan per candidate substring —
+        // O(n·window) lookups even for 32k+ piece GGUF vocabularies.
+        let mut index: HashMap<&[u8], usize> = HashMap::with_capacity(self.pieces.len());
+        for (id, piece) in self.pieces.iter().enumerate() {
+            index.entry(piece.as_slice()).or_insert(id);
+        }
         let neg_inf = f32::NEG_INFINITY;
         let mut best = vec![neg_inf; n + 1];
         let mut prev_len = vec![0usize; n + 1];
@@ -114,10 +151,10 @@ impl UnigramEncoder {
             if best[i] == neg_inf {
                 continue;
             }
-            let max_len = (n - i).min(DEFAULT_MAX_PIECE_LEN);
+            let max_len = (n - i).min(window);
             for len in 1..=max_len {
                 let slice = &bytes[i..i + len];
-                let Some(id) = self.piece_id(slice) else {
+                let Some(&id) = index.get(slice) else {
                     continue;
                 };
                 let score = best[i] + self.log_probs[id];
@@ -138,7 +175,7 @@ impl UnigramEncoder {
                 pos -= 1;
             } else {
                 let slice = &bytes[pos - len..pos];
-                ids.push(self.piece_id(slice).unwrap_or(slice[0] as usize));
+                ids.push(index.get(slice).copied().unwrap_or(slice[0] as usize));
                 pos -= len;
             }
         }
@@ -164,6 +201,11 @@ impl UnigramEncoder {
 
     pub fn piece_count(&self) -> usize {
         self.pieces.len()
+    }
+
+    /// Piece bytes and log-prob scores in id order (for vocab export).
+    pub fn pieces_and_scores(&self) -> (Vec<Vec<u8>>, Vec<f32>) {
+        (self.pieces.clone(), self.log_probs.clone())
     }
 
     /// Drop merged pieces (not single-byte tokens) with log-prob below `min_log_prob`.

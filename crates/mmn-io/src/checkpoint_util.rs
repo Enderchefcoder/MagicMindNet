@@ -19,38 +19,40 @@ pub(crate) fn write_file_create_parents(path: &str, contents: impl AsRef<[u8]>) 
     })
 }
 
-pub(crate) fn tensor_to_entry(t: &Tensor) -> serde_json::Value {
+/// One serialized tensor: the `{"data": [...], "dtype": "F32", "shape": [...]}`
+/// JSON entry, deserialized directly into typed fields (no `Value` trees —
+/// this is the hot path for the default checkpoint format).
+///
+/// Field order matches serde_json's alphabetical `Value` object output so
+/// files stay byte-identical with earlier releases.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct TensorEntry {
+    pub data: Vec<u8>,
+    pub dtype: String,
+    pub shape: Vec<usize>,
+}
+
+/// Named tensor entries, ordered like serde_json's sorted `Value` objects.
+pub(crate) type TensorMap = std::collections::BTreeMap<String, TensorEntry>;
+
+pub(crate) fn tensor_to_entry(t: &Tensor) -> TensorEntry {
     let arr = t.data.as_standard_layout().to_owned();
     let shape: Vec<usize> = arr.shape().to_vec();
     let data: Vec<u8> = arr.iter().flat_map(|f| f.to_le_bytes()).collect();
-    serde_json::json!({
-        "dtype": "F32",
-        "shape": shape,
-        "data": data,
-    })
-}
-
-pub(crate) fn require_tensor_entry<'a>(
-    tensors: &'a serde_json::Value,
-    key: &str,
-) -> Result<&'a serde_json::Value, MmnError> {
-    let entry = &tensors[key];
-    if entry.is_object() {
-        Ok(entry)
-    } else {
-        Err(MmnError::Other {
-            message: format!("checkpoint missing required tensor: {key}"),
-        })
+    TensorEntry {
+        data,
+        dtype: "F32".to_string(),
+        shape,
     }
 }
 
-pub(crate) fn json_byte(v: &serde_json::Value) -> Result<u8, MmnError> {
-    v.as_u64()
-        .filter(|&n| n <= 255)
-        .map(|n| n as u8)
-        .ok_or_else(|| MmnError::Other {
-            message: "tensor data byte invalid".into(),
-        })
+pub(crate) fn require_tensor_entry<'a>(
+    tensors: &'a TensorMap,
+    key: &str,
+) -> Result<&'a TensorEntry, MmnError> {
+    tensors.get(key).ok_or_else(|| MmnError::Other {
+        message: format!("checkpoint missing required tensor: {key}"),
+    })
 }
 
 pub(crate) fn expect_tensor_shape(t: &Tensor, expected: &[usize], name: &str) -> Result<(), MmnError> {
@@ -63,42 +65,24 @@ pub(crate) fn expect_tensor_shape(t: &Tensor, expected: &[usize], name: &str) ->
     Ok(())
 }
 
-pub(crate) fn tensor_from_entry(v: &serde_json::Value) -> Result<Tensor, MmnError> {
-    let embed = v.as_object().ok_or_else(|| MmnError::Other {
-        message: "tensor entry must be object".into(),
-    })?;
-    let shape: Vec<usize> = embed["shape"]
-        .as_array()
-        .ok_or_else(|| MmnError::Other {
-            message: "tensor missing shape".into(),
-        })?
-        .iter()
-        .map(|x| x.as_u64().unwrap() as usize)
-        .collect();
-    let bytes = embed["data"].as_array().ok_or_else(|| MmnError::Other {
-        message: "tensor missing data".into(),
-    })?;
-    let mut vec = Vec::with_capacity(bytes.len() / 4);
-    for chunk in bytes.chunks(4) {
-        if chunk.len() != 4 {
-            return Err(MmnError::Other {
-                message: "tensor data truncated".into(),
-            });
-        }
-        vec.push(f32::from_le_bytes([
-            json_byte(&chunk[0])?,
-            json_byte(&chunk[1])?,
-            json_byte(&chunk[2])?,
-            json_byte(&chunk[3])?,
-        ]));
+pub(crate) fn tensor_from_entry(entry: &TensorEntry) -> Result<Tensor, MmnError> {
+    if !entry.data.len().is_multiple_of(4) {
+        return Err(MmnError::Other {
+            message: "tensor data truncated".into(),
+        });
     }
-    if vec.len() != shape.iter().product::<usize>() {
+    let vec: Vec<f32> = entry
+        .data
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    if vec.len() != entry.shape.iter().product::<usize>() {
         return Err(MmnError::Other {
             message: "tensor data length mismatch".into(),
         });
     }
     Ok(Tensor::from_array(
-        ArrayD::from_shape_vec(ndarray::IxDyn(&shape), vec).map_err(|e| MmnError::Other {
+        ArrayD::from_shape_vec(ndarray::IxDyn(&entry.shape), vec).map_err(|e| MmnError::Other {
             message: e.to_string(),
         })?,
         true,

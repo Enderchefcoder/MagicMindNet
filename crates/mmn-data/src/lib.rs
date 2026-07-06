@@ -3,6 +3,7 @@ pub mod chatxml;
 pub mod dataset;
 pub mod encoder;
 pub mod error;
+pub mod gpt2_bpe;
 pub mod unigram;
 pub mod vision;
 
@@ -10,6 +11,7 @@ pub use bpe::BytePairEncoder;
 pub use chatxml::ChatXmlConfig;
 pub use dataset::*;
 pub use encoder::TextEncoderRef;
+pub use gpt2_bpe::Gpt2BpeEncoder;
 pub use unigram::UnigramEncoder;
 pub use vision::{
     grayscale_mask_tensor_from_image_bytes, grayscale_mask_tensor_from_image_path,

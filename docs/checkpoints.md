@@ -1,11 +1,14 @@
 # Checkpoint formats
 
-MagicMindNet uses two Chatbot weight formats:
+MagicMindNet Chatbot weights travel in five formats:
 
 1. **`mmn-safetensors-v1`** — JSON wrapper with little-endian F32 tensor blobs (default `export(..., "safetensors", …)`).
 2. **`mmn-hf-safetensors-v1`** — Hugging Face **binary** safetensors (`export(..., "hf-safetensors", …)`). Same MMN tensor keys and meta; readable by HF tooling.
+3. **GGUF** (`format="gguf"` / `"gguf-q8_0"`) — llama.cpp-ecosystem container, read/written from scratch (see [interop.md](interop.md)).
+4. **PyTorch `.pt`** (`format="pt"`) — `torch.load`-compatible state dict, no torch involved.
+5. **NumPy `.npz`** (`format="npz"`) — `numpy.load`-compatible archive; TensorFlow/Keras interchange.
 
-`import_model("safetensors", [path])` auto-detects binary vs JSON from the first byte.
+`import_model("safetensors", [path])` auto-detects binary vs JSON from the first byte; `ai.load(path)` detects **all** formats (GGUF magic, ZIP contents, safetensors header, JSON).
 
 Export creates missing parent directories for the output path (e.g. `checkpoints/run1/model.mmn`).
 

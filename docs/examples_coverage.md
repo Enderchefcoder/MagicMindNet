@@ -12,6 +12,8 @@ Runnable scripts under `examples/` and how they are regression-tested.
 | [classification.py](../examples/classification.py) | Classifier train + predict | yes | yes |
 | [classification_benchmark.py](../examples/classification_benchmark.py) | Classification train delta | yes | yes |
 | [checkpoint_roundtrip.py](../examples/checkpoint_roundtrip.py) | Chatbot export/import | yes | yes |
+| [global_formats_roundtrip.py](../examples/global_formats_roundtrip.py) | GGUF / `.pt` / `.npz` roundtrips + generic array IO | yes | yes |
+| [interop_benchmark.py](../examples/interop_benchmark.py) | Format save/load timing + sizes (incl. k-quants) | yes | yes |
 | [learned_pos_embed_roundtrip.py](../examples/learned_pos_embed_roundtrip.py) | Learned `pos_embed` export/import + loss; `--train` | yes | yes |
 | [rope_roundtrip.py](../examples/rope_roundtrip.py) | RoPE chatbot export/import + loss; `--train` | yes | yes |
 | [classifier_roundtrip.py](../examples/classifier_roundtrip.py) | Classifier export/import | yes | yes |
