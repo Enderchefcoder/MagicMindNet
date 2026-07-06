@@ -306,6 +306,8 @@ Lesson: zarr-python 3.x defaults NEW v2 stores to plain zstd (not blosc); classi
 [X] Wave 21: FROM-SCRATCH ZSTD (RFC 8878) — frames/blocks, Huffman literals (direct + FSE weights, 1/4-stream), FSE sequences (predefined/RLE/custom/repeat), backward bitstream, repeat offsets; zarr v2+v3 DEFAULTS + blosc-zstd + numcodecs levels 1-22 all read
 [X] 577 Rust / 1053 pytest; clippy 0; ruff clean
 Lesson: zstd predefined ML default distribution is 46 ones + SEVEN -1s (indexes 46-52), NOT 17 -1s from 36 — when implementing from spec memory, fetch the authoritative table (misremembering cost a debugging session; seq-level rem-arithmetic tracing found it).
+[X] Wave 22: zstd 2x (u64 window loads + peek-window Huffman, 120->240 MB/s literal-heavy) + snappy decoder (raw block format, cramjam fixtures, blosc codec 2) + zarr v2 standalone numcodecs LZ4 (size-prefixed blocks); cramjam in dev extras
+[X] 580 Rust / 1055 pytest; clippy 0; ruff clean — every blosc inner codec + every zarr-python compressor now decodes
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
