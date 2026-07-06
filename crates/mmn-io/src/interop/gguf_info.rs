@@ -3,7 +3,7 @@
 
 use super::gguf::{read_gguf_header_file, GgufHeader, GgufValue};
 use mmn_core::MmnError;
-use mmn_data::UnigramEncoder;
+use mmn_data::{Gpt2BpeEncoder, UnigramEncoder};
 
 fn err(message: impl Into<String>) -> MmnError {
     MmnError::Other {
@@ -131,27 +131,36 @@ pub fn unigram_to_gguf_metadata(encoder: &UnigramEncoder) -> Vec<(String, GgufVa
     ]
 }
 
-/// Build a `UnigramEncoder` from a GGUF file's embedded SentencePiece
-/// vocabulary (`tokenizer.ggml.model == "llama"`), preserving token ids.
-pub fn import_gguf_tokenizer(path: &str) -> Result<UnigramEncoder, MmnError> {
-    let header = read_gguf_header_file(path)?;
-    let model = header
+fn tokenizer_model(header: &GgufHeader) -> Result<&str, MmnError> {
+    header
         .metadata
         .get("tokenizer.ggml.model")
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
             err("GGUF file has no tokenizer.ggml.model metadata (no embedded tokenizer)")
-        })?;
-    if model != "llama" {
-        return Err(err(format!(
-            "GGUF tokenizer model {model:?} is not SentencePiece-unigram (\"llama\"); use gguf_info to inspect the raw vocabulary"
-        )));
-    }
-    let tokens = string_array(&header, "tokenizer.ggml.tokens")
+        })
+}
+
+fn tokenizer_tokens(header: &GgufHeader) -> Result<Vec<String>, MmnError> {
+    let tokens = string_array(header, "tokenizer.ggml.tokens")
         .ok_or_else(|| err("GGUF file missing tokenizer.ggml.tokens array"))?;
     if tokens.is_empty() {
         return Err(err("GGUF tokenizer.ggml.tokens array is empty"));
     }
+    Ok(tokens)
+}
+
+/// Build a `UnigramEncoder` from a GGUF file's embedded SentencePiece
+/// vocabulary (`tokenizer.ggml.model == "llama"`), preserving token ids.
+pub fn import_gguf_tokenizer(path: &str) -> Result<UnigramEncoder, MmnError> {
+    let header = read_gguf_header_file(path)?;
+    let model = tokenizer_model(&header)?;
+    if model != "llama" {
+        return Err(err(format!(
+            "GGUF tokenizer model {model:?} is not SentencePiece-unigram (\"llama\"); gpt2 vocabs load via load_gguf_bpe_tokenizer"
+        )));
+    }
+    let tokens = tokenizer_tokens(&header)?;
     let scores = f32_array(&header, "tokenizer.ggml.scores")
         .unwrap_or_else(|| vec![0.0; tokens.len()]);
     if scores.len() != tokens.len() {
@@ -163,6 +172,21 @@ pub fn import_gguf_tokenizer(path: &str) -> Result<UnigramEncoder, MmnError> {
     }
     let pieces: Vec<Vec<u8>> = tokens.iter().map(|t| sentencepiece_token_bytes(t)).collect();
     UnigramEncoder::from_pieces(pieces, scores)
+}
+
+/// Build a `Gpt2BpeEncoder` from a GGUF file's embedded byte-level BPE
+/// vocabulary (`tokenizer.ggml.model == "gpt2"`), preserving token ids.
+pub fn import_gguf_bpe_tokenizer(path: &str) -> Result<Gpt2BpeEncoder, MmnError> {
+    let header = read_gguf_header_file(path)?;
+    let model = tokenizer_model(&header)?;
+    if model != "gpt2" {
+        return Err(err(format!(
+            "GGUF tokenizer model {model:?} is not byte-level BPE (\"gpt2\"); llama vocabs load via load_gguf_tokenizer"
+        )));
+    }
+    let tokens = tokenizer_tokens(&header)?;
+    let merges = string_array(&header, "tokenizer.ggml.merges").unwrap_or_default();
+    Gpt2BpeEncoder::from_vocab(tokens, &merges)
 }
 
 #[cfg(test)]
@@ -285,6 +309,39 @@ mod tests {
         );
         let e = import_gguf_tokenizer(path.to_str().unwrap()).err().unwrap();
         assert!(e.message().contains("gpt2"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn gpt2_bpe_vocab_extracts_and_roundtrips() {
+        let path =
+            std::env::temp_dir().join(format!("mmn_gguf_gpt2_{}.gguf", std::process::id()));
+        // Byte-single tokens in GPT-2 unicode space plus one merge.
+        let mut tokens: Vec<GgufValue> = Vec::new();
+        for b in 0x21u8..=0x7E {
+            tokens.push(GgufValue::String((b as char).to_string()));
+        }
+        tokens.push(GgufValue::String("\u{120}".to_string())); // Ġ (space)
+        tokens.push(GgufValue::String("hi".to_string()));
+        let merges = vec![GgufValue::String("h i".to_string())];
+        write_sample(
+            &path,
+            vec![
+                (
+                    "tokenizer.ggml.model".to_string(),
+                    GgufValue::String("gpt2".into()),
+                ),
+                ("tokenizer.ggml.tokens".to_string(), GgufValue::Array(tokens)),
+                ("tokenizer.ggml.merges".to_string(), GgufValue::Array(merges)),
+            ],
+        );
+        let enc = import_gguf_bpe_tokenizer(path.to_str().unwrap()).unwrap();
+        let ids = enc.encode("hi!");
+        assert_eq!(enc.decode(&ids), "hi!");
+        // "hi" merges into a single token.
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        let e = import_gguf_bpe_tokenizer("/nonexistent.gguf").err().unwrap();
+        assert!(e.message().contains("cannot read"));
         let _ = fs::remove_file(&path);
     }
 }

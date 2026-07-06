@@ -22,20 +22,22 @@ pub use interop::gguf::{
 pub use interop::gguf_chatbot::{
     export_gguf, export_gguf_with_tokenizer, gguf_name_to_mmn, import_gguf, mmn_name_to_gguf,
 };
-pub use interop::gguf_info::{gguf_info_json, import_gguf_tokenizer};
-pub use interop::gguf_quant::GgmlType;
+pub use interop::gguf_info::{gguf_info_json, import_gguf_bpe_tokenizer, import_gguf_tokenizer};
+pub use interop::gguf_quant::{dequantize as dequantize_ggml, GgmlType};
 pub use interop::hdf5::{read_h5_arrays, read_h5_arrays_bytes, read_keras_arrays};
+pub use interop::deflate::deflate;
 pub use interop::inflate::inflate;
 pub use interop::npy::{decode_npy, encode_npy_f32, NpyArray};
 pub use interop::pickle::{parse_pickle, parse_pickle_prefix, PickleValue, PickleWriter};
+pub use interop::sharded::{import_sharded, is_shard_index_bytes};
 pub use interop::npz_chatbot::{
-    export_npz, import_npz, read_npz_arrays, write_npz_arrays,
+    export_npz, import_npz, read_npz_arrays, write_npz_arrays, write_npz_arrays_opts,
 };
 pub use interop::torch_pt::{
     export_torch_pt, import_torch_pt, read_torch_arrays, write_torch_arrays,
 };
 pub use interop::zip::{
-    crc32, is_zip_bytes, read_zip, read_zip_entry, write_zip_stored, zip_entry_names,
+    crc32, is_zip_bytes, read_zip, read_zip_entry, write_zip, write_zip_stored, zip_entry_names,
 };
 pub use interop::NamedArray;
 pub use hf_classifier_safetensors::{
