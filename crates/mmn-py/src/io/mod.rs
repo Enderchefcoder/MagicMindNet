@@ -5,8 +5,8 @@ use mmn_io::{
     export_torch_pt, import_bin, import_classifier, import_diffusion, import_gguf,
     import_hf_classifier_safetensors, import_hf_safetensors, import_npz, import_safetensors,
     import_torch_pt, merge_classifiers, merge_diffusion, merge_models, quantize_classifier,
-    quantize_diffusion, quantize_model, read_npz_arrays, read_torch_arrays, write_npz_arrays,
-    write_torch_arrays, CheckpointKind, NamedArray, TokenizerSidecarRefs,
+    quantize_diffusion, quantize_model, read_npz_arrays, read_torch_arrays, write_torch_arrays,
+    CheckpointKind, NamedArray, TokenizerSidecarRefs,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -135,8 +135,9 @@ pub(crate) fn import_chatbot_from_path(
         | "gguf_q4_0" => import_gguf(path).map_err(mmn_err_to_py),
         "npz" | "numpy" => import_npz(path).map_err(mmn_err_to_py),
         "pt" | "pytorch" | "torch" => import_torch_pt(path).map_err(mmn_err_to_py),
+        "sharded" => mmn_io::import_sharded(path).map_err(mmn_err_to_py),
         _ => Err(PyValueError::new_err(format!(
-            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, npz, pt"
+            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, npz, pt, sharded"
         ))),
     }
 }
@@ -324,6 +325,10 @@ pub fn load_checkpoint(py: Python<'_>, path: &str) -> PyResult<PyObject> {
             let inner = import_torch_pt(path).map_err(mmn_err_to_py)?;
             Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
         }
+        CheckpointKind::ChatbotSharded => {
+            let inner = mmn_io::import_sharded(path).map_err(mmn_err_to_py)?;
+            Ok(PyChatbot { inner }.into_pyobject(py)?.into_any().unbind())
+        }
         CheckpointKind::Classifier => {
             let inner = import_classifier(path).map_err(mmn_err_to_py)?;
             Ok(PyClassifier { inner }.into_pyobject(py)?.into_any().unbind())
@@ -363,16 +368,66 @@ pub fn read_npz(path: &str) -> PyResult<Vec<NamedArray>> {
     read_npz_arrays(path).map_err(mmn_err_to_py)
 }
 
-/// Write named arrays to an `.npz` archive readable by `numpy.load`.
+/// Write named arrays to an `.npz` archive readable by `numpy.load`
+/// (`compress=True` matches `np.savez_compressed`).
 #[pyfunction]
-pub fn write_npz(path: &str, arrays: Vec<NamedArray>) -> PyResult<()> {
-    write_npz_arrays(path, &arrays).map_err(mmn_err_to_py)
+#[pyo3(signature = (path, arrays, compress=false))]
+pub fn write_npz(path: &str, arrays: Vec<NamedArray>, compress: bool) -> PyResult<()> {
+    mmn_io::write_npz_arrays_opts(path, &arrays, compress).map_err(mmn_err_to_py)
 }
 
 /// Read every tensor in a PyTorch `.pt` state dict as `[(name, shape, values), ...]`.
 #[pyfunction]
 pub fn read_pt(path: &str) -> PyResult<Vec<NamedArray>> {
     read_torch_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Dequantize a raw GGML block payload (`type_name` e.g. "Q4_K", "IQ2_XXS").
+#[pyfunction]
+pub fn dequantize_ggml(type_name: &str, data: Vec<u8>, numel: usize) -> PyResult<Vec<f32>> {
+    let ty = ggml_type_by_name(type_name)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown GGML type {type_name:?}")))?;
+    mmn_io::dequantize_ggml(ty, &data, numel).map_err(mmn_err_to_py)
+}
+
+fn ggml_type_by_name(name: &str) -> Option<mmn_io::GgmlType> {
+    use mmn_io::GgmlType as T;
+    Some(match name.to_ascii_uppercase().as_str() {
+        "F32" => T::F32,
+        "F16" => T::F16,
+        "BF16" => T::BF16,
+        "F64" => T::F64,
+        "Q4_0" => T::Q4_0,
+        "Q4_1" => T::Q4_1,
+        "Q5_0" => T::Q5_0,
+        "Q5_1" => T::Q5_1,
+        "Q8_0" => T::Q8_0,
+        "Q8_1" => T::Q8_1,
+        "Q2_K" => T::Q2K,
+        "Q3_K" => T::Q3K,
+        "Q4_K" => T::Q4K,
+        "Q5_K" => T::Q5K,
+        "Q6_K" => T::Q6K,
+        "Q8_K" => T::Q8K,
+        "IQ4_NL" => T::Iq4Nl,
+        "IQ4_XS" => T::Iq4Xs,
+        "IQ2_XXS" => T::Iq2Xxs,
+        "IQ2_XS" => T::Iq2Xs,
+        "IQ2_S" => T::Iq2S,
+        "IQ3_XXS" => T::Iq3Xxs,
+        "IQ3_S" => T::Iq3S,
+        "IQ1_S" => T::Iq1S,
+        "IQ1_M" => T::Iq1M,
+        "TQ1_0" => T::Tq1_0,
+        "TQ2_0" => T::Tq2_0,
+        "MXFP4" => T::Mxfp4,
+        "NVFP4" => T::Nvfp4,
+        "I8" => T::I8,
+        "I16" => T::I16,
+        "I32" => T::I32,
+        "I64" => T::I64,
+        _ => return None,
+    })
 }
 
 /// GGUF file inspection: metadata + tensor summaries as a JSON string.
@@ -387,6 +442,13 @@ pub fn gguf_info_json(path: &str) -> PyResult<String> {
 pub fn load_gguf_tokenizer(path: &str) -> PyResult<crate::tokenizer::PyUnigramEncoder> {
     let inner = mmn_io::import_gguf_tokenizer(path).map_err(mmn_err_to_py)?;
     Ok(crate::tokenizer::PyUnigramEncoder { inner })
+}
+
+/// Extract the byte-level BPE ("gpt2") vocabulary embedded in a GGUF file.
+#[pyfunction]
+pub fn load_gguf_bpe_tokenizer(path: &str) -> PyResult<crate::tokenizer::PyGpt2BpeEncoder> {
+    let inner = mmn_io::import_gguf_bpe_tokenizer(path).map_err(mmn_err_to_py)?;
+    Ok(crate::tokenizer::PyGpt2BpeEncoder { inner })
 }
 
 /// Read every dataset in an HDF5 file as `[(path, shape, values), ...]`.

@@ -29,6 +29,7 @@ from magicmindnet import _native
 
 __all__ = [
     "gguf_info",
+    "load_gguf_bpe_tokenizer",
     "load_gguf_tokenizer",
     "load_h5",
     "load_keras",
@@ -101,13 +102,17 @@ def load_npy(path):
     return _nest(shape, flat)
 
 
-def save_npz(path, arrays):
-    """Write a dict of named arrays as an ``.npz`` archive (``numpy.load`` compatible)."""
+def save_npz(path, arrays, compress=False):
+    """Write a dict of named arrays as an ``.npz`` archive (``numpy.load`` compatible).
+
+    ``compress=True`` DEFLATE-compresses entries like ``np.savez_compressed``
+    (from-scratch compressor, no zlib).
+    """
     packed = []
     for name, array in arrays.items():
         shape, flat = _flatten(array)
         packed.append((str(name), shape, flat))
-    _native.write_npz(path, packed)
+    _native.write_npz(path, packed, compress)
 
 
 def load_npz(path):
@@ -154,3 +159,12 @@ def load_gguf_tokenizer(path):
     model's rows, so ``encode``/``decode`` line up with the GGUF weights.
     """
     return _native.load_gguf_tokenizer(path)
+
+
+def load_gguf_bpe_tokenizer(path):
+    """Extract a byte-level BPE ("gpt2") vocabulary embedded in a GGUF model.
+
+    Returns a :class:`magicmindnet.Gpt2BpeEncoder` whose token ids match the
+    model's rows (GPT-2 / Llama-3 / Qwen-style vocabularies).
+    """
+    return _native.load_gguf_bpe_tokenizer(path)

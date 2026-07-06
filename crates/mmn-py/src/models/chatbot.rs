@@ -181,6 +181,7 @@ impl PyChatbot {
                     mmn_io::CheckpointKind::ChatbotGguf => "gguf".to_string(),
                     mmn_io::CheckpointKind::ChatbotNpz => "npz".to_string(),
                     mmn_io::CheckpointKind::ChatbotTorch => "pt".to_string(),
+                    mmn_io::CheckpointKind::ChatbotSharded => "sharded".to_string(),
                     _ => "safetensors".to_string(),
                 }
             }

@@ -33,6 +33,7 @@ from magicmindnet._native import (
     DatasetImageGen,
     DatasetQA,
     Diffusion,
+    Gpt2BpeEncoder,
     ModelMismatchError,
     Train,
     TrainClassifier,
@@ -59,6 +60,7 @@ from magicmindnet._native import (
 from magicmindnet.bpe_io import load_bpe_sidecar
 from magicmindnet.interop import (
     gguf_info,
+    load_gguf_bpe_tokenizer,
     load_gguf_tokenizer,
     load_h5,
     load_keras,
@@ -119,6 +121,7 @@ __all__ = [
     "export_diffusion",
     "export_diffusion_model",
     "gguf_info",
+    "Gpt2BpeEncoder",
     "import_classifier",
     "import_classifier_model",
     "import_diffusion",
@@ -129,6 +132,7 @@ __all__ = [
     "load",
     "load_bpe_sidecar",
     "load_checkpoint",
+    "load_gguf_bpe_tokenizer",
     "load_gguf_tokenizer",
     "load_h5",
     "load_keras",

@@ -1,8 +1,11 @@
 use mmn_data::BytePairEncoder;
+use mmn_data::Gpt2BpeEncoder;
 use mmn_data::UnigramEncoder;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
+use crate::errors::mmn_err_to_py;
 
 #[pyclass(name = "BytePairEncoder")]
 pub struct PyBytePairEncoder {
@@ -12,6 +15,50 @@ pub struct PyBytePairEncoder {
 #[pyclass(name = "UnigramEncoder")]
 pub struct PyUnigramEncoder {
     pub inner: UnigramEncoder,
+}
+
+/// GPT-2-style byte-level BPE over an external vocabulary (GGUF gpt2 vocabs,
+/// HF vocab.json + merges.txt). Ids follow the vocabulary order.
+#[pyclass(name = "Gpt2BpeEncoder")]
+pub struct PyGpt2BpeEncoder {
+    pub inner: Gpt2BpeEncoder,
+}
+
+#[pymethods]
+impl PyGpt2BpeEncoder {
+    /// Build from a token list (id order) and "left right" merge rules.
+    #[staticmethod]
+    #[pyo3(signature = (tokens, merges=Vec::new()))]
+    fn from_vocab(tokens: Vec<String>, merges: Vec<String>) -> PyResult<Self> {
+        Ok(Self {
+            inner: Gpt2BpeEncoder::from_vocab(tokens, &merges).map_err(mmn_err_to_py)?,
+        })
+    }
+
+    fn encode(&self, text: &str) -> Vec<usize> {
+        self.inner.encode(text)
+    }
+
+    fn decode(&self, ids: Vec<usize>) -> String {
+        self.inner.decode(&ids)
+    }
+
+    /// Token string (byte-unicode form) for an id.
+    fn token(&self, id: usize) -> PyResult<String> {
+        self.inner
+            .token(id)
+            .map(str::to_string)
+            .ok_or_else(|| PyValueError::new_err(format!("token id {id} out of range")))
+    }
+
+    #[getter]
+    fn vocab_size(&self) -> usize {
+        self.inner.vocab_size()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Gpt2BpeEncoder(vocab_size={})", self.inner.vocab_size())
+    }
 }
 
 #[pymethods]

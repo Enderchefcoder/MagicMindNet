@@ -18,15 +18,15 @@ use errors::{
     CPUError, CUDAError, DataMismatchError, DataMissingRowError, ModelMismatchError,
 };
 use io::{
-    export, export_classifier_model, export_diffusion_model, gguf_info_json,
+    dequantize_ggml, export, export_classifier_model, export_diffusion_model, gguf_info_json,
     import_classifier_model, import_diffusion_model, import_model, load_checkpoint,
-    load_gguf_tokenizer, merge, merge_classifier, merge_diffusion_model, quantize,
-    quantize_classifier_model, quantize_diffusion_model, read_h5, read_keras, read_npy,
-    read_npz, read_pt, write_npy, write_npz, write_pt,
+    load_gguf_bpe_tokenizer, load_gguf_tokenizer, merge, merge_classifier,
+    merge_diffusion_model, quantize, quantize_classifier_model, quantize_diffusion_model,
+    read_h5, read_keras, read_npy, read_npz, read_pt, write_npy, write_npz, write_pt,
 };
 use models::{PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
-use tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
+use tokenizer::{PyBytePairEncoder, PyGpt2BpeEncoder, PyUnigramEncoder};
 use train::{RL, SPIN, Train, TrainClassifier, TrainDiffusion};
 use train_config::PyTrainConfig;
 use vision::{vision_rgb_patch_from_image_path_py, vision_rgb_patches_from_image_path_py};
@@ -41,6 +41,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDatasetImageEdit>()?;
     m.add_class::<PyBytePairEncoder>()?;
     m.add_class::<PyUnigramEncoder>()?;
+    m.add_class::<PyGpt2BpeEncoder>()?;
     m.add_class::<PyChatbot>()?;
     m.add_class::<PyClassifier>()?;
     m.add_class::<PyDiffusion>()?;
@@ -73,7 +74,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_pt, m)?)?;
     m.add_function(wrap_pyfunction!(write_pt, m)?)?;
     m.add_function(wrap_pyfunction!(gguf_info_json, m)?)?;
+    m.add_function(wrap_pyfunction!(dequantize_ggml, m)?)?;
     m.add_function(wrap_pyfunction!(load_gguf_tokenizer, m)?)?;
+    m.add_function(wrap_pyfunction!(load_gguf_bpe_tokenizer, m)?)?;
     m.add_function(wrap_pyfunction!(read_h5, m)?)?;
     m.add_function(wrap_pyfunction!(read_keras, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patch_from_image_path_py, m)?)?;
