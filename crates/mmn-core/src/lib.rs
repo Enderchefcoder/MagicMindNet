@@ -1,6 +1,7 @@
 pub mod autograd;
 pub mod device;
 pub mod dtype;
+pub mod elementwise;
 pub mod error;
 pub mod ops;
 pub mod tensor;
