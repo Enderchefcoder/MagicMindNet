@@ -284,6 +284,10 @@
 [X] Wave 13a: numpy arrays in any pickle — _reconstruct+BUILD (proto 2-4, latin-1 _codecs bytes), proto-5 _frombuffer + BYTEARRAY8, NEWOBJ/NEWOBJ_EX, numpy scalars, big-endian, Fortran->C, sklearn __dict__ walk; covers PaddlePaddle .pdparams; writer pickle.load+numpy reads
 [X] Wave 13b: ai.load_arrays(path, numpy=True) — read_arrays_auto_bytes + np.frombuffer, 80ms -> 7ms @1.3M values; numpy stays optional via top-level try-import
 [X] 545 Rust / 991 pytest; clippy 0; ruff clean; ci_local OK (one mmn-train diffusion loss test flaked once under parallel load, passed on rerun + full gate)
+[X] Wave 14a: sharded safetensors WRITE (greedy packing + HF weight_map index, official safetensors opens shards) + generic read_sharded_arrays; load_arrays detects "sharded"
+[X] Wave 14b: save_arrays numpy tobytes fast path (write_arrays_bytes, byte-identical, ~2x)
+[X] Wave 14c: FIXED the diffusion flake — Diffusion::new_with_seed + seeded Conv2d/VAE/UNet ctors; denoise loss tests seeded (seed 11), 3x stable
+[X] 549 Rust / 995 pytest; clippy 0 (workspace); ruff clean
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
