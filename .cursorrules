@@ -281,6 +281,9 @@
 [X] Wave 12b: TFLite from-scratch flatbuffer walker (Model schema, inline + TF>=2.13 out-of-band buffers, per-tensor/per-channel int8 dequant); committed simple.tflite fixture + live TF conversion tests
 [X] Wave 12c: TorchScript constants.pkl archives read as constants.N; ai.load("model.ggjt") adapts legacy llama names to Chatbot and generates
 [X] 540 Rust / 964 pytest; clippy 0; ruff clean
+[X] Wave 13a: numpy arrays in any pickle — _reconstruct+BUILD (proto 2-4, latin-1 _codecs bytes), proto-5 _frombuffer + BYTEARRAY8, NEWOBJ/NEWOBJ_EX, numpy scalars, big-endian, Fortran->C, sklearn __dict__ walk; covers PaddlePaddle .pdparams; writer pickle.load+numpy reads
+[X] Wave 13b: ai.load_arrays(path, numpy=True) — read_arrays_auto_bytes + np.frombuffer, 80ms -> 7ms @1.3M values; numpy stays optional via top-level try-import
+[X] 545 Rust / 991 pytest; clippy 0; ruff clean; ci_local OK (one mmn-train diffusion loss test flaked once under parallel load, passed on rerun + full gate)
 Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in full runs — never gate tests on importorskip("torch"); hand-build fixtures instead.
 
 ## Task: Beginner API overhaul (easy-to-use professional library)
