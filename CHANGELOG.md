@@ -2,6 +2,20 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (interop wave 21: from-scratch Zstandard — the last compression gap)
+- **zstd decoder (RFC 8878)**: frame headers, raw/RLE/compressed blocks,
+  Huffman-coded literals (direct + FSE-compressed weight tables, 1- and
+  4-stream), FSE-coded sequences (predefined / RLE / custom / repeat tables),
+  the interleaved backward bitstream, repeat-offset history, skippable frames —
+  ~700 lines, no zstd library
+- Unlocks **zarr-python 3.x out-of-the-box stores** (zstd is the default codec
+  for both new v2 and v3 stores), **blosc-zstd** chunks, and raw `numcodecs.Zstd`
+  frames at every compression level (1 through 22 tested)
+- Validated against numcodecs-written fixtures (repetitive/text/random/
+  multi-block/level-19) + live zarr default-store matrix
+- Debugging note: the initial failure traced to a misremembered predefined
+  match-length distribution; fixed against the published format spec
+
 ### Added (interop wave 13: numpy arrays in any pickle — PaddlePaddle, sklearn)
 - **Generic pickle array IO** (`ai.load_pickle_arrays` / `ai.save_pickle_arrays`):
   the pickle VM now reconstructs numpy ndarrays anywhere in a pickled object

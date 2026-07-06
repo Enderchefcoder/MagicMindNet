@@ -81,10 +81,14 @@ fn decode_stream(
             }
             Ok(out)
         }
+        4 => {
+            let out = super::zstd::zstd_decompress(src)?;
+            if out.len() != expected {
+                return Err(err("blosc zstd stream length mismatch"));
+            }
+            Ok(out)
+        }
         2 => Err(err("blosc snappy codec not supported")),
-        4 => Err(err(
-            "blosc zstd codec not supported (re-encode with cname='lz4' or 'zlib')",
-        )),
         other => Err(err(format!("blosc codec id {other} unknown"))),
     }
 }

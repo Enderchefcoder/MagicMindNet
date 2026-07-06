@@ -354,15 +354,15 @@ same fusion pipeline as HF imports, so pre-GGUF models load and generate.
 
 Directory stores read completely in **both format revisions**: v2
 (`.zarray`/`.zgroup`) and **v3** (`zarr.json` nodes, `c/`-prefixed chunk
-keys, `bytes` + `gzip`/`blosc` codec chains) — group trees (`/`-joined
-names), C-order chunk grids with edge padding, `fill_value` for missing
-chunks, every numeric dtype. Blosc frames (zarr's classic default) decode
-through the from-scratch Blosc1 reader with **LZ4 and BloscLZ block
-decoders** inside, plus zlib-in-blosc, **byte-shuffle and bit-shuffle**
-undo, and memcpy mode. Plain zlib, RFC-1952 gzip (v3), and uncompressed
-chunks also read. Writes produce v2 group stores `zarr.open_group` reads
-(one zlib `<f4` chunk per array). zstd/snappy report clear errors naming
-the codec:
+keys, codec chains) — group trees (`/`-joined names), C-order chunk grids
+with edge padding, `fill_value` for missing chunks, every numeric dtype.
+**Every compressor zarr-python ships is decoded from scratch**: raw
+**zstd** frames (the 3.x default for both v2 and v3 — RFC 8878 FSE +
+Huffman implemented here), Blosc frames (the classic default) with **LZ4,
+BloscLZ, zlib, and zstd** inner codecs plus **byte- and bit-shuffle** undo
+and memcpy mode, plain zlib, RFC-1952 gzip, and uncompressed chunks.
+Writes produce v2 group stores `zarr.open_group` reads (one zlib `<f4>`
+chunk per array):
 
 ```python
 arrays = ai.load_zarr("weights.zarr")          # {"layer/kernel": [[...]]}

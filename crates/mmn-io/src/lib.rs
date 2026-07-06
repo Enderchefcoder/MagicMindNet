@@ -64,6 +64,7 @@ pub use interop::pickle_arrays::{
 pub use interop::blosc::blosc_decompress;
 pub use interop::lz4::lz4_decompress_block;
 pub use interop::zarr::{is_zarr_dir, read_zarr_arrays, write_zarr_arrays};
+pub use interop::zstd::zstd_decompress;
 pub use interop::st_arrays::{
     read_safetensors_arrays, read_safetensors_arrays_bytes, write_safetensors_arrays,
     write_safetensors_arrays_bytes, write_safetensors_arrays_bytes_dtype,

@@ -80,15 +80,6 @@ def test_blosc_memcpy_small_chunks_read(tmp_path):
     np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
 
 
-def test_zstd_compressed_store_rejected_clearly(tmp_path):
-    # zarr-python 3.x defaults v2 stores to plain zstd — unsupported, with
-    # a clear error naming the codec.
-    store = str(tmp_path / "zstd.zarr")
-    z = zarr.create_array(store=store, shape=(4,), chunks=(4,), dtype="<f4",
-                          zarr_format=2)
-    z[:] = np.ones(4, dtype=np.float32)
-    with pytest.raises((ValueError, RuntimeError), match="zstd"):
-        ai.load_zarr(store)
 
 
 @pytest.mark.parametrize("cname", ["blosclz", "lz4"])
@@ -140,12 +131,58 @@ def test_zarr_v3_group_tree_reads(tmp_path):
     )
 
 
-def test_zarr_v3_zstd_rejected_clearly(tmp_path):
+def test_zarr_v3_default_zstd_reads(tmp_path):
+    # zarr-python 3.x default codec chain (bytes + zstd) — decoded by the
+    # from-scratch zstd implementation.
     store = str(tmp_path / "v3_zstd.zarr")
-    z = zarr.create_array(store=store, shape=(4,), chunks=(4,), dtype="float32")
-    z[:] = np.ones(4, dtype=np.float32)
-    with pytest.raises((ValueError, RuntimeError), match="zstd"):
-        ai.load_zarr(store)
+    values = ((np.arange(30_000, dtype=np.float32) % 97) / 7.0).reshape(100, 300)
+    z = zarr.create_array(store=store, shape=(100, 300), chunks=(40, 80), dtype="float32")
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_zarr_v2_default_zstd_reads(tmp_path):
+    store = str(tmp_path / "v2_zstd.zarr")
+    values = np.arange(500, dtype=np.float32)
+    z = zarr.create_array(store=store, shape=(500,), chunks=(128,), dtype="<f4",
+                          zarr_format=2)
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+def test_blosc_zstd_inner_codec_reads(tmp_path):
+    from numcodecs import Blosc
+
+    store = str(tmp_path / "blosc_zstd.zarr")
+    values = ((np.arange(30_000, dtype=np.float32) % 97) / 7.0)
+    z = zarr.create_array(store=store, shape=values.shape, chunks=(8192,), dtype="<f4",
+                          zarr_format=2,
+                          compressors=Blosc(cname="zstd", clevel=5, shuffle=Blosc.SHUFFLE))
+    z[:] = values
+    loaded = ai.load_zarr(store)
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
+
+
+@pytest.mark.parametrize("level", [1, 9, 22])
+def test_raw_zstd_frames_decode_at_all_levels(tmp_path, level):
+    import json
+    import os
+
+    from numcodecs.zstd import Zstd
+
+    values = ((np.arange(30_000, dtype=np.float32) % 97) / 7.0).reshape(100, 300)
+    frame = bytes(Zstd(level=level).encode(values.tobytes()))
+    store = tmp_path / f"lvl{level}.zarr"
+    os.makedirs(store)
+    (store / ".zarray").write_text(json.dumps({
+        "chunks": [100, 300], "compressor": {"id": "zstd", "level": level},
+        "dtype": "<f4", "fill_value": 0.0, "filters": None, "order": "C",
+        "shape": [100, 300], "zarr_format": 2}))
+    (store / "0.0").write_bytes(frame)
+    loaded = ai.load_zarr(str(store))
+    np.testing.assert_allclose(np.array(loaded[""], dtype=np.float32), values)
 
 
 def test_our_writer_opens_with_zarr_python(tmp_path):

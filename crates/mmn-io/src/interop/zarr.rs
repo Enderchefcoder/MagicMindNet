@@ -39,6 +39,8 @@ enum ZarrCompressor {
     /// RFC-1952 gzip framing (v3 `gzip` codec).
     Gzip,
     Blosc,
+    /// Raw zstd frames (zarr-python 3.x default for both v2 and v3).
+    Zstd,
 }
 
 struct ZarrayMeta {
@@ -151,9 +153,10 @@ fn parse_zarr_v3(path: &Path, v: &serde_json::Value) -> Result<ZarrayMeta, MmnEr
             "gzip" => compressor = ZarrCompressor::Gzip,
             "zlib" => compressor = ZarrCompressor::Zlib,
             "blosc" => compressor = ZarrCompressor::Blosc,
+            "zstd" => compressor = ZarrCompressor::Zstd,
             other => {
                 return Err(err(format!(
-                    "zarr v3 codec {other:?} not supported (bytes/gzip/blosc; re-encode with GzipCodec or BloscCodec)"
+                    "zarr v3 codec {other:?} not supported (bytes/gzip/blosc/zstd)"
                 )))
             }
         }
@@ -221,9 +224,10 @@ fn parse_zarray(path: &Path) -> Result<ZarrayMeta, MmnError> {
             // v2 numcodecs Zlib/GZip both write zlib-framed deflate.
             "zlib" | "gzip" => ZarrCompressor::Zlib,
             "blosc" => ZarrCompressor::Blosc,
+            "zstd" => ZarrCompressor::Zstd,
             other => {
                 return Err(err(format!(
-                    "zarr compressor {other:?} not supported (blosc/zlib/none)"
+                    "zarr compressor {other:?} not supported (blosc/zstd/zlib/none)"
                 )))
             }
         },
@@ -259,6 +263,7 @@ fn decode_chunk(
         ZarrCompressor::Zlib => undo_deflate(raw)?,
         ZarrCompressor::Gzip => undo_gzip(raw)?,
         ZarrCompressor::Blosc => super::blosc::blosc_decompress(raw)?,
+        ZarrCompressor::Zstd => super::zstd::zstd_decompress(raw)?,
         ZarrCompressor::None => raw.to_vec(),
     };
     let item = descr_item_size(&meta.descr)?;
