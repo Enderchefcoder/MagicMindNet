@@ -735,6 +735,133 @@ pub fn encode_f16(values: &[f32]) -> Vec<u8> {
     out
 }
 
+fn require_block_multiple(values: &[f32], block: usize, what: &str) -> Result<(), MmnError> {
+    if !values.len().is_multiple_of(block) {
+        return Err(err(format!(
+            "{what} quantization needs a multiple of {block} values, got {}",
+            values.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Quantize into Q4_1 blocks (min + scale), matching ggml byte-for-byte.
+pub fn quantize_q4_1(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    require_block_multiple(values, QK, "Q4_1")?;
+    let mut out = Vec::with_capacity(values.len() / QK * 20);
+    for block in values.chunks_exact(QK) {
+        let mut min = f32::MAX;
+        let mut max = f32::MIN;
+        for &v in block {
+            min = min.min(v);
+            max = max.max(v);
+        }
+        let d = (max - min) / 15.0;
+        let id = if d != 0.0 { 1.0 / d } else { 0.0 };
+        out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
+        out.extend_from_slice(&f16::from_f32(min).to_le_bytes());
+        for j in 0..QK / 2 {
+            let x0 = (block[j] - min) * id;
+            let x1 = (block[j + QK / 2] - min) * id;
+            // ggml rounds with (int8_t)(x + 0.5f): truncation after +0.5.
+            let xi0 = ((x0 + 0.5) as i32).min(15) as u8;
+            let xi1 = ((x1 + 0.5) as i32).min(15) as u8;
+            out.push(xi0 | (xi1 << 4));
+        }
+    }
+    Ok(out)
+}
+
+/// Quantize into Q5_0 blocks (signed range + high bits), ggml-exact.
+pub fn quantize_q5_0(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    require_block_multiple(values, QK, "Q5_0")?;
+    let mut out = Vec::with_capacity(values.len() / QK * 22);
+    for block in values.chunks_exact(QK) {
+        let mut amax = 0.0f32;
+        let mut max = 0.0f32;
+        for &v in block {
+            if v.abs() > amax {
+                amax = v.abs();
+                max = v;
+            }
+        }
+        let d = max / -16.0;
+        let id = if d != 0.0 { 1.0 / d } else { 0.0 };
+        out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
+        let mut qh = 0u32;
+        let mut qs = [0u8; QK / 2];
+        for (j, slot) in qs.iter_mut().enumerate() {
+            let x0 = block[j] * id;
+            let x1 = block[j + QK / 2] * id;
+            let xi0 = ((x0 + 16.5) as i32).min(31) as u8;
+            let xi1 = ((x1 + 16.5) as i32).min(31) as u8;
+            *slot = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
+            qh |= (((xi0 & 0x10) >> 4) as u32) << j;
+            qh |= (((xi1 & 0x10) >> 4) as u32) << (j + QK / 2);
+        }
+        out.extend_from_slice(&qh.to_le_bytes());
+        out.extend_from_slice(&qs);
+    }
+    Ok(out)
+}
+
+/// Quantize into Q5_1 blocks (min + scale + high bits), ggml-exact.
+pub fn quantize_q5_1(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    require_block_multiple(values, QK, "Q5_1")?;
+    let mut out = Vec::with_capacity(values.len() / QK * 24);
+    for block in values.chunks_exact(QK) {
+        let mut min = f32::MAX;
+        let mut max = f32::MIN;
+        for &v in block {
+            min = min.min(v);
+            max = max.max(v);
+        }
+        let d = (max - min) / 31.0;
+        let id = if d != 0.0 { 1.0 / d } else { 0.0 };
+        out.extend_from_slice(&f16::from_f32(d).to_le_bytes());
+        out.extend_from_slice(&f16::from_f32(min).to_le_bytes());
+        let mut qh = 0u32;
+        let mut qs = [0u8; QK / 2];
+        for (j, slot) in qs.iter_mut().enumerate() {
+            let x0 = (block[j] - min) * id;
+            let x1 = (block[j + QK / 2] - min) * id;
+            let xi0 = (x0 + 0.5) as u8;
+            let xi1 = (x1 + 0.5) as u8;
+            *slot = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
+            qh |= (((xi0 & 0x10) >> 4) as u32) << j;
+            qh |= (((xi1 & 0x10) >> 4) as u32) << (j + QK / 2);
+        }
+        out.extend_from_slice(&qh.to_le_bytes());
+        out.extend_from_slice(&qs);
+    }
+    Ok(out)
+}
+
+/// Quantize into ternary TQ2_0 blocks ({-1,0,1} at 2 bits), ggml-exact.
+pub fn quantize_tq2_0(values: &[f32]) -> Result<Vec<u8>, MmnError> {
+    require_block_multiple(values, QK_K, "TQ2_0")?;
+    let mut out = Vec::with_capacity(values.len() / QK_K * 66);
+    for block in values.chunks_exact(QK_K) {
+        let amax = block.iter().fold(0.0f32, |m, &v| m.max(v.abs()));
+        let id = if amax != 0.0 { 1.0 / amax } else { 0.0 };
+        let mut qs = [0u8; QK_K / 4];
+        for (chunk_idx, chunk) in block.chunks_exact(128).enumerate() {
+            for m in 0..32 {
+                let mut q = 0u8;
+                for n in 0..4 {
+                    // lroundf: round half away from zero.
+                    let xi = (chunk[m + n * 32] * id).round() as i32 + 1;
+                    q += ((xi & 3) as u8) << (2 * n);
+                }
+                qs[chunk_idx * 32 + m] = q;
+            }
+        }
+        out.extend_from_slice(&qs);
+        out.extend_from_slice(&f16::from_f32(amax).to_le_bytes());
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

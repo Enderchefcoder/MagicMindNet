@@ -4,7 +4,10 @@
 //! key/values, tensor infos, and the aligned tensor-data section. No
 //! llama.cpp or ggml code is used anywhere.
 
-use super::gguf_quant::{dequantize, encode_f16, quantize_q4_0, quantize_q8_0, GgmlType};
+use super::gguf_quant::{
+    dequantize, encode_f16, quantize_q4_0, quantize_q4_1, quantize_q5_0, quantize_q5_1,
+    quantize_q8_0, quantize_tq2_0, GgmlType,
+};
 use super::gguf_quant_k_encode::{quantize_q4_k, quantize_q5_k, quantize_q6_k};
 use mmn_core::MmnError;
 use std::collections::HashMap;
@@ -422,12 +425,16 @@ pub fn write_gguf(
             GgmlType::F16 => encode_f16(t.values),
             GgmlType::Q8_0 => quantize_q8_0(t.values)?,
             GgmlType::Q4_0 => quantize_q4_0(t.values)?,
+            GgmlType::Q4_1 => quantize_q4_1(t.values)?,
+            GgmlType::Q5_0 => quantize_q5_0(t.values)?,
+            GgmlType::Q5_1 => quantize_q5_1(t.values)?,
+            GgmlType::Tq2_0 => quantize_tq2_0(t.values)?,
             GgmlType::Q4K => quantize_q4_k(t.values)?,
             GgmlType::Q5K => quantize_q5_k(t.values)?,
             GgmlType::Q6K => quantize_q6_k(t.values)?,
             other => {
                 return Err(err(format!(
-                    "GGUF writer encodes F32, F16, Q8_0, Q4_0, Q4_K, Q5_K, or Q6_K, not {other:?}"
+                    "GGUF writer encodes F32/F16, Q4_0/Q4_1/Q5_0/Q5_1/Q8_0, Q4_K/Q5_K/Q6_K, or TQ2_0, not {other:?}"
                 )));
             }
         };

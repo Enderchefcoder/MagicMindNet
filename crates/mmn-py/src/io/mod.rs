@@ -86,6 +86,9 @@ pub(crate) fn export_chatbot_to_path(
         "gguf-f16" | "gguf_f16" => Some("f16"),
         "gguf-q8_0" | "gguf_q8_0" => Some("q8_0"),
         "gguf-q4_0" | "gguf_q4_0" => Some("q4_0"),
+        "gguf-q4_1" | "gguf_q4_1" => Some("q4_1"),
+        "gguf-q5_0" | "gguf_q5_0" => Some("q5_0"),
+        "gguf-q5_1" | "gguf_q5_1" => Some("q5_1"),
         "gguf-q4_k" | "gguf_q4_k" => Some("q4_k"),
         "gguf-q5_k" | "gguf_q5_k" => Some("q5_k"),
         "gguf-q6_k" | "gguf_q6_k" => Some("q6_k"),
@@ -134,9 +137,7 @@ pub(crate) fn import_chatbot_from_path(
         "safetensors" => import_safetensors(path, 0).map_err(mmn_err_to_py),
         "hf-safetensors" | "hf_safetensors" => import_hf_safetensors(path).map_err(mmn_err_to_py),
         "bin" => import_bin(path).map_err(mmn_err_to_py),
-        "gguf" | "gguf-f16" | "gguf_f16" | "gguf-q8_0" | "gguf_q8_0" | "gguf-q4_0"
-        | "gguf_q4_0" | "gguf-q4_k" | "gguf_q4_k" | "gguf-q5_k" | "gguf_q5_k" | "gguf-q6_k"
-        | "gguf_q6_k" => import_gguf(path).map_err(mmn_err_to_py),
+        f if f.starts_with("gguf") => import_gguf(path).map_err(mmn_err_to_py),
         "npz" | "numpy" => import_npz(path).map_err(mmn_err_to_py),
         "pt" | "pytorch" | "torch" => import_torch_pt(path).map_err(mmn_err_to_py),
         "sharded" => mmn_io::import_sharded(path).map_err(mmn_err_to_py),
@@ -471,6 +472,12 @@ pub fn read_keras(path: &str) -> PyResult<Vec<NamedArray>> {
 #[pyfunction]
 pub fn read_tf_checkpoint(path: &str) -> PyResult<Vec<NamedArray>> {
     mmn_io::read_tf_checkpoint_arrays(path).map_err(mmn_err_to_py)
+}
+
+/// Read every graph initializer (weight) in an ONNX model.
+#[pyfunction]
+pub fn read_onnx(path: &str) -> PyResult<Vec<NamedArray>> {
+    mmn_io::read_onnx_arrays(path).map_err(mmn_err_to_py)
 }
 
 /// Write named arrays as a `torch.load`-compatible `.pt` state dict.
