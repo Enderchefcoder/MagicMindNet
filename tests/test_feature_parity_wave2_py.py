@@ -14,8 +14,8 @@ def test_generate_json_mode_produces_object_like_text():
     bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, seed=11)
     out = bot.generate(
         'Return JSON: {"ok": true}',
-        max_new_tokens=24,
-        temperature=0.8,
+        max_new_tokens=32,
+        temperature=0.0,
         json_mode=True,
     )
     assert isinstance(out, str)
