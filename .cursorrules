@@ -46,6 +46,7 @@
 - Classifier train loss deltas are seed-sensitive on tiny ad-hoc JSON; prefer `tests/fixtures/labels_small.json` + adamw `epochs=20 batch_size=2 lr=0.05`.
 - `ai.save_arrays(path, arrays)` takes path first (swapped args look like “cannot infer format”).
 - GGUF/HF RMS `output_norm` is weight-only — `final_norm.beta` must be optional on import (zeros); requiring beta breaks Qwen/Llama GGUF loads.
+- `json_mode` constrained decode is seed-sensitive; eval/smoke tasks should fix seed + `temperature=0.0` (keep out of default smoke if flaky).
 
 # Scratchpad
 
@@ -427,4 +428,9 @@ Wave 1 (this session):
 
 Later waves (documented, not blocking): grammar/GBNF, OpenAI HTTP server,
 dropout, flash-attn, speculative decoding, Modelfile, tool-calling JSON schema.
+
+[X] Wave 1: mirostat/typical_p, stream, embed, LR schedule, chat messages
+[X] Wave 2: json_mode/grammar + OpenAIServer
+[X] Wave 3: tool calling helpers (chat_with_tools)
+[X] verify_gate green after json_mode smoke harden + waves 1–3
 

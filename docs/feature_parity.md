@@ -18,9 +18,10 @@ MagicMindNet aims for practical parity with common surfaces from **PyTorch**,
 | GGUF load | — | native | yes | done (interop) |
 | Grammar / JSON mode | Outlines / etc. | grammars | format | **Wave 2** `json_mode=` / `grammar=` |
 | OpenAI-compatible HTTP | — | llama-server | Ollama API | **Wave 2** `OpenAIServer` |
-| Tool / function calling | OpenAI tools | — | tools | **planned Wave 3** |
-| Speculative decoding | — | draft models | — | **planned Wave 3** |
-| Continuous batching server | vLLM | llama-server | Ollama | **planned Wave 3** |
+| Tool / function calling | OpenAI tools | — | tools | **Wave 3** `format_tools_prompt` / `chat_with_tools` / `parse_tool_calls` |
+| Speculative decoding | — | draft models | — | **planned Wave 4** |
+| Continuous batching server | vLLM | llama-server | Ollama | **planned Wave 4** |
+| Dropout / flash-attn | yes | — | — | **planned Wave 4** |
 
 ## Wave 1 API sketch
 
@@ -72,6 +73,30 @@ base = server.start()  # e.g. http://127.0.0.1:54321
 server.stop()
 ```
 
-Tests: `tests/test_feature_parity_py.py`, `tests/test_feature_parity_wave2_py.py`.
+Tests: `tests/test_feature_parity_py.py`, `tests/test_feature_parity_wave2_py.py`,
+`tests/test_feature_parity_wave3_tools_py.py`.
 Eval tasks: `gen_typical_p_smoke`, `stream_generate`, `embed_mean_pool`,
-`json_mode_smoke` (optional).
+`json_mode_smoke`.
+
+## Wave 3 API sketch
+
+```python
+import magicmindnet as ai
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Weather by city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}]
+bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, seed=1)
+result = bot.chat_with_tools(
+    [{"role": "user", "content": "Weather in Paris?"}],
+    tools=tools,
+    max_new_tokens=48,
+    json_mode=True,
+)
+# result == {"content": "...", "tool_calls": [{"name": "...", "arguments": {...}}, ...]}
+```

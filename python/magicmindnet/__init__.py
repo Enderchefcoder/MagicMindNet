@@ -58,7 +58,7 @@ from magicmindnet._native import (
     quantize_diffusion_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
-from magicmindnet.chat import format_chat_messages
+from magicmindnet.chat import format_chat_messages, format_tools_prompt, parse_tool_calls
 from magicmindnet.eval import (
     BenchmarkRunner,
     EvalHarness,
@@ -163,6 +163,8 @@ __all__ = [
     "export_diffusion",
     "export_diffusion_model",
     "format_chat_messages",
+    "format_tools_prompt",
+    "parse_tool_calls",
     "gguf_info",
     "Gpt2BpeEncoder",
     "HubModel",

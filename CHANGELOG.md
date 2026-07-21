@@ -2,6 +2,12 @@
 
 ## 0.1.0 — 2026-07-21
 
+### Added (feature parity Wave 3 — tool calling)
+- `format_tools_prompt` / `parse_tool_calls` / `Chatbot.chat_with_tools`
+  → OpenAI-shaped `{content, tool_calls}`
+- Docs: Wave 3 in [docs/feature_parity.md](docs/feature_parity.md)
+- Tests: `tests/test_feature_parity_wave3_tools_py.py`
+
 ### Added (feature parity Wave 2)
 - JSON constrained decoding: `json_mode=True` and `grammar="json"` / `grammar="digit"`
   on `generate` / `generate_tokens` / `generate_stream` (mask + `finalize_json` repair)
