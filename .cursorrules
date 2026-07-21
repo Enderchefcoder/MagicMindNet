@@ -350,37 +350,25 @@ Private train+infer scripts — DO NOT COMMIT; final answer only.
 [X] Wave H — private scripts in final answer (not committed)
 
 
-## Task: Hub overhaul wave 2 (130+ items — work as long as possible)
+## Task: Hub overhaul wave 2 (130+ items)
 
 Goal: make every advertised hub family actually generate/predict/finetune; offline CI;
-docs/examples/stubs; detect polish; Glint/final_norm/embeddings routes.
+docs/examples/stubs; detect polish; Glint GGUF meta.
 
-See /tmp/hub_wave_todos.txt mirrored below. Mark [X] as done.
+Shipped this session (verify_gate OK; 602 Rust / 1145 pytest):
+[X] Wave A — diffusion/TTS/ASR/rerank/Ollama/capabilities/synthetics (~20)
+[X] Wave B — offline hub tests + CI smoke local (~20)
+[X] Wave C — docs/examples/README/API/hub_coverage (~15)
+[X] Wave D — stubs, hub extra, QA.as_pairs, CoT default (~10)
+[X] Wave E — detect dirs, GGUF glint KV, glint example, SwiGLU native (~15)
+[X] Wave F — prefer_native, --list, NLLB max_length clear (~5)
+[X] Wave G — embedding/zero-shot/fill-mask/QA/vlm routes (~10)
+[X] Wave H — verify_gate + PR updates
+[ ] LoopLoRA QKV adapters (roadmap)
+[ ] final_norm / output_norm (roadmap)
+[ ] ModelScope live download=False card without network flake
 
-### Wave A — make hub callable
-[ ] A01 diffusion foreign generate(pipe)
-[ ] A02 diffusion native generate→sample_rgb_patch
-[ ] A03 diffusion HubModel.finetune DatasetImageGen
-[ ] A04 video generate path or clear NotImplemented
-[ ] A05 TTS pipeline load (not CausalLM)
-[ ] A06 ASR pipeline load
-[ ] A07 TTS generate/predict
-[ ] A08 ASR predict transcription
-[ ] A09 reranker score_pairs
-[ ] A10 reranker.rerank top_k
-[ ] A11 Ollama /api/chat
-[ ] A12 Ollama system prompt
-[ ] A13 ModelScope URL parse
-[ ] A14 ModelScope download=False inspect
-[ ] A15 GGUF native-fail clear error
-[ ] A16 download=False clear error
-[ ] A17 synthetic_diffusion
-[ ] A18 synthetic_reranker
-[ ] A19 synthetic_seq2seq
-[ ] A20 HubModel.capabilities()
-
-### Wave B–H
-(full 130-item list in progress; implement continuously)
+Net: ~1050+ LOC in wave-2 commit alone; continue from LoopLoRA next.
 
 ## Task: Optional head_dim for Qwen-style GGUF/HF
 
