@@ -3,7 +3,7 @@
 use mmn_core::{MmnError, Result, Tensor};
 use ndarray::{ArrayD, IxDyn};
 
-use crate::{concat_sequence_rows, gelu, slice_sequence_rows, MultiHeadAttention, TransformerBlock};
+use crate::{concat_sequence_rows, slice_sequence_rows, MultiHeadAttention, TransformerBlock};
 
 /// Per-layer cached K/V projections (after RoPE when enabled).
 #[derive(Clone, Default)]
@@ -403,7 +403,13 @@ pub fn block_forward_with_kv_cache(
     let x2 = x_in.add(&a)?;
     let h2 = block.ln2.forward(&x2)?;
     let f_lin = block.ffn.forward(&h2)?;
-    let f_post = gelu(&f_lin);
+    let f_post = if let Some(gate) = &block.ffn_gate {
+        let g = gate.forward(&h2)?;
+        let silu_g = crate::silu(&g);
+        Tensor::from_array((&*silu_g.data * &*f_lin.data).into_dyn(), true)
+    } else {
+        crate::gelu(&f_lin)
+    };
     let ffn_out = block.ffn2.forward(&f_post)?;
     x2.add(&ffn_out)
 }

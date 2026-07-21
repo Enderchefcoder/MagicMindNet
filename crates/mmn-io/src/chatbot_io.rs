@@ -5,7 +5,7 @@ use crate::checkpoint_util::{
 };
 use crate::tensor_merge::average_tensors;
 use mmn_core::MmnError;
-use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
+use mmn_models::{Chatbot, ChatbotArchExtras, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
 use std::fs;
 
 
@@ -30,14 +30,37 @@ pub fn export_safetensors<'a>(
     let tokenizer_sidecars = tokenizer_sidecars.into();
     let mut map = TensorMap::new();
     map.insert("embed".to_string(), tensor_to_entry(&model.embed.weight));
-    map.insert("lm_head".to_string(), tensor_to_entry(&model.lm_head.weight));
+    // When embeddings are tied, still write lm_head as a copy of embed for loaders.
+    if model.tie_embeddings {
+        map.insert("lm_head".to_string(), tensor_to_entry(&model.embed.weight));
+    } else {
+        map.insert("lm_head".to_string(), tensor_to_entry(&model.lm_head.weight));
+    }
     export_block_tensors(model, &mut map);
     let mut meta = serde_json::json!({
         "vocab_size": model.shape.vocab_size,
         "n_layer": model.shape.n_layer,
         "d_model": model.shape.d_model,
+        "ffn_dim": model.shape.ffn_dim,
+        "n_heads": model.shape.n_heads,
         "vision": model.vision,
     });
+    if model.n_loops != 1 {
+        meta["n_loops"] = serde_json::json!(model.n_loops);
+    }
+    if model.tie_embeddings {
+        meta["tie_embeddings"] = serde_json::json!(true);
+    }
+    if model.norm_kind != "layer" {
+        meta["norm"] = serde_json::json!(model.norm_kind);
+    }
+    if model.ffn_kind != "gelu" {
+        meta["ffn_kind"] = serde_json::json!(model.ffn_kind);
+    }
+    if let Some(le) = &model.loop_embed {
+        meta["loop_embed"] = serde_json::json!(true);
+        map.insert("loop_embed.weight".to_string(), tensor_to_entry(&le.weight));
+    }
     if model.vision {
         meta["vision_patch_dim"] = serde_json::json!(mmn_models::VISION_PATCH_DIM);
         meta["vision_rgb_dim"] = serde_json::json!(mmn_models::VISION_RGB_DIM);
@@ -159,13 +182,15 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         .or_else(|| meta.get("num_key_value_heads"))
         .and_then(|v| v.as_u64())
         .map(|v| v as usize);
-    let mut model = Chatbot::new_with_position_and_ffn(
+    let ffn_dim = meta["ffn_dim"].as_u64().map(|n| n as usize);
+    let extras = arch_extras_from_meta(meta);
+    let mut model = Chatbot::new_with_arch(
         vision,
         None,
         vocab_size,
         Some(n_layer),
         Some(d_model),
-        None,
+        ffn_dim,
         n_heads,
         n_kv_heads,
         init_seed,
@@ -173,11 +198,19 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         max_seq_len,
         use_rope,
         rope_theta,
+        extras,
     );
     model.embed.weight = tensor_from_entry(require_tensor_entry(tensors, "embed")?)?;
     model.lm_head.weight = tensor_from_entry(require_tensor_entry(tensors, "lm_head")?)?;
     expect_tensor_shape(&model.embed.weight, &[vocab_size, d_model], "embed")?;
     expect_tensor_shape(&model.lm_head.weight, &[vocab_size, d_model], "lm_head")?;
+    if model.tie_embeddings {
+        model.lm_head.weight = model.embed.weight.clone();
+    }
+    if let Some(le) = model.loop_embed.as_mut() {
+        le.weight = tensor_from_entry(require_tensor_entry(tensors, "loop_embed.weight")?)?;
+        expect_tensor_shape(&le.weight, &[model.n_loops, d_model], "loop_embed.weight")?;
+    }
     if use_learned_pos_embed {
         let pe = model.pos_embed.as_mut().ok_or_else(|| MmnError::Other {
             message: "use_learned_pos_embed meta set but model has no pos_embed".into(),
@@ -253,6 +286,25 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
     Ok(model)
 }
 
+fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
+    let n_loops = meta["n_loops"].as_u64().unwrap_or(1) as usize;
+    let tie_embeddings = meta["tie_embeddings"].as_bool().unwrap_or(false);
+    let norm = meta["norm"].as_str().unwrap_or("layer");
+    let ffn = meta
+        .get("ffn_kind")
+        .or_else(|| meta.get("ffn"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("gelu");
+    let loop_embed = meta["loop_embed"].as_bool().unwrap_or(false);
+    ChatbotArchExtras {
+        n_loops: n_loops.max(1),
+        tie_embeddings,
+        use_rms_norm: norm == "rms",
+        use_swiglu: ffn == "swiglu",
+        loop_embed: loop_embed && n_loops > 1,
+    }
+}
+
 pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
     if a.shape.vocab_size != b.shape.vocab_size
         || a.shape.d_model != b.shape.d_model
@@ -278,7 +330,27 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
             explanation: "merge() requires matching position embedding configuration.".into(),
         });
     }
-    let mut out = Chatbot::new_with_position_and_ffn(
+    if a.n_loops != b.n_loops
+        || a.tie_embeddings != b.tie_embeddings
+        || a.norm_kind != b.norm_kind
+        || a.ffn_kind != b.ffn_kind
+        || a.loop_embed.is_some() != b.loop_embed.is_some()
+    {
+        return Err(MmnError::ModelMismatch {
+            message: "Cannot merge models with different Glint-style arch settings".into(),
+            fix: "Use two models with the same n_loops, tie_embeddings, norm, ffn, and loop_embed."
+                .into(),
+            explanation: "merge() requires matching loop/norm/FFN/tie configuration.".into(),
+        });
+    }
+    let extras = ChatbotArchExtras {
+        n_loops: a.n_loops,
+        tie_embeddings: a.tie_embeddings,
+        use_rms_norm: a.norm_kind == "rms",
+        use_swiglu: a.ffn_kind == "swiglu",
+        loop_embed: a.loop_embed.is_some(),
+    };
+    let mut out = Chatbot::new_with_arch(
         a.vision || b.vision,
         None,
         a.shape.vocab_size,
@@ -292,6 +364,7 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         a.max_seq_len,
         a.use_rope,
         a.rope_theta,
+        extras,
     );
     out.embed.weight = average_tensors(&a.embed.weight, &b.embed.weight);
     out.lm_head.weight = average_tensors(&a.lm_head.weight, &b.lm_head.weight);
@@ -359,10 +432,22 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
             average_tensors(&ab.attn.out_proj.weight, &bb.attn.out_proj.weight);
         block.ffn.weight = average_tensors(&ab.ffn.weight, &bb.ffn.weight);
         block.ffn2.weight = average_tensors(&ab.ffn2.weight, &bb.ffn2.weight);
+        if let (Some(ag), Some(bg), Some(og)) =
+            (&ab.ffn_gate, &bb.ffn_gate, block.ffn_gate.as_mut())
+        {
+            og.weight = average_tensors(&ag.weight, &bg.weight);
+        }
         block.ln1.gamma = average_tensors(&ab.ln1.gamma, &bb.ln1.gamma);
         block.ln1.beta = average_tensors(&ab.ln1.beta, &bb.ln1.beta);
         block.ln2.gamma = average_tensors(&ab.ln2.gamma, &bb.ln2.gamma);
         block.ln2.beta = average_tensors(&ab.ln2.beta, &bb.ln2.beta);
+    }
+    if let (Some(aa), Some(bb), Some(oo)) = (&a.loop_embed, &b.loop_embed, out.loop_embed.as_mut())
+    {
+        oo.weight = average_tensors(&aa.weight, &bb.weight);
+    }
+    if out.tie_embeddings {
+        out.lm_head.weight = out.embed.weight.clone();
     }
     out.init_seed = a.init_seed.or(b.init_seed);
     Ok(out)
@@ -376,6 +461,9 @@ pub fn quantize_model(model: &mut Chatbot, mode: &str) -> Result<(), MmnError> {
             quantize_tensor(&mut model.lm_head.weight, scale);
             if let Some(pe) = &mut model.pos_embed {
                 quantize_tensor(&mut pe.weight, scale);
+            }
+            if let Some(le) = &mut model.loop_embed {
+                quantize_tensor(&mut le.weight, scale);
             }
             if let Some(proj) = &mut model.vision_patch_proj {
                 quantize_tensor(&mut proj.weight, scale);
@@ -396,6 +484,9 @@ pub fn quantize_model(model: &mut Chatbot, mode: &str) -> Result<(), MmnError> {
                 quantize_tensor(&mut block.attn.out_proj.weight, scale);
                 quantize_tensor(&mut block.ffn.weight, scale);
                 quantize_tensor(&mut block.ffn2.weight, scale);
+                if let Some(gate) = block.ffn_gate.as_mut() {
+                    quantize_tensor(&mut gate.weight, scale);
+                }
                 quantize_tensor(&mut block.ln1.gamma, scale);
                 quantize_tensor(&mut block.ln1.beta, scale);
                 quantize_tensor(&mut block.ln2.gamma, scale);
@@ -437,6 +528,21 @@ pub fn export_bin(model: &Chatbot, path: &str) -> Result<(), MmnError> {
     if model.use_rope {
         json["use_rope"] = serde_json::json!(true);
         json["rope_theta"] = serde_json::json!(model.rope_theta);
+    }
+    if model.n_loops != 1 {
+        json["n_loops"] = serde_json::json!(model.n_loops);
+    }
+    if model.tie_embeddings {
+        json["tie_embeddings"] = serde_json::json!(true);
+    }
+    if model.norm_kind != "layer" {
+        json["norm"] = serde_json::json!(model.norm_kind);
+    }
+    if model.ffn_kind != "gelu" {
+        json["ffn_kind"] = serde_json::json!(model.ffn_kind);
+    }
+    if model.loop_embed.is_some() {
+        json["loop_embed"] = serde_json::json!(true);
     }
     write_file_create_parents(path, json.to_string())?;
     Ok(())
@@ -484,7 +590,8 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
     let max_seq_len = v["max_seq_len"]
         .as_u64()
         .unwrap_or(DEFAULT_MAX_SEQ_LEN as u64) as usize;
-    Ok(Chatbot::new_with_position_and_ffn(
+    let extras = arch_extras_from_meta(&v);
+    Ok(Chatbot::new_with_arch(
         vision,
         None,
         vocab,
@@ -498,6 +605,7 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
         max_seq_len,
         use_rope,
         rope_theta,
+        extras,
     ))
 }
 
@@ -518,6 +626,46 @@ mod tests {
         let w0 = model.embed.weight.data[[0, 0]];
         let w1 = loaded.embed.weight.data[[0, 0]];
         assert!((w0 - w1).abs() < 1e-6);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn safetensors_roundtrip_glint_arch_meta() {
+        let model = Chatbot::new_with_arch(
+            false,
+            None,
+            32,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            Some(4),
+            Some(0),
+            false,
+            64,
+            true,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                n_loops: 4,
+                tie_embeddings: true,
+                use_rms_norm: true,
+                use_swiglu: true,
+                loop_embed: true,
+            },
+        );
+        let path = std::env::temp_dir().join(format!(
+            "chatbot_io_glint_{}",
+            std::process::id()
+        ));
+        export_safetensors(&model, path.to_str().unwrap(), None).unwrap();
+        let loaded = import_safetensors(path.to_str().unwrap(), 32).unwrap();
+        assert_eq!(loaded.n_loops, 4);
+        assert!(loaded.tie_embeddings);
+        assert_eq!(loaded.norm_kind, "rms");
+        assert_eq!(loaded.ffn_kind, "swiglu");
+        assert!(loaded.loop_embed.is_some());
+        assert!(loaded.blocks[0].ffn_gate.is_some());
+        assert!(loaded.blocks[0].ln1.use_rms);
         let _ = std::fs::remove_file(&path);
     }
 }

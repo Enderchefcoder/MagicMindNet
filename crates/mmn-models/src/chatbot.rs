@@ -109,99 +109,165 @@ pub struct Chatbot {
     pub rope_theta: f32,
     pub max_seq_len: usize,
     pub pos_embed: Option<Embedding>,
+    /// How many times to run the block stack in forward (shared weights).
+    pub n_loops: usize,
+    /// When true, `lm_head` shares `embed` weights for logits.
+    pub tie_embeddings: bool,
+    /// `"layer"` or `"rms"` (stored for IO / Python getters).
+    pub norm_kind: String,
+    /// `"gelu"` or `"swiglu"`.
+    pub ffn_kind: String,
+    /// Optional per-loop additive embedding `[n_loops, d_model]`.
+    pub loop_embed: Option<Embedding>,
+}
+
+/// Optional Glint-like architecture knobs (defaults preserve classic Chatbot).
+#[derive(Clone, Debug)]
+pub struct ChatbotArchExtras {
+    pub n_loops: usize,
+    pub tie_embeddings: bool,
+    pub use_rms_norm: bool,
+    pub use_swiglu: bool,
+    pub loop_embed: bool,
+}
+
+impl Default for ChatbotArchExtras {
+    fn default() -> Self {
+        Self {
+            n_loops: 1,
+            tie_embeddings: false,
+            use_rms_norm: false,
+            use_swiglu: false,
+            loop_embed: false,
+        }
+    }
 }
 
 struct BlockFfnCache {
     block: BlockForwardCache,
 }
 
+/// Add a `[1, d]` loop embedding row to every sequence position of `h` (`[seq, d]`).
+fn add_broadcast_loop_embed(h: &Tensor, row: &Tensor) -> Result<Tensor> {
+    let seq = h.shape[0];
+    let d = h.shape[1];
+    let mut out = h.data.as_ref().clone();
+    for i in 0..seq {
+        for j in 0..d {
+            out[[i, j]] += row.data[[0, j]];
+        }
+    }
+    Ok(Tensor::from_array(out, h.requires_grad || row.requires_grad))
+}
+
 fn apply_block_lm_grads(
     block: &mut TransformerBlock,
-    grads: &[ArrayD<f32>; 10],
+    grads: &[ArrayD<f32>],
     hybrid: &mut Option<&mut mmn_optim::HybridOptimizer>,
     adamw: &mut mmn_optim::AdamW,
     use_hybrid: bool,
     param_id: &mut usize,
 ) {
+    let mut i = 0usize;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.ffn2.weight,
-        &grads[0],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.ffn.weight,
-        &grads[1],
+        &grads[i],
     );
+    i += 1;
+    if let Some(gate) = block.ffn_gate.as_mut() {
+        optim_step_weight(
+            hybrid,
+            adamw,
+            use_hybrid,
+            param_id,
+            &mut gate.weight,
+            &grads[i],
+        );
+        i += 1;
+    }
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.attn.out_proj.weight,
-        &grads[2],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.attn.q_proj.weight,
-        &grads[3],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.attn.k_proj.weight,
-        &grads[4],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.attn.v_proj.weight,
-        &grads[5],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.ln2.gamma,
-        &grads[6],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.ln2.beta,
-        &grads[7],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.ln1.gamma,
-        &grads[8],
+        &grads[i],
     );
+    i += 1;
     optim_step_weight(
         hybrid,
         adamw,
         use_hybrid,
         param_id,
         &mut block.ln1.beta,
-        &grads[9],
+        &grads[i],
     );
 }
 
@@ -374,9 +440,45 @@ impl Chatbot {
         use_rope: bool,
         rope_theta: f32,
     ) -> Self {
+        Self::new_with_arch(
+            vision,
+            autoset_budget,
+            vocab_size,
+            n_layer,
+            d_model,
+            ffn_dim,
+            n_heads,
+            n_kv_heads,
+            seed,
+            use_learned_pos_embed,
+            max_seq_len,
+            use_rope,
+            rope_theta,
+            ChatbotArchExtras::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_arch(
+        vision: bool,
+        autoset_budget: Option<&str>,
+        vocab_size: usize,
+        n_layer: Option<usize>,
+        d_model: Option<usize>,
+        ffn_dim: Option<usize>,
+        n_heads: Option<usize>,
+        n_kv_heads: Option<usize>,
+        seed: Option<u64>,
+        use_learned_pos_embed: bool,
+        max_seq_len: usize,
+        use_rope: bool,
+        rope_theta: f32,
+        extras: ChatbotArchExtras,
+    ) -> Self {
         if use_learned_pos_embed && use_rope {
             panic!("Chatbot cannot use both use_learned_pos_embed and use_rope");
         }
+        let n_loops = extras.n_loops.max(1);
         let mut rng = mmn_nn::rng_from_seed(seed);
         let shape = if let Some(b) = autoset_budget {
             autoset(b, vocab_size)
@@ -397,17 +499,24 @@ impl Chatbot {
         let mut blocks = Vec::new();
         let rope = if use_rope { Some(rope_theta) } else { None };
         for _ in 0..shape.n_layer {
-            blocks.push(TransformerBlock::new_rng_rope_gqa(
+            blocks.push(TransformerBlock::new_rng_rope_gqa_arch(
                 shape.d_model,
                 shape.n_heads,
                 shape.n_kv_heads,
                 shape.ffn_dim,
                 rope,
+                extras.use_rms_norm,
+                extras.use_swiglu,
                 &mut rng,
             ));
         }
         let pos_embed = if use_learned_pos_embed {
             Some(Embedding::new_rng(max_seq_len, shape.d_model, &mut rng))
+        } else {
+            None
+        };
+        let loop_embed = if extras.loop_embed && n_loops > 1 {
+            Some(Embedding::new_rng(n_loops, shape.d_model, &mut rng))
         } else {
             None
         };
@@ -434,10 +543,15 @@ impl Chatbot {
         } else {
             None
         };
+        let embed = Embedding::new_rng(shape.vocab_size, shape.d_model, &mut rng);
+        let mut lm_head = Linear::new_rng(shape.d_model, shape.vocab_size, &mut rng);
+        if extras.tie_embeddings {
+            lm_head.weight = embed.weight.clone();
+        }
         Self {
-            embed: Embedding::new_rng(shape.vocab_size, shape.d_model, &mut rng),
+            embed,
             blocks,
-            lm_head: Linear::new_rng(shape.d_model, shape.vocab_size, &mut rng),
+            lm_head,
             shape,
             tokenizer: "ChatXML".into(),
             vision,
@@ -451,6 +565,19 @@ impl Chatbot {
             rope_theta,
             max_seq_len,
             pos_embed,
+            n_loops,
+            tie_embeddings: extras.tie_embeddings,
+            norm_kind: if extras.use_rms_norm {
+                "rms".into()
+            } else {
+                "layer".into()
+            },
+            ffn_kind: if extras.use_swiglu {
+                "swiglu".into()
+            } else {
+                "gelu".into()
+            },
+            loop_embed,
         }
     }
 
@@ -489,11 +616,25 @@ impl Chatbot {
                 self.shape.n_kv_heads,
             )
         };
+        let mut total = base;
+        if self.tie_embeddings {
+            // estimate_params counts embed*2; drop one vocab*d_model for tied head.
+            total = total.saturating_sub(self.shape.vocab_size * self.shape.d_model);
+        }
+        if self.ffn_kind == "swiglu" {
+            // Extra gate projection per layer: d_model * ffn_dim
+            total += self.shape.n_layer * self.shape.d_model * self.shape.ffn_dim;
+        }
         let pe = if self.use_learned_pos_embed {
             self.max_seq_len * self.shape.d_model
         } else {
             0
         };
+        let loop_pe = self
+            .loop_embed
+            .as_ref()
+            .map(|e| e.vocab_size * e.d_model)
+            .unwrap_or(0);
         let vision = self
             .vision_patch_proj
             .as_ref()
@@ -509,7 +650,7 @@ impl Chatbot {
                 .as_ref()
                 .map(|c| 4 * c.d_model * c.d_model)
                 .unwrap_or(0);
-        base + pe + vision
+        total + pe + loop_pe + vision
     }
 
     pub fn vision_patch_dim(&self) -> usize {
@@ -691,11 +832,17 @@ impl Chatbot {
     ) -> Result<Tensor> {
         let (mut h, n_patch, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
         h = self.apply_position_encoding(h)?;
-        for (i, block) in self.blocks.iter().enumerate() {
-            h = block.forward(&h)?;
-            if i == 0 && n_patch > 0 {
-                if let Some(cross) = &self.vision_cross_attn {
-                    h = vision_cross_attn_residual(cross, &h, n_patch)?.0;
+        for loop_i in 0..self.n_loops {
+            if let Some(le) = &self.loop_embed {
+                let row = le.forward(&[loop_i.min(le.vocab_size.saturating_sub(1))])?;
+                h = add_broadcast_loop_embed(&h, &row)?;
+            }
+            for (i, block) in self.blocks.iter().enumerate() {
+                h = block.forward(&h)?;
+                if i == 0 && n_patch > 0 {
+                    if let Some(cross) = &self.vision_cross_attn {
+                        h = vision_cross_attn_residual(cross, &h, n_patch)?.0;
+                    }
                 }
             }
         }
@@ -711,8 +858,26 @@ impl Chatbot {
         token_ids: &[usize],
         patches: Option<&[Vec<f32>]>,
     ) -> Result<Tensor> {
-        self.lm_head
-            .forward(&self.forward_hidden_with_patches(token_ids, patches)?)
+        let h = self.forward_hidden_with_patches(token_ids, patches)?;
+        self.logits_from_hidden(&h)
+    }
+
+    fn logits_from_hidden(&self, h: &Tensor) -> Result<Tensor> {
+        if self.tie_embeddings {
+            // logits = h @ embed.T  (embed.weight is [vocab, d_model])
+            let w = &self.embed.weight;
+            let v = w
+                .data
+                .view()
+                .into_dimensionality::<ndarray::Ix2>()
+                .map_err(|e| mmn_core::MmnError::Shape {
+                    message: e.to_string(),
+                })?;
+            let wt = Tensor::from_array(v.t().to_owned().into_dyn(), w.requires_grad);
+            h.matmul(&wt)
+        } else {
+            self.lm_head.forward(h)
+        }
     }
 
     /// Initialize an empty inference KV cache (one slot per transformer block).
@@ -809,7 +974,7 @@ impl Chatbot {
         h = self.apply_position_encoding_at_offset(h, start_pos)?;
         h = self.forward_hidden_with_kv_cache(h, cache, start_pos)?;
         cache.seq_len += token_ids.len();
-        self.lm_head.forward(&h)
+        self.logits_from_hidden(&h)
     }
 
     /// Prefill KV cache with optional vision prefix patches + prompt tokens.
@@ -837,7 +1002,7 @@ impl Chatbot {
 
         if self.blocks.is_empty() {
             cache.seq_len = seq;
-            return self.lm_head.forward(&h);
+            return self.logits_from_hidden(&h);
         }
 
         h = mmn_nn::block_forward_with_kv_cache(
@@ -866,7 +1031,7 @@ impl Chatbot {
             )?;
         }
         cache.seq_len = seq;
-        self.lm_head.forward(&h)
+        self.logits_from_hidden(&h)
     }
 
     /// Clear cache and run a full prefill pass (used when the context window is reset).
@@ -969,14 +1134,16 @@ impl Chatbot {
         let mut i = 0usize;
         let mut hybrid_opt = Some(hybrid);
         let grad = accum.averaged_grad(i);
-        optim_step_weight(
-            &mut hybrid_opt,
-            adamw,
-            use_hybrid,
-            param_id_base,
-            &mut self.lm_head.weight,
-            &grad,
-        );
+        if !self.tie_embeddings {
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.lm_head.weight,
+                &grad,
+            );
+        }
         i += 1;
 
         let n_blocks = self.blocks.len();
@@ -1000,18 +1167,8 @@ impl Chatbot {
                     i += 4;
                 }
             }
-            let g = [
-                accum.averaged_grad(i),
-                accum.averaged_grad(i + 1),
-                accum.averaged_grad(i + 2),
-                accum.averaged_grad(i + 3),
-                accum.averaged_grad(i + 4),
-                accum.averaged_grad(i + 5),
-                accum.averaged_grad(i + 6),
-                accum.averaged_grad(i + 7),
-                accum.averaged_grad(i + 8),
-                accum.averaged_grad(i + 9),
-            ];
+            let n = block.n_param_grads();
+            let g: Vec<ArrayD<f32>> = (0..n).map(|k| accum.averaged_grad(i + k)).collect();
             apply_block_lm_grads(
                 block,
                 &g,
@@ -1020,7 +1177,7 @@ impl Chatbot {
                 use_hybrid,
                 param_id_base,
             );
-            i += 10;
+            i += n;
         }
 
         let grad = accum.averaged_grad(i);
@@ -1032,6 +1189,9 @@ impl Chatbot {
             &mut self.embed.weight,
             &grad,
         );
+        if self.tie_embeddings {
+            self.lm_head.weight = self.embed.weight.clone();
+        }
         if self.use_learned_pos_embed {
             i += 1;
             let grad = accum.averaged_grad(i);
@@ -1041,6 +1201,18 @@ impl Chatbot {
                 use_hybrid,
                 param_id_base,
                 &mut self.pos_embed.as_mut().unwrap().weight,
+                &grad,
+            );
+        }
+        if self.loop_embed.is_some() {
+            i += 1;
+            let grad = accum.averaged_grad(i);
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.loop_embed.as_mut().unwrap().weight,
                 &grad,
             );
         }
@@ -1099,14 +1271,16 @@ impl Chatbot {
         let (loss_val, grads) = self.backward_lm_grads(token_ids, targets, patches)?;
         let mut i = 0usize;
         let mut hybrid_opt = Some(hybrid);
-        optim_step_weight(
-            &mut hybrid_opt,
-            adamw,
-            use_hybrid,
-            param_id_base,
-            &mut self.lm_head.weight,
-            &grads[i],
-        );
+        if !self.tie_embeddings {
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.lm_head.weight,
+                &grads[i],
+            );
+        }
         i += 1;
         let n_blocks = self.blocks.len();
         for (rev_pos, block) in self.blocks.iter_mut().rev().enumerate() {
@@ -1129,18 +1303,8 @@ impl Chatbot {
                     i += 4;
                 }
             }
-            let g = [
-                grads[i].clone(),
-                grads[i + 1].clone(),
-                grads[i + 2].clone(),
-                grads[i + 3].clone(),
-                grads[i + 4].clone(),
-                grads[i + 5].clone(),
-                grads[i + 6].clone(),
-                grads[i + 7].clone(),
-                grads[i + 8].clone(),
-                grads[i + 9].clone(),
-            ];
+            let n = block.n_param_grads();
+            let g = grads[i..i + n].to_vec();
             apply_block_lm_grads(
                 block,
                 &g,
@@ -1149,7 +1313,7 @@ impl Chatbot {
                 use_hybrid,
                 param_id_base,
             );
-            i += 10;
+            i += n;
         }
         optim_step_weight(
             &mut hybrid_opt,
@@ -1159,6 +1323,9 @@ impl Chatbot {
             &mut self.embed.weight,
             &grads[i],
         );
+        if self.tie_embeddings {
+            self.lm_head.weight = self.embed.weight.clone();
+        }
         if self.use_learned_pos_embed {
             i += 1;
             optim_step_weight(
@@ -1167,6 +1334,17 @@ impl Chatbot {
                 use_hybrid,
                 param_id_base,
                 &mut self.pos_embed.as_mut().unwrap().weight,
+                &grads[i],
+            );
+        }
+        if self.loop_embed.is_some() {
+            i += 1;
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.loop_embed.as_mut().unwrap().weight,
                 &grads[i],
             );
         }
@@ -1205,60 +1383,163 @@ impl Chatbot {
             self.embed_with_optional_patches(token_ids, patches)?;
         h = self.apply_position_encoding(h)?;
         let seq = token_ids.len();
-        let mut caches = Vec::with_capacity(self.blocks.len());
-        let mut cross_cache: Option<CrossAttentionForwardCache> = None;
-        for (i, block) in self.blocks.iter().enumerate() {
-            let (out, cache) = block.forward_with_cache(&h)?;
-            caches.push(BlockFfnCache { block: cache });
-            h = out;
-            if i == 0 && n_patch > 0 {
-                if let Some(cross) = &self.vision_cross_attn {
-                    let (h_new, xc) = vision_cross_attn_residual(cross, &h, n_patch)?;
-                    h = h_new;
-                    cross_cache = Some(xc);
-                }
-            }
+        let n_blocks = self.blocks.len();
+
+        struct LoopCache {
+            loop_i: usize,
+            /// Hidden before adding loop_embed (for loop_embed backward).
+            h_before_loop_embed: Option<Tensor>,
+            block_caches: Vec<BlockFfnCache>,
+            cross_cache: Option<CrossAttentionForwardCache>,
         }
 
-        let logits = self.lm_head.forward(&h)?;
+        let mut loop_caches: Vec<LoopCache> = Vec::with_capacity(self.n_loops);
+        for loop_i in 0..self.n_loops {
+            let h_before_loop_embed = if self.loop_embed.is_some() {
+                Some(h.clone())
+            } else {
+                None
+            };
+            if let Some(le) = &self.loop_embed {
+                let row = le.forward(&[loop_i.min(le.vocab_size.saturating_sub(1))])?;
+                h = add_broadcast_loop_embed(&h, &row)?;
+            }
+            let mut block_caches = Vec::with_capacity(n_blocks);
+            let mut cross_cache: Option<CrossAttentionForwardCache> = None;
+            for (i, block) in self.blocks.iter().enumerate() {
+                let (out, cache) = block.forward_with_cache(&h)?;
+                block_caches.push(BlockFfnCache { block: cache });
+                h = out;
+                if i == 0 && n_patch > 0 {
+                    if let Some(cross) = &self.vision_cross_attn {
+                        let (h_new, xc) = vision_cross_attn_residual(cross, &h, n_patch)?;
+                        h = h_new;
+                        cross_cache = Some(xc);
+                    }
+                }
+            }
+            loop_caches.push(LoopCache {
+                loop_i,
+                h_before_loop_embed,
+                block_caches,
+                cross_cache,
+            });
+        }
+
+        let logits = self.logits_from_hidden(&h)?;
         let loss = logits.cross_entropy_loss(targets)?;
         let loss_val = loss.data.as_slice().unwrap()[0];
 
         let grad_logits = cross_entropy_grad(&logits, targets)?;
-        let (grad_lm_w, mut grad_h) = linear_backward(
-            h.data.as_ref(),
-            self.lm_head.weight.data.as_ref(),
-            &grad_logits,
-        )?;
-        let mut grads = vec![grad_lm_w];
+        let head_w = if self.tie_embeddings {
+            self.embed.weight.data.as_ref()
+        } else {
+            self.lm_head.weight.data.as_ref()
+        };
+        let (grad_head_w, mut grad_h) =
+            linear_backward(h.data.as_ref(), head_w, &grad_logits)?;
+        // Always keep an lm_head slot (zeros when tied — optim skips it).
+        let mut grads = if self.tie_embeddings {
+            vec![ArrayD::zeros(self.lm_head.weight.data.raw_dim())]
+        } else {
+            vec![grad_head_w.clone()]
+        };
 
-        let n_blocks = self.blocks.len();
-        for bi in (0..n_blocks).rev() {
-            let block = &self.blocks[bi];
-            let cache = &caches[bi];
-            let mut cross_grads: Option<[ArrayD<f32>; 4]> = None;
-            if bi == 0 {
-                if let (Some(cross), Some(xc)) =
-                    (self.vision_cross_attn.as_ref(), cross_cache.as_ref())
-                {
-                    if n_patch > 0 {
-                        let (grad_h_new, cg) = vision_cross_attn_residual_backward(
-                            cross,
-                            xc,
-                            &grad_h,
-                            n_patch,
-                        )?;
-                        grad_h = grad_h_new;
-                        cross_grads = Some(cg);
+        // Accumulate shared-weight grads across loops.
+        let mut accum_block: Vec<Option<Vec<ArrayD<f32>>>> = vec![None; n_blocks];
+        let mut accum_cross: Option<[ArrayD<f32>; 4]> = None;
+        let mut accum_loop_embed: Option<ArrayD<f32>> = None;
+
+        for lc in loop_caches.into_iter().rev() {
+            for bi in (0..n_blocks).rev() {
+                let block = &self.blocks[bi];
+                let cache = &lc.block_caches[bi];
+                let mut cross_grads: Option<[ArrayD<f32>; 4]> = None;
+                if bi == 0 {
+                    if let (Some(cross), Some(xc)) =
+                        (self.vision_cross_attn.as_ref(), lc.cross_cache.as_ref())
+                    {
+                        if n_patch > 0 {
+                            let (grad_h_new, cg) = vision_cross_attn_residual_backward(
+                                cross,
+                                xc,
+                                &grad_h,
+                                n_patch,
+                            )?;
+                            grad_h = grad_h_new;
+                            cross_grads = Some(cg);
+                        }
                     }
                 }
+                let (grad_h_block, block_grads) =
+                    block.backward_attn_ffn(&cache.block, &grad_h)?;
+                if bi == 0 && self.vision_cross_attn.is_some() {
+                    let cg = cross_grads.unwrap_or_else(|| {
+                        let z = ArrayD::zeros(
+                            self.vision_cross_attn
+                                .as_ref()
+                                .unwrap()
+                                .out_proj
+                                .weight
+                                .data
+                                .shape(),
+                        );
+                        [z.clone(), z.clone(), z.clone(), z]
+                    });
+                    if let Some(ref mut acc) = accum_cross {
+                        for (a, b) in acc.iter_mut().zip(cg.iter()) {
+                            *a = &*a + b;
+                        }
+                    } else {
+                        accum_cross = Some(cg);
+                    }
+                }
+                if let Some(ref mut acc) = accum_block[bi] {
+                    for (a, b) in acc.iter_mut().zip(block_grads.iter()) {
+                        *a = &*a + b;
+                    }
+                } else {
+                    accum_block[bi] = Some(block_grads);
+                }
+                grad_h = grad_h_block;
             }
-            let (grad_h_block, block_grads) =
-                block.backward_attn_ffn(&cache.block, &grad_h)?;
+            if let Some(le) = &self.loop_embed {
+                let _ = lc.h_before_loop_embed;
+                // grad w.r.t. loop embed row = sum over sequence positions
+                let rows = grad_h.shape()[0];
+                let d = grad_h.shape()[1];
+                let mut row_grad = ndarray::Array2::<f32>::zeros((1, d));
+                for r in 0..rows {
+                    for c in 0..d {
+                        row_grad[[0, c]] += grad_h[[r, c]];
+                    }
+                }
+                let g = embedding_backward(
+                    &[lc.loop_i.min(le.vocab_size.saturating_sub(1))],
+                    &row_grad.into_dyn(),
+                    le.vocab_size,
+                    le.d_model,
+                );
+                if let Some(ref mut acc) = accum_loop_embed {
+                    *acc = &*acc + &g;
+                } else {
+                    accum_loop_embed = Some(g);
+                }
+            }
+        }
+
+        // Emit grads in reverse-block order (matching apply_*).
+        for bi in (0..n_blocks).rev() {
             if bi == 0 && self.vision_cross_attn.is_some() {
-                let cg = cross_grads.unwrap_or_else(|| {
+                let cg = accum_cross.take().unwrap_or_else(|| {
                     let z = ArrayD::zeros(
-                        self.vision_cross_attn.as_ref().unwrap().out_proj.weight.data.shape(),
+                        self.vision_cross_attn
+                            .as_ref()
+                            .unwrap()
+                            .out_proj
+                            .weight
+                            .data
+                            .shape(),
                     );
                     [z.clone(), z.clone(), z.clone(), z]
                 });
@@ -1266,10 +1547,11 @@ impl Chatbot {
                     grads.push(g);
                 }
             }
-            for g in block_grads {
-                grads.push(g);
+            if let Some(bg) = accum_block[bi].take() {
+                for g in bg {
+                    grads.push(g);
+                }
             }
-            grad_h = grad_h_block;
         }
 
         let grad_h2 = grad_h
@@ -1291,12 +1573,15 @@ impl Chatbot {
             grad_h.clone()
         };
 
-        let grad_embed_w = embedding_backward(
+        let mut grad_embed_w = embedding_backward(
             token_ids,
             &grad_suffix,
             self.shape.vocab_size,
             self.shape.d_model,
         );
+        if self.tie_embeddings {
+            grad_embed_w = &grad_embed_w + &grad_head_w;
+        }
         grads.push(grad_embed_w);
         if self.use_learned_pos_embed {
             let pos_ids: Vec<usize> = (0..n_patch + seq).collect();
@@ -1307,6 +1592,11 @@ impl Chatbot {
                 self.shape.d_model,
             );
             grads.push(grad_pos);
+        }
+        if let Some(le) = &self.loop_embed {
+            grads.push(accum_loop_embed.unwrap_or_else(|| {
+                ArrayD::zeros(le.weight.data.raw_dim())
+            }));
         }
         if let Some(proj) = &self.vision_patch_proj {
             let (grad_proj, grad_conv) = if n_patch > 0 {
@@ -1561,6 +1851,124 @@ impl Classifier {
 #[cfg(test)]
 mod chatbot_tests {
     use super::*;
+
+    #[test]
+    fn n_loops_changes_activation_vs_single_pass() {
+        let once = Chatbot::new_with_arch(
+            false,
+            None,
+            32,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            Some(4),
+            Some(0),
+            false,
+            64,
+            true,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                n_loops: 1,
+                ..Default::default()
+            },
+        );
+        let looped = Chatbot::new_with_arch(
+            false,
+            None,
+            32,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            Some(4),
+            Some(0),
+            false,
+            64,
+            true,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                n_loops: 3,
+                ..Default::default()
+            },
+        );
+        // Same init seed and shapes — copy weights so only loop count differs.
+        let mut looped = looped;
+        looped.embed.weight = once.embed.weight.clone();
+        looped.lm_head.weight = once.lm_head.weight.clone();
+        for (a, b) in looped.blocks.iter_mut().zip(once.blocks.iter()) {
+            a.attn.q_proj.weight = b.attn.q_proj.weight.clone();
+            a.attn.k_proj.weight = b.attn.k_proj.weight.clone();
+            a.attn.v_proj.weight = b.attn.v_proj.weight.clone();
+            a.attn.out_proj.weight = b.attn.out_proj.weight.clone();
+            a.ffn.weight = b.ffn.weight.clone();
+            a.ffn2.weight = b.ffn2.weight.clone();
+            a.ln1.gamma = b.ln1.gamma.clone();
+            a.ln1.beta = b.ln1.beta.clone();
+            a.ln2.gamma = b.ln2.gamma.clone();
+            a.ln2.beta = b.ln2.beta.clone();
+        }
+        let tokens = [1usize, 2, 3, 4];
+        let h1 = once.forward_hidden(&tokens).unwrap();
+        let h3 = looped.forward_hidden(&tokens).unwrap();
+        let diff: f32 = h1
+            .data
+            .iter()
+            .zip(h3.data.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(diff > 1e-3, "n_loops=3 should change hidden vs n_loops=1, diff={diff}");
+        assert_eq!(looped.n_loops, 3);
+    }
+
+    #[test]
+    fn tie_embeddings_counts_embed_once() {
+        let untied = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            Some(4),
+            Some(1),
+            false,
+            32,
+            false,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras::default(),
+        );
+        let tied = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            Some(4),
+            Some(1),
+            false,
+            32,
+            false,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                tie_embeddings: true,
+                ..Default::default()
+            },
+        );
+        assert!(tied.tie_embeddings);
+        assert_eq!(
+            tied.parameters(),
+            untied.parameters() - 64 * 16,
+            "tied should omit duplicate lm_head params"
+        );
+        let tokens = [0usize, 1, 2];
+        let logits = tied.forward_logits(&tokens).unwrap();
+        assert!(logits.data.iter().all(|v| v.is_finite()));
+        assert_eq!(logits.shape[1], 64);
+    }
 
     #[test]
     fn train_step_updates_embed_and_ffn2() {

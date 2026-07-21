@@ -2,6 +2,12 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (Glint-style Chatbot architecture knobs)
+- `Chatbot(n_loops=…, norm="rms"|"layer", ffn="swiglu"|"gelu", tie_embeddings=…, loop_embed=…, ffn_dim=…)` — recreate a tiny Glint-like LM in a few lines; defaults preserve classic Chatbot behavior
+- Native **RMSNorm**, **SiLU/SwiGLU** FFN (`blocks.N.ffn_gate` + `ffn_kind` meta), **weight tying**, **loop embeddings**, and **shared-weight block looping** with accumulated train grads
+- Safetensors/bin meta roundtrip for the new fields; KV-cache generation uses full forward when `n_loops>1`
+- Tests: Rust unit (`silu`/`rms`/`swiglu`/`n_loops`/`tie`) + `tests/test_glint_arch_py.py`
+
 ### Added (interop wave 21: from-scratch Zstandard — the last compression gap)
 - **zstd decoder (RFC 8878)**: frame headers, raw/RLE/compressed blocks,
   Huffman-coded literals (direct + FSE-compressed weight tables, 1- and

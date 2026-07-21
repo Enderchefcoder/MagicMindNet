@@ -365,10 +365,37 @@ pub fn gelu_backward(x_lin: &Tensor, grad_out: &ArrayD<f32>) -> ArrayD<f32> {
     grad_in
 }
 
+fn silu_scalar(x: f32) -> f32 {
+    x / (1.0 + (-x).exp())
+}
+
+fn silu_derivative_scalar(x: f32) -> f32 {
+    let s = 1.0 / (1.0 + (-x).exp());
+    s * (1.0 + x * (1.0 - s))
+}
+
+/// SiLU / swish: `x * sigmoid(x)`.
+pub fn silu(t: &Tensor) -> Tensor {
+    let out = t.data.mapv(silu_scalar);
+    Tensor::from_array(out, t.requires_grad)
+}
+
+/// Chain rule through SiLU for `out = silu(x_lin)`.
+pub fn silu_backward(x_lin: &Tensor, grad_out: &ArrayD<f32>) -> ArrayD<f32> {
+    let mut grad_in = grad_out.clone();
+    grad_in
+        .iter_mut()
+        .zip(x_lin.data.iter())
+        .for_each(|(g, &x)| *g *= silu_derivative_scalar(x));
+    grad_in
+}
+
 pub struct LayerNorm {
     pub gamma: Tensor,
     pub beta: Tensor,
     pub normalized_shape: usize,
+    /// When true, use RMSNorm (no mean subtract; scale by gamma only).
+    pub use_rms: bool,
 }
 
 impl LayerNorm {
@@ -377,7 +404,14 @@ impl LayerNorm {
             gamma: Tensor::ones(&[size], true),
             beta: Tensor::zeros(&[size], true),
             normalized_shape: size,
+            use_rms: false,
         }
+    }
+
+    pub fn new_rms(size: usize) -> Self {
+        let mut ln = Self::new(size);
+        ln.use_rms = true;
+        ln
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -388,13 +422,22 @@ impl LayerNorm {
         let dim = out.shape()[1];
         for i in 0..out.shape()[0] {
             let mut row = out.slice_mut(ndarray::s![i, ..]);
-            let mean: f32 = row.sum() / dim as f32;
-            row.mapv_inplace(|v| v - mean);
-            let var: f32 = row.iter().map(|&v| v * v).sum::<f32>() / dim as f32;
-            let std = (var + 1e-5f32).sqrt();
-            row.mapv_inplace(|v| v / std);
-            for j in 0..dim {
-                row[j] = row[j] * self.gamma.data[j] + self.beta.data[j];
+            if self.use_rms {
+                let ms: f32 = row.iter().map(|&v| v * v).sum::<f32>() / dim as f32;
+                let rms = (ms + 1e-5f32).sqrt();
+                row.mapv_inplace(|v| v / rms);
+                for j in 0..dim {
+                    row[j] *= self.gamma.data[j];
+                }
+            } else {
+                let mean: f32 = row.sum() / dim as f32;
+                row.mapv_inplace(|v| v - mean);
+                let var: f32 = row.iter().map(|&v| v * v).sum::<f32>() / dim as f32;
+                let std = (var + 1e-5f32).sqrt();
+                row.mapv_inplace(|v| v / std);
+                for j in 0..dim {
+                    row[j] = row[j] * self.gamma.data[j] + self.beta.data[j];
+                }
             }
         }
         Ok(Tensor::from_array(out, x.requires_grad))
@@ -445,6 +488,39 @@ fn layernorm_row_backward(
     (grad_x, grad_gamma, grad_beta)
 }
 
+fn rmsnorm_row_backward(
+    x_row: &[f32],
+    gamma: &[f32],
+    grad_out_row: &[f32],
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let dim = x_row.len();
+    let ms: f32 = x_row.iter().map(|&v| v * v).sum::<f32>() / dim as f32;
+    let rms = (ms + LN_EPS).sqrt();
+    let x_norm: Vec<f32> = x_row.iter().map(|&v| v / rms).collect();
+
+    let mut grad_gamma = vec![0.0f32; dim];
+    let mut grad_x_norm = vec![0.0f32; dim];
+    for j in 0..dim {
+        grad_gamma[j] = grad_out_row[j] * x_norm[j];
+        grad_x_norm[j] = grad_out_row[j] * gamma[j];
+    }
+
+    // d(x/rms)/dx with rms = sqrt(mean(x^2)+eps)
+    let mut grad_x = vec![0.0f32; dim];
+    let inv_rms = 1.0 / rms;
+    let sum_gx_x: f32 = grad_x_norm
+        .iter()
+        .zip(x_row.iter())
+        .map(|(&g, &x)| g * x)
+        .sum();
+    let coeff = sum_gx_x * inv_rms * inv_rms / (dim as f32 * rms);
+    for j in 0..dim {
+        grad_x[j] = grad_x_norm[j] * inv_rms - x_row[j] * coeff;
+    }
+    let grad_beta = vec![0.0f32; dim];
+    (grad_x, grad_gamma, grad_beta)
+}
+
 /// Backward through `LayerNorm::forward` for `[batch, dim]` input.
 pub fn layernorm_backward(
     ln: &LayerNorm,
@@ -468,7 +544,11 @@ pub fn layernorm_backward(
     for i in 0..rows {
         let x_row: Vec<f32> = (0..dim).map(|j| x.data[[i, j]]).collect();
         let grad_row: Vec<f32> = (0..dim).map(|j| grad_out[[i, j]]).collect();
-        let (gx, gg, gb) = layernorm_row_backward(&x_row, gamma, &grad_row);
+        let (gx, gg, gb) = if ln.use_rms {
+            rmsnorm_row_backward(&x_row, gamma, &grad_row)
+        } else {
+            layernorm_row_backward(&x_row, gamma, &grad_row)
+        };
         for j in 0..dim {
             grad_x[[i, j]] = gx[j];
             grad_gamma[[j]] += gg[j];
@@ -476,6 +556,99 @@ pub fn layernorm_backward(
         }
     }
     Ok((grad_x, grad_gamma, grad_beta))
+}
+
+#[cfg(test)]
+mod glint_arch_nn_tests {
+    use super::*;
+    use mmn_core::Tensor;
+    use ndarray::arr2;
+
+    #[test]
+    fn silu_matches_x_times_sigmoid() {
+        let x = Tensor::from_array(arr2(&[[0.0, 1.0, -2.0, 0.5]]).into_dyn(), false);
+        let y = silu(&x);
+        for j in 0..4 {
+            let xv = x.data[[0, j]];
+            let expected = xv / (1.0 + (-xv).exp());
+            assert!(
+                (y.data[[0, j]] - expected).abs() < 1e-5,
+                "j={j} got={} expected={}",
+                y.data[[0, j]],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn silu_backward_matches_finite_diff() {
+        let x = Tensor::from_array(arr2(&[[0.5, -1.0, 2.0, 0.0]]).into_dyn(), false);
+        let eps = 1e-3f32;
+        let grad_out = arr2(&[[1.0, 1.0, 1.0, 1.0]]).into_dyn();
+        let analytic = silu_backward(&x, &grad_out);
+        for j in 0..4 {
+            let x0 = x.data[[0, j]];
+            let y_plus = silu_scalar(x0 + eps);
+            let y_minus = silu_scalar(x0 - eps);
+            let numeric = (y_plus - y_minus) / (2.0 * eps);
+            assert!(
+                (analytic[[0, j]] - numeric).abs() < 0.05,
+                "j={j} analytic={} numeric={}",
+                analytic[[0, j]],
+                numeric
+            );
+        }
+    }
+
+    #[test]
+    fn rms_norm_forward_no_mean_subtract_scales_by_gamma() {
+        let mut ln = LayerNorm::new(4);
+        ln.use_rms = true;
+        ln.gamma = Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[4]), vec![2.0f32; 4]).unwrap(),
+            true,
+        );
+        let x = Tensor::from_array(arr2(&[[1.0, -1.0, 1.0, -1.0]]).into_dyn(), false);
+        let y = ln.forward(&x).unwrap();
+        // mean of squares = 1, rms = 1, so out = 2 * x
+        for j in 0..4 {
+            let expected = 2.0 * x.data[[0, j]];
+            assert!(
+                (y.data[[0, j]] - expected).abs() < 1e-4,
+                "j={j} got={} expected={}",
+                y.data[[0, j]],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn swiglu_block_forward_finite() {
+        let mut rng = rng_from_seed(Some(7));
+        let block = TransformerBlock::new_rng_rope_gqa_arch(
+            8,
+            2,
+            2,
+            16,
+            None,
+            true,  // use_rms
+            true,  // use_swiglu
+            &mut rng,
+        );
+        assert!(block.ffn_gate.is_some());
+        assert!(block.ln1.use_rms);
+        let x = Tensor::from_array(
+            arr2(&[
+                [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8],
+                [0.2, 0.1, -0.3, 0.4, 0.0, 0.5, -0.2, 0.3],
+            ])
+            .into_dyn(),
+            false,
+        );
+        let y = block.forward(&x).unwrap();
+        assert_eq!(y.shape, x.shape);
+        assert!(y.data.iter().all(|v| v.is_finite()));
+    }
 }
 
 #[cfg(test)]
@@ -1293,6 +1466,8 @@ pub struct TransformerBlock {
     pub ln2: LayerNorm,
     pub ffn: Linear,
     pub ffn2: Linear,
+    /// Optional SwiGLU gate projection (`ffn="swiglu"`).
+    pub ffn_gate: Option<Linear>,
 }
 
 /// Activations cached during `TransformerBlock::forward_with_cache` for backward.
@@ -1305,8 +1480,12 @@ pub struct BlockForwardCache {
     pub v: Tensor,
     pub merged: Tensor,
     pub h2: Tensor,
+    /// Up / GELU-pre activation (`ffn` output).
     pub f_lin: Tensor,
+    /// Post-activation hidden fed to `ffn2` (GELU or SwiGLU product).
     pub f_post: Tensor,
+    /// Gate pre-activation when SwiGLU is enabled.
+    pub f_gate: Option<Tensor>,
     pub sdp: SdpAttentionCache,
     pub q_lin: Option<Tensor>,
     pub k_lin: Option<Tensor>,
@@ -1349,6 +1528,38 @@ impl TransformerBlock {
         rope_theta: Option<f32>,
         rng: &mut impl Rng,
     ) -> Self {
+        Self::new_rng_rope_gqa_arch(
+            d_model,
+            n_heads,
+            n_kv_heads,
+            ffn_dim,
+            rope_theta,
+            false,
+            false,
+            rng,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_rng_rope_gqa_arch(
+        d_model: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        ffn_dim: usize,
+        rope_theta: Option<f32>,
+        use_rms: bool,
+        use_swiglu: bool,
+        rng: &mut impl Rng,
+    ) -> Self {
+        let mut ln1 = LayerNorm::new(d_model);
+        let mut ln2 = LayerNorm::new(d_model);
+        ln1.use_rms = use_rms;
+        ln2.use_rms = use_rms;
+        let ffn_gate = if use_swiglu {
+            Some(Linear::new_rng(d_model, ffn_dim, rng))
+        } else {
+            None
+        };
         Self {
             attn: MultiHeadAttention::new_rng_causal_rope_gqa(
                 d_model,
@@ -1358,10 +1569,11 @@ impl TransformerBlock {
                 rope_theta,
                 rng,
             ),
-            ln1: LayerNorm::new(d_model),
-            ln2: LayerNorm::new(d_model),
+            ln1,
+            ln2,
             ffn: Linear::new_rng(d_model, ffn_dim, rng),
             ffn2: Linear::new_rng(ffn_dim, d_model, rng),
+            ffn_gate,
         }
     }
 
@@ -1377,7 +1589,17 @@ impl TransformerBlock {
         let x2 = x.add(&a)?;
         let h2 = self.ln2.forward(&x2)?;
         let f_lin = self.ffn.forward(&h2)?;
-        let f_post = gelu(&f_lin);
+        let (f_post, f_gate) = if let Some(gate) = &self.ffn_gate {
+            let g = gate.forward(&h2)?;
+            let silu_g = silu(&g);
+            let product = Tensor::from_array(
+                (&*silu_g.data * &*f_lin.data).into_dyn(),
+                true,
+            );
+            (product, Some(g))
+        } else {
+            (gelu(&f_lin), None)
+        };
         let ffn_out = self.ffn2.forward(&f_post)?;
         let out = x2.add(&ffn_out)?;
         Ok((
@@ -1393,6 +1615,7 @@ impl TransformerBlock {
                 h2,
                 f_lin,
                 f_post,
+                f_gate,
                 sdp,
                 q_lin,
                 k_lin,
@@ -1400,13 +1623,22 @@ impl TransformerBlock {
         ))
     }
 
+    /// Number of weight grads emitted by [`Self::backward_attn_ffn`] (10 or 11 with gate).
+    pub fn n_param_grads(&self) -> usize {
+        if self.ffn_gate.is_some() {
+            11
+        } else {
+            10
+        }
+    }
+
     /// Backward through FFN + attention + LayerNorm.
-    /// Returns `(grad_input, [ffn2_w, ffn_w, out_w, q_w, k_w, v_w, ln2_γ, ln2_β, ln1_γ, ln1_β])`.
+    /// Grad order: `[ffn2_w, ffn_w, (ffn_gate_w)?, out_w, q_w, k_w, v_w, ln2_γ, ln2_β, ln1_γ, ln1_β]`.
     pub fn backward_attn_ffn(
         &self,
         cache: &BlockForwardCache,
         grad_out: &ArrayD<f32>,
-    ) -> Result<(ArrayD<f32>, [ArrayD<f32>; 10])> {
+    ) -> Result<(ArrayD<f32>, Vec<ArrayD<f32>>)> {
         use mmn_core::linear_backward;
 
         let (grad_ffn2_w, grad_f) = linear_backward(
@@ -1415,12 +1647,44 @@ impl TransformerBlock {
             grad_out,
         )?;
         let mut grad_x2 = grad_out.to_owned();
-        let grad_f_lin = gelu_backward(&cache.f_lin, &grad_f);
-        let (grad_ffn_w, grad_h2) = linear_backward(
-            cache.h2.data.as_ref(),
-            self.ffn.weight.data.as_ref(),
-            &grad_f_lin,
-        )?;
+
+        let (grad_ffn_w, grad_ffn_gate_w, grad_h2) =
+            if let (Some(gate), Some(f_gate)) = (&self.ffn_gate, &cache.f_gate) {
+                // f_post = silu(gate) * up
+                let silu_g = silu(f_gate);
+                let mut grad_up = grad_f.clone();
+                grad_up
+                    .iter_mut()
+                    .zip(silu_g.data.iter())
+                    .for_each(|(g, &s)| *g *= s);
+                let mut grad_silu = grad_f.clone();
+                grad_silu
+                    .iter_mut()
+                    .zip(cache.f_lin.data.iter())
+                    .for_each(|(g, &u)| *g *= u);
+                let grad_gate = silu_backward(f_gate, &grad_silu);
+                let (grad_ffn_w, grad_h2_up) = linear_backward(
+                    cache.h2.data.as_ref(),
+                    self.ffn.weight.data.as_ref(),
+                    &grad_up,
+                )?;
+                let (grad_gate_w, grad_h2_gate) = linear_backward(
+                    cache.h2.data.as_ref(),
+                    gate.weight.data.as_ref(),
+                    &grad_gate,
+                )?;
+                let grad_h2 = &grad_h2_up + &grad_h2_gate;
+                (grad_ffn_w, Some(grad_gate_w), grad_h2)
+            } else {
+                let grad_f_lin = gelu_backward(&cache.f_lin, &grad_f);
+                let (grad_ffn_w, grad_h2) = linear_backward(
+                    cache.h2.data.as_ref(),
+                    self.ffn.weight.data.as_ref(),
+                    &grad_f_lin,
+                )?;
+                (grad_ffn_w, None, grad_h2)
+            };
+
         let (grad_x2_ln, grad_ln2_gamma, grad_ln2_beta) =
             layernorm_backward(&self.ln2, &cache.x2, &grad_h2)?;
         grad_x2 = &grad_x2 + &grad_x2_ln;
@@ -1474,21 +1738,21 @@ impl TransformerBlock {
         let mut grad_x = grad_x2;
         grad_x = &grad_x + &grad_x_ln1;
 
-        Ok((
-            grad_x,
-            [
-                grad_ffn2_w,
-                grad_ffn_w,
-                grad_out_w,
-                grad_q_w,
-                grad_k_w,
-                grad_v_w,
-                grad_ln2_gamma,
-                grad_ln2_beta,
-                grad_ln1_gamma,
-                grad_ln1_beta,
-            ],
-        ))
+        let mut grads = vec![grad_ffn2_w, grad_ffn_w];
+        if let Some(gw) = grad_ffn_gate_w {
+            grads.push(gw);
+        }
+        grads.extend([
+            grad_out_w,
+            grad_q_w,
+            grad_k_w,
+            grad_v_w,
+            grad_ln2_gamma,
+            grad_ln2_beta,
+            grad_ln1_gamma,
+            grad_ln1_beta,
+        ]);
+        Ok((grad_x, grads))
     }
 
     /// Returns `(block_output, ln2_output, ffn_hidden_pre_gelu, ffn_hidden_post_gelu)`.

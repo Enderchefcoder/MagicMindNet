@@ -41,6 +41,14 @@
 
 # Scratchpad
 
+## Task: Glint-2-like Chatbot architecture
+[X] n_loops shared-weight block looping + train grad accumulate
+[X] tie_embeddings (logits via embed.T; param count once)
+[X] norm=rms RMSNorm + gamma train
+[X] ffn=swiglu + silu/silu_backward + ffn_gate IO
+[X] loop_embed + ffn_dim Python ctor; KV full-forward when n_loops>1
+[X] Rust + pytest + docs/CHANGELOG/stubs; maturin develop
+
 ## Task: MagicMindNet full plan implementation
 
 [X] M0 Bootstrap — workspace, pyproject, CI, agents, docs
@@ -321,3 +329,18 @@ Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in fu
 [X] Docs: getting_started.md, README beginner quickstart, API.md, CHANGELOG, coverage matrices
 [X] examples/hello_ai.py + smoke + pytest wiring
 [X] New tests: ~80 pytest (7 files) + 9 Rust (detect + train regressions)
+## Task: Advanced model support (load/inference + Glint-like)
+
+Goal: better ai.load detection, looped layers, CoT, tiny autosets, native SwiGLU/RMSNorm/tied embeds,
+lift 32-token train cap, resolve Glint recreate blockers.
+Private train+infer scripts — DO NOT COMMIT; final answer only.
+
+[ ] Wave A — detect/load fixes
+[ ] Wave B — train seq_len
+[ ] Wave C — tiny autosets + ffn_dim
+[ ] Wave D — n_loops / tie / rms / swiglu / loop_embed
+[ ] Wave E — CoT train path
+[ ] Wave F — IO meta + tests
+[ ] Wave G — docs + verify_gate
+[ ] Wave H — private scripts in final answer
+

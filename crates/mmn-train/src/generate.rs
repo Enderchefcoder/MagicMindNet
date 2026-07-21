@@ -398,7 +398,7 @@ pub fn generate_token_ids(
     let mut tokens = prompt_tokens;
     let prompt_len = tokens.len();
 
-    if config.use_kv_cache {
+    if config.use_kv_cache && model.n_loops <= 1 {
         return generate_token_ids_with_kv_cache(
             model,
             &mut tokens,

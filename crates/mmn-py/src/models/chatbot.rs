@@ -1,4 +1,4 @@
-use mmn_models::Chatbot;
+use mmn_models::{Chatbot, ChatbotArchExtras};
 use mmn_train::{
     align_qa_token_pairs, mean_corpus_loss_with_encoder, mean_qa_loss_with_encoder, tokenize_lm,
 };
@@ -100,7 +100,26 @@ pub struct PyChatbot {
 #[pymethods]
 impl PyChatbot {
     #[new]
-    #[pyo3(signature = (vision=false, autoset=None, vocab_size=32000, n_layer=None, d_model=None, seed=None, use_learned_pos_embed=false, max_seq_len=512, use_rope=false, rope_theta=10000.0, n_heads=None, n_kv_heads=None))]
+    #[pyo3(signature = (
+        vision=false,
+        autoset=None,
+        vocab_size=32000,
+        n_layer=None,
+        d_model=None,
+        seed=None,
+        use_learned_pos_embed=false,
+        max_seq_len=512,
+        use_rope=false,
+        rope_theta=10000.0,
+        n_heads=None,
+        n_kv_heads=None,
+        ffn_dim=None,
+        n_loops=1,
+        tie_embeddings=false,
+        norm="layer",
+        ffn="gelu",
+        loop_embed=false,
+    ))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         vision: bool,
@@ -115,6 +134,12 @@ impl PyChatbot {
         rope_theta: f32,
         n_heads: Option<usize>,
         n_kv_heads: Option<usize>,
+        ffn_dim: Option<usize>,
+        n_loops: usize,
+        tie_embeddings: bool,
+        norm: &str,
+        ffn: &str,
+        loop_embed: bool,
     ) -> PyResult<Self> {
         if use_learned_pos_embed && use_rope {
             return Err(PyValueError::new_err(
@@ -133,20 +158,51 @@ impl PyChatbot {
                 "vocab_size must be at least 1.\nFix: Use vocab_size=512 for byte-level toy models or 32000 for BPE-scale vocabularies.",
             ));
         }
+        let use_rms_norm = match norm {
+            "layer" => false,
+            "rms" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown norm={other:?}. Valid values: \"layer\", \"rms\"."
+                )));
+            }
+        };
+        let use_swiglu = match ffn {
+            "gelu" => false,
+            "swiglu" => true,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown ffn={other:?}. Valid values: \"gelu\", \"swiglu\"."
+                )));
+            }
+        };
+        if n_loops == 0 {
+            return Err(PyValueError::new_err(
+                "n_loops must be at least 1.\nFix: Use n_loops=1 for a standard transformer or n_loops>1 to reuse blocks.",
+            ));
+        }
         Ok(Self {
-            inner: Chatbot::new_with_position_options(
+            inner: Chatbot::new_with_arch(
                 vision,
                 autoset.as_deref(),
                 vocab_size,
                 n_layer,
                 d_model,
+                ffn_dim,
+                n_heads,
+                n_kv_heads,
                 seed,
                 use_learned_pos_embed,
                 max_seq_len,
                 use_rope,
                 rope_theta,
-                n_heads,
-                n_kv_heads,
+                ChatbotArchExtras {
+                    n_loops,
+                    tie_embeddings,
+                    use_rms_norm,
+                    use_swiglu,
+                    loop_embed,
+                },
             ),
         })
     }
@@ -182,6 +238,7 @@ impl PyChatbot {
                     mmn_io::CheckpointKind::ChatbotNpz => "npz".to_string(),
                     mmn_io::CheckpointKind::ChatbotTorch => "pt".to_string(),
                     mmn_io::CheckpointKind::ChatbotSharded => "sharded".to_string(),
+                    mmn_io::CheckpointKind::ChatbotGgmlLegacy => "ggml-legacy".to_string(),
                     _ => "safetensors".to_string(),
                 }
             }
@@ -351,6 +408,36 @@ impl PyChatbot {
     #[getter]
     fn n_kv_heads(&self) -> usize {
         self.inner.shape.n_kv_heads
+    }
+
+    #[getter]
+    fn ffn_dim(&self) -> usize {
+        self.inner.shape.ffn_dim
+    }
+
+    #[getter]
+    fn n_loops(&self) -> usize {
+        self.inner.n_loops
+    }
+
+    #[getter]
+    fn tie_embeddings(&self) -> bool {
+        self.inner.tie_embeddings
+    }
+
+    #[getter]
+    fn norm(&self) -> String {
+        self.inner.norm_kind.clone()
+    }
+
+    #[getter]
+    fn ffn(&self) -> String {
+        self.inner.ffn_kind.clone()
+    }
+
+    #[getter]
+    fn loop_embed(&self) -> bool {
+        self.inner.loop_embed.is_some()
     }
 
     fn __repr__(&self) -> String {

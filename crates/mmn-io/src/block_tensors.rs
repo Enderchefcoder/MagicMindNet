@@ -27,6 +27,9 @@ pub(crate) fn export_block_tensors(model: &Chatbot, map: &mut TensorMap) {
         );
         map.insert(format!("{p}.ffn"), tensor_to_entry(&block.ffn.weight));
         map.insert(format!("{p}.ffn2"), tensor_to_entry(&block.ffn2.weight));
+        if let Some(gate) = &block.ffn_gate {
+            map.insert(format!("{p}.ffn_gate"), tensor_to_entry(&gate.weight));
+        }
         map.insert(format!("{p}.ln1.gamma"), tensor_to_entry(&block.ln1.gamma));
         map.insert(format!("{p}.ln1.beta"), tensor_to_entry(&block.ln1.beta));
         map.insert(format!("{p}.ln2.gamma"), tensor_to_entry(&block.ln2.gamma));
@@ -56,6 +59,11 @@ pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &TensorMap) -> 
         for (suffix, dest) in keys {
             let key = format!("{p}.{suffix}");
             *dest = tensor_from_entry(require_tensor_entry(tensors, &key)?)?;
+        }
+        if let Some(gate) = block.ffn_gate.as_mut() {
+            let key = format!("{p}.ffn_gate");
+            gate.weight = tensor_from_entry(require_tensor_entry(tensors, &key)?)?;
+            expect_tensor_shape(&gate.weight, &[ffn_dim, d_model], &key)?;
         }
         expect_tensor_shape(
             &block.attn.q_proj.weight,
@@ -107,6 +115,8 @@ pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &TensorMap) -> 
             &[d_model],
             &format!("{prefix}.ln2.beta"),
         )?;
+        block.ln1.use_rms = model.norm_kind == "rms";
+        block.ln2.use_rms = model.norm_kind == "rms";
     }
     Ok(())
 }
