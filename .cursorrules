@@ -39,6 +39,8 @@
 - safetensors container: u64 header_len + JSON {name: {dtype, shape, data_offsets}} (+ __metadata__ string map); pad header with spaces so 8+len is 8-aligned; offsets validated against shape*dtype_size.
 - BPE/unigram "reduces loss" tests can flake under full parallel cargo load with high LR; assert best-of-epoch mean loss and use more epochs / milder LR.
 - Q3_K packs scale l>>4 high bits as scales[8 + j%4] |= high << (2*(j/4)); Q2_K uses use_mad=true qkx2 with weights=|x|.
+- Classic square MHA (Q/K both `[d,d]`) must not GQA-guess `n_heads` from largest `head_dim` — that picks `n_heads=1` and breaks HF/npz/pt loss roundtrips; skip guess when heads absent, and always export `n_heads`/`n_kv_heads` on HF.
+- Hub optional deps (`transformers`/`diffusers`/`torch`) stay out of required/dev extras; hands-on + `@pytest.mark.network` only.
 
 # Scratchpad
 
@@ -348,12 +350,12 @@ Private train+infer scripts — DO NOT COMMIT; final answer only.
 
 ## Task: Universal hub from_pretrained (HF/Ollama/ModelScope)
 
-[ ] Probe listed models (done in session)
-[ ] Implement magicmindnet.hub.from_pretrained + HubModel
-[ ] Route: causal-lm/GGUF→Chatbot, seq-cls→Classifier/Hub, diffusion→Hub, else Hub
-[ ] finetune/train/generate/predict unified API
-[ ] Hands-on tests on listed models (download what fits)
-[ ] CI fixtures + optional network tests
+[X] Probe listed models (reranker, NLLB, SD, Wan, Kokoro, emotion, MLX, GGUF, Qwen)
+[X] Implement magicmindnet.hub.from_pretrained + HubModel
+[X] Route by pipeline/arch/files (not per-repo); GGUF→native when possible
+[X] finetune/train/generate/predict unified API + as_pairs/as_texts
+[X] Hands-on script scripts/hub_hands_on.py + docs/hub.md
+[X] Offline pytest + network marker; fix classic-MHA HF head_dim guess
 [ ] verify_gate + push PR
 
 ## Task: Optional head_dim for Qwen-style GGUF/HF
@@ -363,4 +365,5 @@ Private train+infer scripts — DO NOT COMMIT; final answer only.
 [X] GGUF key_length/value_length + Q-shape inference
 [X] HF/safetensors shape validation (q/k/v/out)
 [X] Rust + pytest synthetic; Qwen3-0.6B-Q8_0.gguf hands-on load+generate
+[X] Fix classic MHA ensure_gqa_meta n_heads=1 regression
 
