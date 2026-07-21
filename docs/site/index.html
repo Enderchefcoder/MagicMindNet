@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MagicMindNet — train, load, serve</title>
+  <meta name="description" content="Production-ready beginner-friendly AI library with a from-scratch Rust core. pip install magicmindnet." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;550;650&family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/mmn.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script defer src="js/charts.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand-mark" href="index.html">Magic<span>Mind</span>Net</a>
+      <nav class="nav" aria-label="Primary">
+        <a href="#install">Install</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#parity">Parity</a>
+        <a href="#hub">Hub</a>
+        <a href="#examples">Examples</a>
+        <a href="../../README.md">GitHub README</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-bg" aria-hidden="true"></div>
+    <div class="wrap hero-inner">
+      <h1 class="hero-brand">MagicMindNet</h1>
+      <p class="hero-line">Train real models. Load the Hub. Serve OpenAI-compatible APIs.</p>
+      <p class="hero-sub">A beginner-friendly Python package powered by a from-scratch Rust core — transformers, classifiers, diffusion, GGUF, and eval harness in one install.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">pip install magicmindnet</a>
+        <a class="btn btn-ghost" href="#benchmarks">See benchmarks</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2 class="section-title">One install path</h2>
+      <p class="section-lead">Published on PyPI as <code>magicmindnet</code>. Optional hub extras pull transformers / diffusers when you need remote models.</p>
+      <div class="install-grid">
+        <div class="panel">
+          <h3>Production</h3>
+          <pre><code>pip install magicmindnet
+
+# optional Hub backends
+pip install "magicmindnet[hub]"
+
+python -c "import magicmindnet as ai; print(ai.__version__)"
+mmn-eval smoke
+mmn-serve --help</code></pre>
+        </div>
+        <div class="panel">
+          <h3>From source (contributors)</h3>
+          <pre><code>git clone https://github.com/Enderchefcoder/MagicMindNet
+cd MagicMindNet
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+maturin develop --release
+bash scripts/verify_gate.sh</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="benchmarks">
+    <div class="wrap">
+      <h2 class="section-title">Benchmarks that stay honest</h2>
+      <p class="section-lead">Charts below are generated from committed JSON under <code>docs/site/data/</code> (interop sizes + smoke eval timings). Re-run with <code>python examples/interop_benchmark.py</code> and <code>python -m magicmindnet.eval smoke --json</code>.</p>
+      <div class="charts">
+        <div class="chart-panel">
+          <h3>Checkpoint size by format</h3>
+          <p>~1.3M-param Chatbot · lower is smaller on disk</p>
+          <div class="chart-wrap"><canvas id="chart-size" aria-label="Checkpoint size chart"></canvas></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Save / load latency</h3>
+          <p>Milliseconds · same model as size chart</p>
+          <div class="chart-wrap"><canvas id="chart-io" aria-label="Save load latency chart"></canvas></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Smoke suite task times</h3>
+          <p>16 tasks · seed=1 · wall ms per task</p>
+          <div class="chart-wrap"><canvas id="chart-smoke" aria-label="Smoke eval timing chart"></canvas></div>
+        </div>
+        <div class="chart-panel">
+          <h3>Feature parity snapshot</h3>
+          <p>Shipped vs planned vs peers (Wave 1–3)</p>
+          <div class="chart-wrap"><canvas id="chart-parity" aria-label="Feature parity chart"></canvas></div>
+        </div>
+      </div>
+      <p style="margin-top:1rem;font-size:0.9rem;color:var(--ink-soft)">
+        Full matrices: <a href="../benchmarks.md">benchmarks.md</a> ·
+        <a href="../eval_coverage.md">eval_coverage.md</a> ·
+        <a href="../feature_parity.md">feature_parity.md</a>
+      </p>
+    </div>
+  </section>
+
+  <section id="demo">
+    <div class="wrap">
+      <h2 class="section-title">Product storyboard</h2>
+      <p class="section-lead">Static SVG storyboard of the production loop (pip → train → checkpoint → OpenAI server). Swap in a screen recording under <code>assets/</code> when you have one.</p>
+      <div class="video-frame">
+        <img src="assets/demo-storyboard.svg" alt="Train, save, serve, chat storyboard" width="960" height="540" style="width:100%;height:100%;object-fit:cover;display:block" />
+      </div>
+      <p class="video-caption">Live path: <code>examples/openai_server_demo.py</code> · Hub catalog: <code>examples/hub_catalog.py</code></p>
+    </div>
+  </section>
+
+  <section id="parity">
+    <div class="wrap">
+      <h2 class="section-title">Parity with the tools you already know</h2>
+      <p class="section-lead">Practical surfaces from llama.cpp, Ollama, and PyTorch — not a claim of bit-identical kernels.</p>
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>Peer</th>
+            <th>MagicMindNet</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>typical_p / Mirostat v2</td><td>llama.cpp</td><td><span class="badge">Wave 1</span></td></tr>
+          <tr><td>Streaming + embeddings</td><td>Ollama</td><td><span class="badge">Wave 1</span></td></tr>
+          <tr><td>Cosine LR + weight decay</td><td>PyTorch</td><td><span class="badge">Wave 1</span></td></tr>
+          <tr><td>JSON / digit grammar</td><td>llama.cpp / Ollama</td><td><span class="badge">Wave 2</span></td></tr>
+          <tr><td>OpenAI HTTP server</td><td>llama-server</td><td><span class="badge">Wave 2</span> <code>mmn-serve</code></td></tr>
+          <tr><td>Tool calling helpers</td><td>OpenAI tools</td><td><span class="badge">Wave 3</span></td></tr>
+          <tr><td>Speculative decoding</td><td>llama.cpp</td><td><span class="badge badge-plan">Wave 4</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="hub">
+    <div class="wrap">
+      <h2 class="section-title">Hub routing by layout</h2>
+      <p class="section-lead"><code>ai.from_pretrained</code> inspects artifacts — not a hard-coded list of “every” repo. Families below cover the Hub layouts we route today.</p>
+      <div class="hub-grid">
+        <div class="hub-item"><strong>GGUF / .mmn</strong><span>Native Chatbot when shapes adapt</span></div>
+        <div class="hub-item"><strong>Causal LM</strong><span>HF safetensors · transformers fallback</span></div>
+        <div class="hub-item"><strong>Classifier / rerank</strong><span>seq-cls pipelines · score_pairs</span></div>
+        <div class="hub-item"><strong>Seq2seq</strong><span>T5 / M2M100 style generate</span></div>
+        <div class="hub-item"><strong>Diffusers</strong><span>image / video pipes</span></div>
+        <div class="hub-item"><strong>Embeddings / ASR / TTS</strong><span>feature-extraction &amp; pipelines</span></div>
+        <div class="hub-item"><strong>VLM</strong><span>image-text-to-text</span></div>
+        <div class="hub-item"><strong>Ollama</strong><span>ollama:// local daemon</span></div>
+      </div>
+      <p style="margin-top:1.25rem;font-size:0.9rem;color:var(--ink-soft)">
+        Details: <a href="../hub.md">hub.md</a> · coverage matrix <a href="../hub_coverage.md">hub_coverage.md</a>
+      </p>
+    </div>
+  </section>
+
+  <section id="examples">
+    <div class="wrap">
+      <h2 class="section-title">Examples worth running</h2>
+      <p class="section-lead">After <code>pip install magicmindnet</code>, clone the repo for demos — or copy snippets from the README.</p>
+      <div class="install-grid">
+        <div class="panel">
+          <h3>pip_quickstart.py</h3>
+          <pre><code>python examples/pip_quickstart.py</code></pre>
+        </div>
+        <div class="panel">
+          <h3>openai_server_demo.py</h3>
+          <pre><code>python examples/openai_server_demo.py</code></pre>
+        </div>
+        <div class="panel">
+          <h3>hub_catalog.py</h3>
+          <pre><code>python examples/hub_catalog.py</code></pre>
+        </div>
+        <div class="panel">
+          <h3>parity_demo.py</h3>
+          <pre><code>python examples/parity_demo.py</code></pre>
+        </div>
+        <div class="panel">
+          <h3>eval_harness.py</h3>
+          <pre><code>python -m magicmindnet.eval smoke
+mmn-eval io --json -o report.json</code></pre>
+        </div>
+        <div class="panel">
+          <h3>interop_benchmark.py</h3>
+          <pre><code>python examples/interop_benchmark.py</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="wrap">
+      <p><strong>MagicMindNet 0.2.0</strong> · GPL-3.0-or-later ·
+        <a href="https://pypi.org/project/magicmindnet/">PyPI</a> ·
+        <a href="https://github.com/Enderchefcoder/MagicMindNet">GitHub</a> ·
+        <a href="../getting_started.md">getting_started.md</a>
+      </p>
+    </div>
+  </footer>
+</body>
+</html>

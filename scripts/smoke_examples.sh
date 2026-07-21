@@ -7,6 +7,18 @@ PY="$(bash "$(dirname "$0")/venv_python.sh")"
 echo "== examples/hello_ai =="
 "$PY" examples/hello_ai.py
 
+echo "== examples/pip_quickstart =="
+"$PY" examples/pip_quickstart.py
+
+echo "== examples/parity_demo =="
+"$PY" examples/parity_demo.py
+
+echo "== examples/hub_catalog =="
+"$PY" examples/hub_catalog.py
+
+echo "== examples/openai_server_demo =="
+"$PY" examples/openai_server_demo.py
+
 echo "== examples/quickstart =="
 "$PY" examples/quickstart.py
 

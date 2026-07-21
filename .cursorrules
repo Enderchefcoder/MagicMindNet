@@ -47,6 +47,8 @@
 - `ai.save_arrays(path, arrays)` takes path first (swapped args look like “cannot infer format”).
 - GGUF/HF RMS `output_norm` is weight-only — `final_norm.beta` must be optional on import (zeros); requiring beta breaks Qwen/Llama GGUF loads.
 - `json_mode` constrained decode is seed-sensitive; eval/smoke tasks should fix seed + `temperature=0.0` (keep out of default smoke if flaky).
+- Never commit PyPI API tokens; publish via `MATURIN_PYPI_TOKEN` / `TWINE_PASSWORD` env only and revoke the token after upload.
+- Docs site charts need local HTTP (`python -m http.server -d docs/site`) — `file://` often blocks `fetch` of JSON.
 
 # Scratchpad
 
@@ -414,23 +416,19 @@ example-only benches as the canonical API while keeping examples as thin demos.
 
 ## Task: Feature parity wave — PyTorch / llama.cpp / Ollama
 
-Goal: close high-impact gaps vs llama.cpp sampling, Ollama serve/chat/embed,
-and PyTorch training knobs. Full ecosystem parity is multi-wave; this wave
-ships the biggest user-facing holes with tests + `docs/feature_parity.md`.
+[X] Waves 1–3 + verify_gate (see prior scratchpad)
 
-Wave 1 (this session):
-[X] Mirostat v2 + typical_p sampling (llama.cpp)
-[X] generate_stream token chunks (Ollama streaming)
-[X] Chatbot.embed / embed_texts mean-pool (Ollama embeddings)
-[X] TrainConfig weight_decay + lr_schedule cosine + warmup_steps (PyTorch)
-[X] format_chat_messages helper (OpenAI/Ollama messages)
-[X] docs/feature_parity.md matrix + eval tasks + verify_gate
+## Task: 0.2.0 prod — PyPI, docs site, README pip-first
 
-Later waves (documented, not blocking): grammar/GBNF, OpenAI HTTP server,
-dropout, flash-attn, speculative decoding, Modelfile, tool-calling JSON schema.
+Goal: ship MagicMindNet as a production pip package on PyPI, professional
+docs site (HTML/CSS/charts), hub/examples polish, README as one install story.
 
-[X] Wave 1: mirostat/typical_p, stream, embed, LR schedule, chat messages
-[X] Wave 2: json_mode/grammar + OpenAIServer
-[X] Wave 3: tool calling helpers (chat_with_tools)
-[X] verify_gate green after json_mode smoke harden + waves 1–3
+[X] Bump workspace + pyproject + __version__ → 0.2.0; console scripts mmn-serve/mmn-eval
+[ ] Fix version assert tests (0.2.0); CHANGELOG 0.2.0 release notes
+[ ] docs/site/ professional landing (brand-first, charts from real benches)
+[ ] README pip-first (`pip install magicmindnet`); hub catalog example
+[ ] Extra examples: pip_quickstart, openai_server_demo, hub_catalog, parity_demo
+[ ] Build wheel/sdist; maturin publish (token via env only — never commit)
+[ ] verify_gate; commit; push; update PR #3
+Lesson: never write PyPI tokens into repo files; use MATURIN_PYPI_TOKEN / TWINE_PASSWORD.
 

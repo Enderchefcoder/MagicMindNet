@@ -4,7 +4,17 @@ This tutorial takes you from zero to a trained, saved, reloaded chatbot and clas
 
 ## 1. Install
 
-You need Python 3.12+ and [Rust](https://rustup.rs/) (the library core is compiled Rust).
+You need **Python 3.12+**. The easiest path is PyPI (prebuilt native extension):
+
+```bash
+pip install magicmindnet
+pip install "magicmindnet[hub]"   # optional: Hugging Face / ModelScope / Diffusers
+python -c "import magicmindnet as ai; print(ai.__version__)"
+```
+
+CLI tools: `mmn-eval smoke` · `mmn-serve --help`
+
+**From source** (contributors): you also need [Rust](https://rustup.rs/).
 
 ```bash
 git clone https://github.com/Enderchefcoder/MagicMindNet
@@ -15,11 +25,7 @@ pip install -e ".[dev]"
 maturin develop --release
 ```
 
-Check it worked:
-
-```bash
-python -c "import magicmindnet as ai; print(ai.__version__)"
-```
+Pretty docs with benchmark charts: [docs/site/index.html](site/index.html).
 
 ## 2. Your first chatbot
 

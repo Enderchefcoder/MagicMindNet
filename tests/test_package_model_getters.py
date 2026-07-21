@@ -25,4 +25,4 @@ def test_classifier_exposes_documented_getters():
 
 
 def test_version_in_public_module():
-    assert ai.__version__ == "0.1.0"
+    assert ai.__version__ == "0.2.0"

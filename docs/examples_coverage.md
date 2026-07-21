@@ -4,7 +4,11 @@ Runnable scripts under `examples/` and how they are regression-tested.
 
 | Script | Purpose | Smoke (`smoke_examples`) | pytest (`test_examples_scripts_py`) |
 |--------|---------|--------------------------|-------------------------------------|
+| [pip_quickstart.py](../examples/pip_quickstart.py) | Post-`pip install` train → chat → save → load | yes | yes |
 | [hello_ai.py](../examples/hello_ai.py) | Beginner tour: in-memory data, `bot.train`/`chat`/`save`, `ai.load`, `predict_label` | yes | yes |
+| [openai_server_demo.py](../examples/openai_server_demo.py) | Local OpenAI `/v1/chat/completions` smoke | yes | yes |
+| [hub_catalog.py](../examples/hub_catalog.py) | Hub family catalog + local `from_pretrained` | yes | yes |
+| [parity_demo.py](../examples/parity_demo.py) | Stream / embed / typical_p / chat_messages / tools | yes | yes |
 | [quickstart.py](../examples/quickstart.py) | Minimal QA train + export; `--learned-pe` | yes | yes |
 | [benchmark_train.py](../examples/benchmark_train.py) | QA mean loss before/after `Train`; `--learned-pe` | yes | yes |
 | [eval_mean_loss.py](../examples/eval_mean_loss.py) | Mean CE (`qa` / `cls` / `corpus`) or denoise loss (`diffusion` / `diffusion-edit`); `--learned-pe`, `--train` | yes (all modes) | yes (+ flag variants) |

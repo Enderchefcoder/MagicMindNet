@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0 — 2026-07-21
+
+### Production packaging
+- First **PyPI** release: `pip install magicmindnet` (version aligned across
+  `pyproject.toml`, Cargo workspace, and `magicmindnet.__version__`)
+- Console scripts: `mmn-serve`, `mmn-eval`
+- Classifiers / keywords / project URLs pointed at docs site + feature parity
+- README + getting_started rewritten **pip-first**; source/maturin remains for contributors
+
+### Docs site
+- Professional landing page [docs/site/index.html](docs/site/index.html)
+  (HTML/CSS, Chart.js benchmarks, hub routing, parity matrix, storyboard SVG)
+- Committed chart data: `docs/site/data/interop_benchmark.json`, `smoke_eval.json`
+
+### Examples
+- `examples/pip_quickstart.py`, `openai_server_demo.py`, `hub_catalog.py`, `parity_demo.py`
+
+### Includes (from 0.1.x line)
+- Feature parity Waves 1–3 (sampling, stream/embed, JSON mode, OpenAI server, tools)
+- Eval harness, final_norm / LoopLoRA, hub `from_pretrained`, full interop stack
+
 ## 0.1.0 — 2026-07-21
 
 ### Added (feature parity Wave 3 — tool calling)

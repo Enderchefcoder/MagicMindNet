@@ -6,7 +6,11 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 
 | Script | Purpose |
 |--------|---------|
-| [hello_ai.py](hello_ai.py) | **Beginner start here**: in-memory data, `bot.train`, `bot.chat`, `save`/`ai.load`, `predict_label` |
+| [pip_quickstart.py](pip_quickstart.py) | **After `pip install magicmindnet`**: train → chat → save → `ai.load` |
+| [hello_ai.py](hello_ai.py) | Beginner tour: in-memory data, `bot.train`, `bot.chat`, `save`/`ai.load`, `predict_label` |
+| [openai_server_demo.py](openai_server_demo.py) | Train tiny bot + hit local OpenAI `/v1/chat/completions` |
+| [hub_catalog.py](hub_catalog.py) | Offline hub family catalog + local `from_pretrained` |
+| [parity_demo.py](parity_demo.py) | Stream / embed / typical_p / chat_messages / tools smoke |
 | [quickstart.py](quickstart.py) | Minimal QA load → train → export (optional `--learned-pe`, `--rope`, `--bpe`) |
 | [benchmark_train.py](benchmark_train.py) | Mean QA loss before/after `Train` (optional `--learned-pe`, `--rope`, `--bpe`) |
 | [bpe_roundtrip.py](bpe_roundtrip.py) | BPE `save`/`load` parity + optional `--train` with `bpe_encoder` |
@@ -36,7 +40,11 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 ## Quick commands
 
 ```powershell
+python examples/pip_quickstart.py
 python examples/hello_ai.py
+python examples/openai_server_demo.py
+python examples/hub_catalog.py
+python examples/parity_demo.py
 python examples/quickstart.py
 python examples/benchmark_train.py
 python examples/eval_harness.py smoke
