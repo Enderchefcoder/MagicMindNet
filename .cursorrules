@@ -37,6 +37,7 @@
 - HDF5 f32 datatype bit fields per h5py: [0x11, 0x20, 0x1F, 0x00] (v1 float, normalized-msb, sign loc 31) + offset0/prec32/exp23,8/man0,23/bias127; include a v2 fill-value message (02 02 02 01 + size 0).
 - TF bundle writer needs SORTED keys ('' header first) — LevelDB tables are ordered; BundleHeaderProto field3 = VersionDef{producer=1}.
 - safetensors container: u64 header_len + JSON {name: {dtype, shape, data_offsets}} (+ __metadata__ string map); pad header with spaces so 8+len is 8-aligned; offsets validated against shape*dtype_size.
+- BPE/unigram "reduces loss" tests can flake under full parallel cargo load with high LR; assert best-of-epoch mean loss and use more epochs / milder LR.
 - Q3_K packs scale l>>4 high bits as scales[8 + j%4] |= high << (2*(j/4)); Q2_K uses use_mad=true qkx2 with weights=|x|.
 
 # Scratchpad
@@ -335,12 +336,12 @@ Goal: better ai.load detection, looped layers, CoT, tiny autosets, native SwiGLU
 lift 32-token train cap, resolve Glint recreate blockers.
 Private train+infer scripts — DO NOT COMMIT; final answer only.
 
-[ ] Wave A — detect/load fixes
-[ ] Wave B — train seq_len
-[ ] Wave C — tiny autosets + ffn_dim
-[ ] Wave D — n_loops / tie / rms / swiglu / loop_embed
-[ ] Wave E — CoT train path
-[ ] Wave F — IO meta + tests
-[ ] Wave G — docs + verify_gate
-[ ] Wave H — private scripts in final answer
+[X] Wave A — detect/load fixes
+[X] Wave B — train seq_len
+[X] Wave C — tiny autosets + ffn_dim
+[X] Wave D — n_loops / tie / rms / swiglu / loop_embed
+[X] Wave E — CoT train path
+[X] Wave F — IO meta + tests
+[X] Wave G — docs + verify_gate
+[X] Wave H — private scripts in final answer (not committed)
 
