@@ -282,7 +282,13 @@ def test_download_false_local_ok(tmp_path: Path):
     assert loaded.vocab_size == 32
 
 
-def test_hands_on_local_subprocess():
+def test_prefer_native_loads_local_chatbot(tmp_path: Path):
+    bot = ai.Chatbot(vocab_size=32, n_layer=1, d_model=16, seed=9)
+    path = tmp_path / "p.mmn"
+    bot.save(str(path))
+    loaded = from_pretrained(str(path), prefer_native=True)
+    assert loaded.native is not None
+    assert loaded.card.backend == "native"
     """CI-friendly smoke: hub hands-on local case only."""
     import subprocess
     import sys

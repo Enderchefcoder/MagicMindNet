@@ -9,6 +9,7 @@
 - `DatasetQA.as_pairs()`; CoT empty `thinktag` defaults to `<think>…</think>` when `cot=True`
 - `list_hub_families()`, `ModelCard.from_dict`, ModelScope URL parse
 - `pip install -e ".[hub]"` optional deps; detect Diffusers dirs + nested checkpoints
+- GGUF/HF Glint meta roundtrip (`n_loops`, RMS/SwiGLU, tie, `loop_embed`, `ffn_gate`)
 - Examples: `hub_local_roundtrip.py`, `glint_tiny.py`; docs: `hub_coverage.md`
 - Tests: `tests/test_hub_wave2_py.py` (+ smoke hub local)
 

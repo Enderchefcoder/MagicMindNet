@@ -60,6 +60,21 @@ pub(crate) fn chatbot_meta_json(
             meta["head_dim"] = serde_json::json!(hd);
         }
     }
+    if model.n_loops != 1 {
+        meta["n_loops"] = serde_json::json!(model.n_loops);
+    }
+    if model.tie_embeddings {
+        meta["tie_embeddings"] = serde_json::json!(true);
+    }
+    if model.norm_kind != "layer" {
+        meta["norm"] = serde_json::json!(model.norm_kind);
+    }
+    if model.ffn_kind != "gelu" {
+        meta["ffn_kind"] = serde_json::json!(model.ffn_kind);
+    }
+    if model.loop_embed.is_some() {
+        meta["loop_embed"] = serde_json::json!(true);
+    }
     if let Some(bpe_path) = tokenizer_sidecars.bpe {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
     }
@@ -81,10 +96,16 @@ pub(crate) fn collect_named_tensors(model: &Chatbot) -> HashMap<String, Tensor> 
         map.insert(format!("{p}.attn.out"), block.attn.out_proj.weight.clone());
         map.insert(format!("{p}.ffn"), block.ffn.weight.clone());
         map.insert(format!("{p}.ffn2"), block.ffn2.weight.clone());
+        if let Some(gate) = &block.ffn_gate {
+            map.insert(format!("{p}.ffn_gate"), gate.weight.clone());
+        }
         map.insert(format!("{p}.ln1.gamma"), block.ln1.gamma.clone());
         map.insert(format!("{p}.ln1.beta"), block.ln1.beta.clone());
         map.insert(format!("{p}.ln2.gamma"), block.ln2.gamma.clone());
         map.insert(format!("{p}.ln2.beta"), block.ln2.beta.clone());
+    }
+    if let Some(le) = &model.loop_embed {
+        map.insert("loop_embed.weight".to_string(), le.weight.clone());
     }
     if let Some(proj) = &model.vision_patch_proj {
         map.insert("vision_patch_proj".to_string(), proj.weight.clone());
@@ -254,6 +275,26 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
 
     fill_missing_block_layernorm_defaults(&mut tensors, n_layer, d_model);
     let json_tensors = tensors_to_entry_map(&tensors);
+    let n_loops = meta["n_loops"].as_u64().unwrap_or(1) as usize;
+    let tie_embeddings = meta["tie_embeddings"].as_bool().unwrap_or(false);
+    let norm = meta
+        .get("norm")
+        .or_else(|| meta.get("norm_kind"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("layer");
+    let ffn_kind = meta
+        .get("ffn_kind")
+        .or_else(|| meta.get("ffn"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("gelu");
+    let loop_embed = meta["loop_embed"].as_bool().unwrap_or(false);
+    let extras = mmn_models::ChatbotArchExtras {
+        n_loops: n_loops.max(1),
+        tie_embeddings,
+        use_rms_norm: norm == "rms",
+        use_swiglu: ffn_kind == "swiglu",
+        loop_embed: loop_embed && n_loops > 1,
+    };
     let mut model = Chatbot::new_with_arch(
         vision,
         None,
@@ -269,7 +310,7 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         max_seq_len,
         use_rope,
         rope_theta,
-        mmn_models::ChatbotArchExtras::default(),
+        extras,
     );
     model.embed.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "embed")?)?;
     model.lm_head.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "lm_head")?)?;
@@ -322,6 +363,14 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         }
     }
     import_block_tensors(&mut model, &json_tensors)?;
+    if let Some(le) = model.loop_embed.as_mut() {
+        le.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "loop_embed.weight")?)?;
+        expect_tensor_shape(
+            &le.weight,
+            &[model.n_loops, d_model],
+            "loop_embed.weight",
+        )?;
+    }
     Ok(model)
 }
 

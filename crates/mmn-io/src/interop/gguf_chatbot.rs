@@ -23,6 +23,7 @@ pub fn gguf_name_to_mmn(name: &str) -> Option<String> {
         "token_embd.weight" => return Some("embed".into()),
         "output.weight" => return Some("lm_head".into()),
         "position_embd.weight" => return Some("pos_embed".into()),
+        "loop_embd.weight" => return Some("loop_embed.weight".into()),
         // Final-norm has no MMN equivalent (blocks carry their own norms).
         "output_norm.weight" | "output_norm.bias" => return None,
         // MMN vision prefix tensors (mmproj-style `v.` namespace).
@@ -43,7 +44,7 @@ pub fn gguf_name_to_mmn(name: &str) -> Option<String> {
         "attn_v.weight" => "attn.v",
         "attn_output.weight" => "attn.out",
         "attn_qkv.weight" => "attn.qkv",
-        "ffn_gate.weight" => "ffn",
+        "ffn_gate.weight" => "ffn_gate",
         "ffn_up.weight" => "ffn.up",
         "ffn_down.weight" => "ffn2",
         "attn_norm.weight" => "ln1.gamma",
@@ -61,6 +62,7 @@ pub fn mmn_name_to_gguf(key: &str) -> Option<String> {
         "embed" => return Some("token_embd.weight".into()),
         "lm_head" => return Some("output.weight".into()),
         "pos_embed" => return Some("position_embd.weight".into()),
+        "loop_embed.weight" => return Some("loop_embd.weight".into()),
         "vision_patch_proj" => return Some("v.patch_proj.weight".into()),
         "vision_patch_conv" => return Some("v.patch_conv.weight".into()),
         "vision_cross_attn.q" => return Some("v.cross_attn_q.weight".into()),
@@ -78,6 +80,7 @@ pub fn mmn_name_to_gguf(key: &str) -> Option<String> {
         "attn.v" => "attn_v.weight",
         "attn.out" => "attn_output.weight",
         "ffn" => "ffn_up.weight",
+        "ffn_gate" => "ffn_gate.weight",
         "ffn2" => "ffn_down.weight",
         "ln1.gamma" => "attn_norm.weight",
         "ln1.beta" => "attn_norm.bias",
@@ -184,6 +187,39 @@ fn gguf_meta_to_mmn(file: &GgufFile, tensors: &HashMap<String, Tensor>) -> serde
     }
     if let Some(seed) = meta_u64(file, &format!("{arch}.seed")) {
         meta["seed"] = serde_json::json!(seed);
+    }
+    if let Some(n_loops) = meta_u64(file, &format!("{arch}.n_loops")) {
+        meta["n_loops"] = serde_json::json!(n_loops);
+    }
+    if file
+        .metadata
+        .get(&format!("{arch}.tie_embeddings"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        meta["tie_embeddings"] = serde_json::json!(true);
+    }
+    if let Some(norm) = file
+        .metadata
+        .get(&format!("{arch}.norm"))
+        .and_then(|v| v.as_str())
+    {
+        meta["norm"] = serde_json::json!(norm);
+    }
+    if let Some(ffn) = file
+        .metadata
+        .get(&format!("{arch}.ffn_kind"))
+        .and_then(|v| v.as_str())
+    {
+        meta["ffn_kind"] = serde_json::json!(ffn);
+    }
+    if file
+        .metadata
+        .get(&format!("{arch}.loop_embed"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        meta["loop_embed"] = serde_json::json!(true);
     }
     let vision = file
         .metadata
@@ -328,6 +364,30 @@ fn chatbot_gguf_metadata(model: &Chatbot) -> Vec<(String, GgufValue)> {
     }
     if model.vision {
         meta.push(("mmn.vision".to_string(), GgufValue::Bool(true)));
+    }
+    if model.n_loops != 1 {
+        meta.push((
+            "mmn.n_loops".to_string(),
+            GgufValue::U32(model.n_loops as u32),
+        ));
+    }
+    if model.tie_embeddings {
+        meta.push(("mmn.tie_embeddings".to_string(), GgufValue::Bool(true)));
+    }
+    if model.norm_kind != "layer" {
+        meta.push((
+            "mmn.norm".to_string(),
+            GgufValue::String(model.norm_kind.clone()),
+        ));
+    }
+    if model.ffn_kind != "gelu" {
+        meta.push((
+            "mmn.ffn_kind".to_string(),
+            GgufValue::String(model.ffn_kind.clone()),
+        ));
+    }
+    if model.loop_embed.is_some() {
+        meta.push(("mmn.loop_embed".to_string(), GgufValue::Bool(true)));
     }
     meta
 }
@@ -565,6 +625,46 @@ mod tests {
         if model.vision_cross_attn.is_some() {
             assert!(loaded.vision_cross_attn.is_some());
         }
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn gguf_glint_arch_meta_roundtrip() {
+        use mmn_models::ChatbotArchExtras;
+        let extras = ChatbotArchExtras {
+            n_loops: 2,
+            tie_embeddings: true,
+            use_rms_norm: true,
+            use_swiglu: true,
+            loop_embed: true,
+        };
+        let model = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            None,
+            Some(4),
+            None,
+            None,
+            Some(7),
+            false,
+            64,
+            false,
+            10_000.0,
+            extras,
+        );
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_glint_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "f32").unwrap();
+        let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.n_loops, 2);
+        assert!(loaded.tie_embeddings);
+        assert_eq!(loaded.norm_kind, "rms");
+        assert_eq!(loaded.ffn_kind, "swiglu");
+        assert!(loaded.loop_embed.is_some());
+        assert!(loaded.blocks[0].ffn_gate.is_some());
         let _ = fs::remove_file(&path);
     }
 

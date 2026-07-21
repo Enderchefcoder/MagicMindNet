@@ -19,7 +19,22 @@ Monitor training:
 
 ```python
 print("mean CE:", bot.compute_mean_loss(ds))
+# Or beginner API with epoch prints:
+bot.train(ds, epochs=3, verbose=True)  # returns per-epoch mean losses
 ```
+
+### Autoset / CoT / hub finetune
+
+```python
+bot = ai.Chatbot(vocab_size=8000, autoset="sub-10M", seed=0)  # size presets
+# CoT: empty thinktag defaults to <think>…</think> when cot=True
+ds = ai.DatasetQA(data=[{"input": "q", "output": "a"}], cot=True)
+# Universal hub (optional: pip install -e ".[hub]")
+model = ai.from_pretrained("./bot.mmn")
+model.finetune(ai.DatasetCorpus(data=["…"] * 16), epochs=1, verbose=True)
+```
+
+See [hub.md](hub.md) and [getting_started.md](getting_started.md).
 
 ## Classification
 

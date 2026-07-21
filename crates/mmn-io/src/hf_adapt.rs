@@ -138,21 +138,42 @@ fn fuse_swiglu_gate_up_tensors(tensors: &mut HashMap<String, Tensor>) {
         })
         .collect();
     for i in indices {
-        let gate_key = format!("blocks.{i}.ffn");
+        let gate_key = format!("blocks.{i}.ffn_gate");
         let up_key = format!("blocks.{i}.ffn.up");
+        let ffn_key = format!("blocks.{i}.ffn");
+        // Native MMN SwiGLU exports `ffn` as GGUF `ffn_up` (maps back to `ffn.up`)
+        // plus a real `ffn_gate`. Remap `ffn.up` → `ffn` and keep the gate.
+        if tensors.contains_key(&gate_key)
+            && tensors.contains_key(&up_key)
+            && !tensors.contains_key(&ffn_key)
+        {
+            if let Some(up) = tensors.remove(&up_key) {
+                tensors.insert(ffn_key, up);
+            }
+            continue;
+        }
         let Some(up) = tensors.remove(&up_key) else {
             continue;
         };
-        let Some(gate) = tensors.get(&gate_key) else {
-            // Plain MLP checkpoints name the first layer `up_proj`/`ffn_up`
-            // with no gate: treat it as the FFN weight directly.
-            tensors.insert(gate_key, up);
+        // Native MMN SwiGLU already has both `ffn` and `ffn_gate` — leave them alone.
+        if tensors.contains_key(&ffn_key) && tensors.contains_key(&gate_key) {
+            tensors.insert(up_key, up);
+            continue;
+        }
+        // External Llama: gate may be keyed as `ffn_gate` (new) or `ffn` (legacy map).
+        let gate = if let Some(g) = tensors.remove(&gate_key) {
+            g
+        } else if let Some(g) = tensors.remove(&ffn_key) {
+            g
+        } else {
+            tensors.insert(ffn_key, up);
             continue;
         };
-        if let Ok(fused) = elementwise_mul(gate, &up) {
-            tensors.insert(gate_key, fused);
+        if let Ok(fused) = elementwise_mul(&gate, &up) {
+            tensors.insert(ffn_key, fused);
         } else {
             tensors.insert(up_key, up);
+            tensors.insert(gate_key, gate);
         }
     }
 }
