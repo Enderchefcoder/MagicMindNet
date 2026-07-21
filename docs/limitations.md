@@ -49,7 +49,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 |-----|--------------|--------------|
 | Scaled dot-product attention backward | [attention_coverage.md](attention_coverage.md) | ~~done pass 81~~ |
 | LayerNorm γ/β training | [layernorm_coverage.md](layernorm_coverage.md) | ~~done pass 82~~ |
-| Glint LoopLoRA QKV delta adapters | this doc § Training | optional residual loop adapters — not required for tiny Glint-like LMs |
+| Glint LoopLoRA QKV + final_norm | this doc § Training | ~~done~~ (`lora_rank`, `final_norm`; GGUF `output_norm`) |
 | Production tokenizer | this doc § Training | ~~BPE trainer~~; **UnigramEncoder** (`mmn-unigram-v1`) + Viterbi; SentencePiece-scale vocab next |
 | Vision encoder | [vision_coverage.md](vision_coverage.md) | ~~DatasetQA image file loading~~; multi-patch tiles done |
 | HF binary safetensors | this doc § IO | ~~Chatbot + Classifier export/import~~; ~~native GQA forward~~ done |

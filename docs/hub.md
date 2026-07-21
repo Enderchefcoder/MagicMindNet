@@ -93,4 +93,4 @@ python examples/hub_local_roundtrip.py
   Video `generate` without a loaded pipe raises a clear error.
 - Failed GGUF native adapt raises (no silent empty shell).
 - Ollama requires a reachable `OLLAMA_HOST` (default `http://127.0.0.1:11434`).
-- LoopLoRA QKV adapters for Glint-2 parity are not implemented yet (see limitations.md).
+- LoopLoRA QKV adapters (`lora_rank`) and `final_norm` are implemented on native Chatbot (see [API.md](API.md), [limitations.md](limitations.md)).

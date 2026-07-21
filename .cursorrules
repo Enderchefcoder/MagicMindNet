@@ -405,4 +405,5 @@ example-only benches as the canonical API while keeping examples as thin demos.
 [X] final_norm: Chatbot field, forward/train, IO (GGUF output_norm map), Python
 [X] LoopLora: per-loop down/up, QKV deltas in attn, train grads, IO, Python
 [X] Docs/examples/eval + verify_gate + push
+[ ] verify_gate confirmation this session
 

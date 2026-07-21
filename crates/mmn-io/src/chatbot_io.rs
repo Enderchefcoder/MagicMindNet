@@ -1,7 +1,7 @@
 use crate::block_tensors::{export_block_tensors, import_block_tensors};
 use crate::checkpoint_util::{
-    expect_tensor_shape, quantize_tensor, require_tensor_entry, tensor_from_entry, tensor_to_entry,
-    write_file_create_parents, TensorMap,
+    expect_tensor_shape, optional_tensor_entry, quantize_tensor, require_tensor_entry,
+    tensor_from_entry, tensor_to_entry, write_file_create_parents, TensorMap,
 };
 use crate::tensor_merge::average_tensors;
 use mmn_core::MmnError;
@@ -247,8 +247,13 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
     if let Some(fnorm) = model.final_norm.as_mut() {
         fnorm.gamma = tensor_from_entry(require_tensor_entry(tensors, "final_norm.gamma")?)?;
         expect_tensor_shape(&fnorm.gamma, &[d_model], "final_norm.gamma")?;
-        fnorm.beta = tensor_from_entry(require_tensor_entry(tensors, "final_norm.beta")?)?;
-        expect_tensor_shape(&fnorm.beta, &[d_model], "final_norm.beta")?;
+        // GGUF/HF RMSNorm output_norm is weight-only; beta is optional (zeros).
+        if let Some(entry) = optional_tensor_entry(tensors, "final_norm.beta") {
+            fnorm.beta = tensor_from_entry(entry)?;
+            expect_tensor_shape(&fnorm.beta, &[d_model], "final_norm.beta")?;
+        } else {
+            fnorm.beta = mmn_core::Tensor::zeros(&[d_model], true);
+        }
     }
     if let Some(lora) = model.loop_lora.as_mut() {
         let q_dim = model.shape.q_dim();

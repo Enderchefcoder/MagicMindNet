@@ -32,7 +32,7 @@ Offline regression for `magicmindnet.eval` / `ai.run_suite` / `ai.EvalHarness`.
 | `lm_unigram_train` | lm, train | Unigram encoder |
 | `lm_gqa_train` | lm, train | `n_kv_heads < n_heads` |
 | `lm_head_dim_train` | lm, train | Optional `head_dim` |
-| `lm_glint_train` | smoke, lm, glint, train | loops/RMS/SwiGLU/tied |
+| `lm_glint_train` | smoke, lm, glint, train | loops/RMS/SwiGLU/tied + `final_norm` + `lora_rank` |
 | `lm_generate_latency` | smoke, lm, generate | `generate` wall time |
 | `lm_vision_flag` | smoke, lm | `vision=True` construct + generate |
 | `cls_mean_loss` / `cls_train` / `cls_accuracy` | cls (+smoke/train) | Fixture `labels_small.json` |

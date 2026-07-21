@@ -6,6 +6,23 @@ import magicmindnet as ai
 import pytest
 
 
+def test_qwen_gguf_output_norm_weight_only_loads():
+    """Live Qwen GGUF has output_norm.weight only — must not require beta."""
+    from pathlib import Path
+
+    gguf = Path(
+        "/tmp/mmn_hub_cache/qwen_gguf/models--Qwen--Qwen3-0.6B-GGUF/"
+        "snapshots/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf"
+    )
+    if not gguf.is_file():
+        pytest.skip("Qwen GGUF cache missing")
+    bot = ai.load(str(gguf))
+    assert bot.final_norm is True
+    assert bot.head_dim == 128
+    text = bot.generate("Hi", max_new_tokens=2)
+    assert isinstance(text, str)
+
+
 def test_final_norm_default_off():
     bot = ai.Chatbot(vocab_size=64, n_layer=1, d_model=32, seed=1)
     assert bot.final_norm is False

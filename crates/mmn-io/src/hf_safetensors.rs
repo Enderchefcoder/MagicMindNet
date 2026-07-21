@@ -4,8 +4,8 @@ use crate::hf_adapt::{adapt_external_hf_tensors, fill_missing_block_layernorm_de
 use crate::block_tensors::import_block_tensors;
 use crate::chatbot_io::TokenizerSidecarRefs;
 use crate::checkpoint_util::{
-    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry, TensorMap,
-    write_file_create_parents,
+    expect_tensor_shape, optional_tensor_entry, require_tensor_entry, tensor_from_entry,
+    tensor_to_entry, TensorMap, write_file_create_parents,
 };
 use mmn_core::{MmnError, Tensor};
 use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
@@ -403,8 +403,12 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         fnorm.gamma =
             tensor_from_entry(require_tensor_entry(&json_tensors, "final_norm.gamma")?)?;
         expect_tensor_shape(&fnorm.gamma, &[d_model], "final_norm.gamma")?;
-        fnorm.beta = tensor_from_entry(require_tensor_entry(&json_tensors, "final_norm.beta")?)?;
-        expect_tensor_shape(&fnorm.beta, &[d_model], "final_norm.beta")?;
+        if let Some(entry) = optional_tensor_entry(&json_tensors, "final_norm.beta") {
+            fnorm.beta = tensor_from_entry(entry)?;
+            expect_tensor_shape(&fnorm.beta, &[d_model], "final_norm.beta")?;
+        } else {
+            fnorm.beta = mmn_core::Tensor::zeros(&[d_model], true);
+        }
     }
     if let Some(lora) = model.loop_lora.as_mut() {
         let q_dim = model.shape.q_dim();
