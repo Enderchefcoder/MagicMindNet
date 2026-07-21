@@ -41,6 +41,8 @@
 - Q3_K packs scale l>>4 high bits as scales[8 + j%4] |= high << (2*(j/4)); Q2_K uses use_mad=true qkx2 with weights=|x|.
 - Classic square MHA (Q/K both `[d,d]`) must not GQA-guess `n_heads` from largest `head_dim` — that picks `n_heads=1` and breaks HF/npz/pt loss roundtrips; skip guess when heads absent, and always export `n_heads`/`n_kv_heads` on HF.
 - Hub optional deps (`transformers`/`diffusers`/`torch`) stay out of required/dev extras; hands-on + `@pytest.mark.network` only.
+- Real `torch` in the venv makes `install_fake_torch()` a no-op; pt pickle cross-check tests must stub `_rebuild_tensor_v2` in their Unpickler `find_class` (see `tests/test_interop_pt_py.py`).
+- Shell pipelines hide exit codes unless `set -o pipefail` — use it when wrapping `verify_gate.sh | tee | tail`.
 
 # Scratchpad
 

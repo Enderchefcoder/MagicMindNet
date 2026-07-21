@@ -50,6 +50,22 @@ def case_local_native() -> None:
         ok=True,
         detail=f"gen={text!r} loss={losses} family={loaded.family}",
     )
+    # Native Diffusion via from_pretrained + train (covers the diffusion family
+    # without downloading multi-GB Hub weights).
+    fixtures = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+    diff = ai.Diffusion()
+    dpath = CACHE / "native_diff.mmn"
+    diff.save(str(dpath))
+    dloaded = ai.from_pretrained(str(dpath))
+    assert dloaded.native is not None
+    ds = ai.DatasetImageGen(file=str(fixtures / "image_gen.json"))
+    d_losses = dloaded.train(ds, epochs=1, learning_rate=0.05, batch_size=1)
+    patch = dloaded.native.sample_rgb_patch(steps=1)
+    record(
+        "local-native-diffusion",
+        ok=True,
+        detail=f"family={dloaded.family} train={d_losses} sample_shape={getattr(patch, 'shape', type(patch))}",
+    )
 
 
 def case_emotion() -> None:
@@ -146,17 +162,15 @@ def case_qwen_gguf() -> None:
         filename="Qwen3-0.6B-Q8_0.gguf",
         cache_dir=str(CACHE / "qwen_gguf"),
     )
-    # Native Chatbot if GGUF adapted; else HubModel shell.
-    detail = f"family={model.family} native={model.native is not None}"
-    if model.native is not None:
-        text = model.generate("Hi", max_new_tokens=4)
-        detail += f" gen={text!r}"
-        data = ai.DatasetCorpus(data=["hello from gguf finetune"] * 4)
-        losses = model.finetune(data, epochs=1, learning_rate=1e-3, batch_size=1)
-        detail += f" ft={losses}"
-    else:
-        # Still resolved + downloaded — mark partial success with card.
-        detail += f" notes={model.card.notes}"
+    detail = f"family={model.family} native={model.native is not None} backend={model.card.backend}"
+    if model.native is None:
+        # Prefer native Chatbot for GGUF — surface why if adaptation failed.
+        raise RuntimeError(f"expected native GGUF Chatbot, got {detail} notes={model.card.notes}")
+    text = model.generate("Hi", max_new_tokens=4)
+    detail += f" gen={text!r} head_dim={getattr(model.native, 'head_dim', None)}"
+    data = ai.DatasetCorpus(data=["hello from gguf finetune"] * 4)
+    losses = model.finetune(data, epochs=1, learning_rate=1e-3, batch_size=1)
+    detail += f" ft={losses}"
     record("Qwen3-0.6B-GGUF", ok=True, detail=detail)
 
 

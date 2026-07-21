@@ -23,9 +23,27 @@ def make_bot(seed=5):
 
 
 class _TorchStyleUnpickler(pickle.Unpickler):
-    """Mimics torch.load's unpickling: resolves globals + persistent ids."""
+    """Mimics torch.load's unpickling: resolves globals + persistent ids.
+
+    Always uses stub rebuild helpers so this works when real ``torch`` is
+    already imported (hub hands-on / optional deps) — ``install_fake_torch``
+    is a no-op once ``sys.modules['torch']`` is the real package.
+    """
+
+    @staticmethod
+    def _stub_rebuild(storage, offset, size, stride, requires_grad, hooks):
+        return {"storage": storage, "offset": offset, "size": size, "stride": stride}
 
     def find_class(self, module, name):
+        if module == "torch._utils" and name == "_rebuild_tensor_v2":
+            return self._stub_rebuild
+        if module == "torch" and name == "FloatStorage":
+            class FloatStorage:
+                pass
+
+            FloatStorage.__module__ = "torch"
+            FloatStorage.__qualname__ = "FloatStorage"
+            return FloatStorage
         _install_fake_torch()
         return getattr(sys.modules[module], name)
 
