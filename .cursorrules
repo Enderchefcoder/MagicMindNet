@@ -392,5 +392,10 @@ example-only benches as the canonical API while keeping examples as thin demos.
 [X] Suites: smoke, lm, cls, diffusion, io, hub, glint, generate, rl, train, all
 [X] CLI: `python -m magicmindnet.eval` + `examples/eval_harness.py`
 [X] Docs: benchmarks.md rewrite, eval_coverage.md, testing/API/README wiring
-[ ] Tests + smoke + verify_gate + push
+[X] Tests + smoke + verify_gate + push (602 Rust / 1171 pytest; verify_gate OK)
+
+## Lessons (eval harness)
+- Classifier train loss deltas are seed-sensitive on tiny synthetic JSON; prefer
+  `tests/fixtures/labels_small.json` + adamw epochs=20 batch=2 lr=0.05.
+- `save_arrays(path, arrays)` — path first (not arrays first).
 
