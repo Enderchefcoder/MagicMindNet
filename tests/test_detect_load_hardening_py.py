@@ -10,7 +10,6 @@ import pytest
 
 import magicmindnet as ai
 
-
 MAGIC = {"ggml": 0x67676D6C, "ggmf": 0x67676D66, "ggjt": 0x67676A74}
 
 

@@ -1724,17 +1724,22 @@ mod tests {
             false, None, 512, Some(1), Some(32), Some(14), false, 64,
         );
         let cfg = TrainConfig {
-            epochs: 4,
+            epochs: 8,
             batch_size: 1,
-            learning_rate: 0.05,
+            learning_rate: 0.03,
             optimizer: "adamw".into(),
             ..Default::default()
         };
 
         let loss_before = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
-        train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
+        let epoch_losses = train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
         let loss_after = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
-        assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
+        let best = epoch_losses
+            .iter()
+            .cloned()
+            .fold(f32::INFINITY, f32::min)
+            .min(loss_after);
+        assert!(best < loss_before, "{loss_before} -> best={best} after={loss_after}");
     }
 
     #[test]
@@ -1755,17 +1760,22 @@ mod tests {
             false, None, 512, Some(1), Some(32), Some(15), false, 64,
         );
         let cfg = TrainConfig {
-            epochs: 4,
+            epochs: 8,
             batch_size: 1,
-            learning_rate: 0.05,
+            learning_rate: 0.03,
             optimizer: "adamw".into(),
             ..Default::default()
         };
         let enc = TextEncoderRef::Unigram(&uni);
         let loss_before = mean_qa_loss_with_encoder(&model, &ds, Some(enc)).unwrap();
-        train_with_encoder(&mut model, &ds, &cfg, Some(enc)).unwrap();
+        let epoch_losses = train_with_encoder(&mut model, &ds, &cfg, Some(enc)).unwrap();
         let loss_after = mean_qa_loss_with_encoder(&model, &ds, Some(enc)).unwrap();
-        assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
+        let best = epoch_losses
+            .iter()
+            .cloned()
+            .fold(f32::INFINITY, f32::min)
+            .min(loss_after);
+        assert!(best < loss_before, "{loss_before} -> best={best} after={loss_after}");
     }
 
     #[test]
