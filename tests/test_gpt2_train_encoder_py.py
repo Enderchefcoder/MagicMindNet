@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pathlib
+
+import pytest
+
 import magicmindnet as ai
 from magicmindnet._native import DataMismatchError, Gpt2BpeEncoder, TrainConfig
-import pathlib
-import pytest
 
 FIXTURE_DIR = pathlib.Path(__file__).parent / "fixtures"
 GLINT_MINI = FIXTURE_DIR / "glint_tokenizer_mini.json"
