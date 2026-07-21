@@ -427,6 +427,7 @@ example-only benches as the canonical API while keeping examples as thin demos.
 [X] examples/train_glint2.py + generate_glint2.py (FineWeb-Edu, official tokenizer)
 [X] tests: test_glint2_exact_py, test_gpt2_train_encoder_py, test_train_glint2_example_py
 [X] continue pass — docs/API.md Glint-2 knobs + Gpt2BpeEncoder section; train_glint2.py --fast/--max-seq-len=4096; lm_glint2_exact eval task; merge/quantize guards for coda/prelude/window/max_loops; smoke_examples; 623 Rust / 1226 pytest green
+[X] ruff fix + verify_gate OK after continue
 
 
 Goal: ship MagicMindNet as a production pip package on PyPI, professional
