@@ -29,6 +29,7 @@ default-members = [
 version = "0.2.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
+license-file = "LICENSE"
 authors = ["MagicMindNet Contributors"]
 repository = "https://github.com/magicmindnet/magicmindnet"
 

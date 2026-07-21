@@ -5,6 +5,8 @@
 ### Production packaging
 - First **PyPI** release: `pip install magicmindnet` (version aligned across
   `pyproject.toml`, Cargo workspace, and `magicmindnet.__version__`)
+  — https://pypi.org/project/magicmindnet/0.2.0/
+- Manylinux2014 `cp312` wheel + sdist; `LICENSE` included in sdist via maturin `include`
 - Console scripts: `mmn-serve`, `mmn-eval`
 - Classifiers / keywords / project URLs pointed at docs site + feature parity
 - README + getting_started rewritten **pip-first**; source/maturin remains for contributors

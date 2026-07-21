@@ -73,6 +73,9 @@ manifest-path = "crates/mmn-py/Cargo.toml"
 module-name = "magicmindnet._native"
 python-source = "python"
 features = []
+include = [
+  { path = "LICENSE", format = ["sdist", "wheel"] },
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
