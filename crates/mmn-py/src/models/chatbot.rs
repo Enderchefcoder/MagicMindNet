@@ -67,6 +67,10 @@ fn build_generate_config(
     top_k: usize,
     top_p: f32,
     min_p: f32,
+    typical_p: f32,
+    mirostat: u32,
+    mirostat_tau: f32,
+    mirostat_eta: f32,
     repetition_penalty: f32,
     frequency_penalty: f32,
     presence_penalty: f32,
@@ -75,12 +79,16 @@ fn build_generate_config(
     stop_token_ids: Option<Vec<usize>>,
     stop_strings: Option<Vec<String>>,
 ) -> mmn_train::GenerateConfig {
-    mmn_train::GenerateConfig {
+    let mut cfg = mmn_train::GenerateConfig {
         max_new_tokens,
         temperature,
         top_k,
         top_p,
         min_p,
+        typical_p,
+        mirostat,
+        mirostat_tau,
+        mirostat_eta,
         repetition_penalty,
         frequency_penalty,
         presence_penalty,
@@ -88,7 +96,13 @@ fn build_generate_config(
         vision_patches,
         stop_token_ids: stop_token_ids.unwrap_or_default(),
         stop_strings: stop_strings.unwrap_or_default(),
+        ..Default::default()
+    };
+    // Keep Mirostat mu consistent with tau when using defaults.
+    if mirostat != 0 {
+        cfg.mirostat_mu = 2.0 * mirostat_tau;
     }
+    cfg
 }
 
 /// A small transformer language model you can train, chat with, and save.
@@ -579,7 +593,29 @@ impl PyChatbot {
     }
 
     /// Autoregressive continuation from `prompt` (greedy when `temperature=0`).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (
+        prompt,
+        *,
+        max_new_tokens=32,
+        temperature=0.0,
+        top_k=0,
+        top_p=0.0,
+        min_p=0.0,
+        typical_p=0.0,
+        mirostat=0,
+        mirostat_tau=5.0,
+        mirostat_eta=0.1,
+        repetition_penalty=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        use_kv_cache=true,
+        bpe_encoder=None,
+        unigram_encoder=None,
+        image_patch=None,
+        image_patches=None,
+        stop_token_ids=None,
+        stop_strings=None
+    ))]
     #[allow(clippy::too_many_arguments)]
     fn generate(
         &self,
@@ -589,6 +625,10 @@ impl PyChatbot {
         top_k: usize,
         top_p: f32,
         min_p: f32,
+        typical_p: f32,
+        mirostat: u32,
+        mirostat_tau: f32,
+        mirostat_eta: f32,
         repetition_penalty: f32,
         frequency_penalty: f32,
         presence_penalty: f32,
@@ -609,6 +649,10 @@ impl PyChatbot {
             top_k,
             top_p,
             min_p,
+            typical_p,
+            mirostat,
+            mirostat_tau,
+            mirostat_eta,
             repetition_penalty,
             frequency_penalty,
             presence_penalty,
@@ -620,8 +664,102 @@ impl PyChatbot {
         mmn_train::generate_text(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
 
+    /// Like `generate`, but returns one decoded string piece per new token.
+    #[pyo3(signature = (
+        prompt,
+        *,
+        max_new_tokens=32,
+        temperature=0.0,
+        top_k=0,
+        top_p=0.0,
+        min_p=0.0,
+        typical_p=0.0,
+        mirostat=0,
+        mirostat_tau=5.0,
+        mirostat_eta=0.1,
+        repetition_penalty=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        use_kv_cache=true,
+        bpe_encoder=None,
+        unigram_encoder=None,
+        image_patch=None,
+        image_patches=None,
+        stop_token_ids=None,
+        stop_strings=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn generate_stream(
+        &self,
+        prompt: &str,
+        max_new_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+        top_p: f32,
+        min_p: f32,
+        typical_p: f32,
+        mirostat: u32,
+        mirostat_tau: f32,
+        mirostat_eta: f32,
+        repetition_penalty: f32,
+        frequency_penalty: f32,
+        presence_penalty: f32,
+        use_kv_cache: bool,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
+        image_patch: Option<Vec<f32>>,
+        image_patches: Option<Vec<Vec<f32>>>,
+        stop_token_ids: Option<Vec<usize>>,
+        stop_strings: Option<Vec<String>>,
+    ) -> PyResult<Vec<String>> {
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let vision_patches =
+            resolve_generate_vision_patches(&self.inner, prompt, image_patch, image_patches)?;
+        let cfg = build_generate_config(
+            max_new_tokens,
+            temperature,
+            top_k,
+            top_p,
+            min_p,
+            typical_p,
+            mirostat,
+            mirostat_tau,
+            mirostat_eta,
+            repetition_penalty,
+            frequency_penalty,
+            presence_penalty,
+            use_kv_cache,
+            vision_patches,
+            stop_token_ids,
+            stop_strings,
+        );
+        mmn_train::generate_text_stream(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
+    }
+
     /// Sample new token ids after `prompt` (excludes prompt tokens).
-    #[pyo3(signature = (prompt, *, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=true, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, stop_token_ids=None, stop_strings=None))]
+    #[pyo3(signature = (
+        prompt,
+        *,
+        max_new_tokens=32,
+        temperature=0.0,
+        top_k=0,
+        top_p=0.0,
+        min_p=0.0,
+        typical_p=0.0,
+        mirostat=0,
+        mirostat_tau=5.0,
+        mirostat_eta=0.1,
+        repetition_penalty=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        use_kv_cache=true,
+        bpe_encoder=None,
+        unigram_encoder=None,
+        image_patch=None,
+        image_patches=None,
+        stop_token_ids=None,
+        stop_strings=None
+    ))]
     #[allow(clippy::too_many_arguments)]
     fn generate_tokens(
         &self,
@@ -631,6 +769,10 @@ impl PyChatbot {
         top_k: usize,
         top_p: f32,
         min_p: f32,
+        typical_p: f32,
+        mirostat: u32,
+        mirostat_tau: f32,
+        mirostat_eta: f32,
         repetition_penalty: f32,
         frequency_penalty: f32,
         presence_penalty: f32,
@@ -651,6 +793,10 @@ impl PyChatbot {
             top_k,
             top_p,
             min_p,
+            typical_p,
+            mirostat,
+            mirostat_tau,
+            mirostat_eta,
             repetition_penalty,
             frequency_penalty,
             presence_penalty,
@@ -661,4 +807,139 @@ impl PyChatbot {
         );
         mmn_train::generate_token_ids(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
+
+    /// Mean-pool hidden states for one string or a list of strings.
+    #[pyo3(signature = (texts, *, bpe_encoder=None, unigram_encoder=None))]
+    fn embed(
+        &self,
+        py: Python<'_>,
+        texts: &Bound<'_, PyAny>,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
+    ) -> PyResult<PyObject> {
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let max_ctx = if self.inner.use_learned_pos_embed || self.inner.uses_rope() {
+            self.inner.max_seq_len
+        } else {
+            512
+        };
+        let vocab = self.inner.shape.vocab_size;
+        if let Ok(s) = texts.extract::<&str>() {
+            let ids = mmn_train::tokenize_for_generate(s, vocab, enc, max_ctx);
+            let v = mmn_train::embed_mean_pool(&self.inner, &ids).map_err(mmn_err_to_py)?;
+            return Ok(v.into_pyobject(py)?.into_any().unbind());
+        }
+        let batch: Vec<String> = texts.extract()?;
+        let mut out: Vec<Vec<f32>> = Vec::with_capacity(batch.len());
+        for s in &batch {
+            let ids = mmn_train::tokenize_for_generate(s, vocab, enc, max_ctx);
+            out.push(mmn_train::embed_mean_pool(&self.inner, &ids).map_err(mmn_err_to_py)?);
+        }
+        Ok(out.into_pyobject(py)?.into_any().unbind())
+    }
+
+    /// Format ChatML messages and generate an assistant reply.
+    #[pyo3(signature = (
+        messages,
+        *,
+        max_new_tokens=32,
+        temperature=0.0,
+        top_k=0,
+        top_p=0.0,
+        min_p=0.0,
+        typical_p=0.0,
+        mirostat=0,
+        mirostat_tau=5.0,
+        mirostat_eta=0.1,
+        repetition_penalty=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+        use_kv_cache=true,
+        bpe_encoder=None,
+        unigram_encoder=None,
+        stop_token_ids=None,
+        stop_strings=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn chat_messages(
+        &self,
+        messages: &Bound<'_, PyAny>,
+        max_new_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+        top_p: f32,
+        min_p: f32,
+        typical_p: f32,
+        mirostat: u32,
+        mirostat_tau: f32,
+        mirostat_eta: f32,
+        repetition_penalty: f32,
+        frequency_penalty: f32,
+        presence_penalty: f32,
+        use_kv_cache: bool,
+        bpe_encoder: Option<&PyBytePairEncoder>,
+        unigram_encoder: Option<&PyUnigramEncoder>,
+        stop_token_ids: Option<Vec<usize>>,
+        stop_strings: Option<Vec<String>>,
+    ) -> PyResult<String> {
+        let list = messages.downcast::<pyo3::types::PyList>()?;
+        let mut pairs: Vec<(String, String)> = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            let dict = item.downcast::<pyo3::types::PyDict>()?;
+            let role: String = dict
+                .get_item("role")?
+                .ok_or_else(|| PyValueError::new_err("chat message missing 'role'"))?
+                .extract()?;
+            let content: String = dict
+                .get_item("content")?
+                .ok_or_else(|| PyValueError::new_err("chat message missing 'content'"))?
+                .extract()?;
+            pairs.push((role, content));
+        }
+        let prompt = mmn_train::format_chat_messages(&pairs, true);
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let cfg = build_generate_config(
+            max_new_tokens,
+            temperature,
+            top_k,
+            top_p,
+            min_p,
+            typical_p,
+            mirostat,
+            mirostat_tau,
+            mirostat_eta,
+            repetition_penalty,
+            frequency_penalty,
+            presence_penalty,
+            use_kv_cache,
+            None,
+            stop_token_ids,
+            stop_strings,
+        );
+        mmn_train::generate_text(&self.inner, &prompt, enc, &cfg).map_err(mmn_err_to_py)
+    }
+}
+
+/// Format OpenAI/Ollama-style chat messages as ChatML.
+#[pyfunction]
+#[pyo3(name = "format_chat_messages", signature = (messages, *, add_generation_prompt=true))]
+pub fn format_chat_messages_py(
+    messages: &Bound<'_, PyAny>,
+    add_generation_prompt: bool,
+) -> PyResult<String> {
+    let list = messages.downcast::<pyo3::types::PyList>()?;
+    let mut pairs: Vec<(String, String)> = Vec::with_capacity(list.len());
+    for item in list.iter() {
+        let dict = item.downcast::<pyo3::types::PyDict>()?;
+        let role: String = dict
+            .get_item("role")?
+            .ok_or_else(|| PyValueError::new_err("chat message missing 'role'"))?
+            .extract()?;
+        let content: String = dict
+            .get_item("content")?
+            .ok_or_else(|| PyValueError::new_err("chat message missing 'content'"))?
+            .extract()?;
+        pairs.push((role, content));
+    }
+    Ok(mmn_train::format_chat_messages(&pairs, add_generation_prompt))
 }

@@ -81,6 +81,8 @@ bot = ai.Chatbot(vocab_size=512, n_layer=2, d_model=64, use_learned_pos_embed=Tr
 
 See [docs/position_encoding_coverage.md](docs/position_encoding_coverage.md), `examples/learned_pos_embed_roundtrip.py`, and `examples/rope_roundtrip.py`.
 
+Feature parity (llama.cpp sampling, Ollama stream/embed, ChatML, cosine LR): see [docs/feature_parity.md](docs/feature_parity.md).
+
 Classification:
 
 ```python

@@ -15,8 +15,9 @@ use rand::Rng;
 mod generate;
 
 pub use generate::{
-    decode_tokens, generate_text, generate_token_ids, tokenize_for_generate, truncate_at_stop_strings,
-    GenerateConfig,
+    apply_mirostat_v2_truncate, apply_typical_p, decode_tokens, embed_mean_pool,
+    format_chat_messages, generate_text, generate_text_stream, generate_token_ids,
+    tokenize_for_generate, truncate_at_stop_strings, GenerateConfig,
 };
 
 #[derive(Clone, Debug)]
@@ -26,6 +27,12 @@ pub struct TrainConfig {
     pub cuda: bool,
     pub optimizer: String,
     pub learning_rate: f32,
+    /// AdamW weight decay (default `0.01`, matching `AdamWConfig`).
+    pub weight_decay: f32,
+    /// `"constant"` (default) or `"cosine"` with optional warmup.
+    pub lr_schedule: String,
+    /// Warmup steps for cosine schedule (`0` = no warmup).
+    pub warmup_steps: usize,
     /// Print per-epoch mean loss during training.
     pub verbose: bool,
 }
@@ -38,6 +45,9 @@ impl Default for TrainConfig {
             cuda: false,
             optimizer: "hybrid".into(),
             learning_rate: 3e-4,
+            weight_decay: 0.01,
+            lr_schedule: "constant".into(),
+            warmup_steps: 0,
             verbose: false,
         }
     }
@@ -46,11 +56,15 @@ impl Default for TrainConfig {
 /// Optimizer names accepted by `TrainConfig.optimizer`.
 pub const VALID_OPTIMIZERS: [&str; 3] = ["adamw", "muon", "hybrid"];
 
+/// Learning-rate schedule names accepted by `TrainConfig.lr_schedule`.
+pub const VALID_LR_SCHEDULES: [&str; 2] = ["constant", "cosine"];
+
 /// Validate `TrainConfig.optimizer` and resolve the hybrid-Muon routing flag.
 ///
 /// `"muon"` trains matrix weights with Muon and vector weights with AdamW,
 /// which is exactly the hybrid path (pure Muon is undefined for 1-D params).
 pub fn resolve_use_hybrid(config: &TrainConfig) -> Result<bool> {
+    validate_train_config(config)?;
     match config.optimizer.as_str() {
         "adamw" => Ok(false),
         "muon" | "hybrid" => Ok(true),
@@ -59,6 +73,75 @@ pub fn resolve_use_hybrid(config: &TrainConfig) -> Result<bool> {
                 "Unknown optimizer {other:?}. Valid options: \"adamw\", \"muon\", \"hybrid\"."
             ),
         }),
+    }
+}
+
+/// Validate optimizer and learning-rate schedule fields.
+pub fn validate_train_config(config: &TrainConfig) -> Result<()> {
+    if !VALID_OPTIMIZERS.contains(&config.optimizer.as_str()) {
+        return Err(mmn_core::MmnError::Other {
+            message: format!(
+                "Unknown optimizer {:?}. Valid options: \"adamw\", \"muon\", \"hybrid\".",
+                config.optimizer
+            ),
+        });
+    }
+    if !VALID_LR_SCHEDULES.contains(&config.lr_schedule.as_str()) {
+        return Err(mmn_core::MmnError::Other {
+            message: format!(
+                "Unknown lr_schedule {:?}. Valid options: \"constant\", \"cosine\".",
+                config.lr_schedule
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Learning rate at global optimizer `step` (0-indexed) given `total_steps`.
+pub fn scheduled_lr(config: &TrainConfig, step: usize, total_steps: usize) -> f32 {
+    let lr_max = config.learning_rate;
+    match config.lr_schedule.as_str() {
+        "cosine" => {
+            let warmup = config.warmup_steps;
+            if warmup > 0 && step < warmup {
+                lr_max * (step as f32) / (warmup as f32)
+            } else {
+                let lr_min = 0.1 * lr_max;
+                let denom = (total_steps.saturating_sub(warmup)).max(1) as f32;
+                let progress = ((step.saturating_sub(warmup)) as f32 / denom).min(1.0);
+                lr_min + 0.5 * (lr_max - lr_min) * (1.0 + (std::f32::consts::PI * progress).cos())
+            }
+        }
+        _ => lr_max,
+    }
+}
+
+/// Estimate optimizer steps: `epochs * ceil(n_rows / batch_size)`.
+pub fn estimate_total_steps(epochs: usize, n_rows: usize, batch_size: usize) -> usize {
+    let bs = batch_size.max(1);
+    let per_epoch = n_rows.div_ceil(bs).max(1);
+    epochs.saturating_mul(per_epoch).max(1)
+}
+
+fn adamw_config_from_train(config: &TrainConfig) -> AdamWConfig {
+    AdamWConfig {
+        lr: config.learning_rate,
+        weight_decay: config.weight_decay,
+        ..Default::default()
+    }
+}
+
+fn apply_scheduled_lr(
+    config: &TrainConfig,
+    step: usize,
+    total_steps: usize,
+    adamw: &mut AdamW,
+    hybrid: Option<&mut HybridOptimizer>,
+) {
+    let lr = scheduled_lr(config, step, total_steps);
+    adamw.config.lr = lr;
+    if let Some(h) = hybrid {
+        h.adamw.config.lr = lr;
     }
 }
 
@@ -341,21 +424,15 @@ pub fn train_corpus_with_encoder(
     mmn_models::validate_dataset_for_chatbot(&dataset.meta.dataset_type)?;
     let use_hybrid = resolve_use_hybrid(config)?;
     enable_grad(true);
-    let mut hybrid = HybridOptimizer::new(
-        MuonConfig::default(),
-        AdamWConfig {
-            lr: config.learning_rate,
-            ..Default::default()
-        },
-    );
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    let aw_cfg = adamw_config_from_train(config);
+    let mut hybrid = HybridOptimizer::new(MuonConfig::default(), aw_cfg.clone());
+    let mut adamw = AdamW::new(aw_cfg);
     let vocab = model.shape.vocab_size;
     let seq = train_seq_len(model);
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let total_steps = estimate_total_steps(config.epochs, dataset.rows.len(), batch_size);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
 
     for epoch in 0..config.epochs {
@@ -376,6 +453,13 @@ pub fn train_corpus_with_encoder(
             };
             valid_steps += 1;
             if batch_size == 1 {
+                apply_scheduled_lr(
+                    config,
+                    global_step,
+                    total_steps,
+                    &mut adamw,
+                    Some(&mut hybrid),
+                );
                 loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
@@ -386,6 +470,7 @@ pub fn train_corpus_with_encoder(
                     None,
                     None,
                 )?;
+                global_step += 1;
             } else {
                 micro += 1;
                 loss_sum += model.train_step_lm(
@@ -400,6 +485,13 @@ pub fn train_corpus_with_encoder(
                 )?;
                 let flush = micro >= batch_size || i + 1 == indices.len();
                 if flush {
+                    apply_scheduled_lr(
+                        config,
+                        global_step,
+                        total_steps,
+                        &mut adamw,
+                        Some(&mut hybrid),
+                    );
                     model.apply_accumulated_lm_grads(
                         &accum,
                         &mut hybrid,
@@ -409,6 +501,7 @@ pub fn train_corpus_with_encoder(
                     )?;
                     accum.clear();
                     micro = 0;
+                    global_step += 1;
                 }
             }
         }
@@ -455,21 +548,15 @@ pub fn train_with_encoder(
     mmn_models::validate_dataset_for_chatbot(&dataset.meta.dataset_type)?;
     let use_hybrid = resolve_use_hybrid(config)?;
     enable_grad(true);
-    let mut hybrid = HybridOptimizer::new(
-        MuonConfig::default(),
-        AdamWConfig {
-            lr: config.learning_rate,
-            ..Default::default()
-        },
-    );
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    let aw_cfg = adamw_config_from_train(config);
+    let mut hybrid = HybridOptimizer::new(MuonConfig::default(), aw_cfg.clone());
+    let mut adamw = AdamW::new(aw_cfg);
     let vocab = model.shape.vocab_size;
     let seq = train_seq_len(model);
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), batch_size);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
 
     for epoch in 0..config.epochs {
@@ -500,6 +587,13 @@ pub fn train_with_encoder(
                 targets
             };
             if batch_size == 1 {
+                apply_scheduled_lr(
+                    config,
+                    global_step,
+                    total_steps,
+                    &mut adamw,
+                    Some(&mut hybrid),
+                );
                 loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
@@ -510,6 +604,7 @@ pub fn train_with_encoder(
                     None,
                     patch_list.as_deref(),
                 )?;
+                global_step += 1;
             } else {
                 micro += 1;
                 loss_sum += model.train_step_lm(
@@ -524,6 +619,13 @@ pub fn train_with_encoder(
                 )?;
                 let flush = micro >= batch_size || i + 1 == indices.len();
                 if flush {
+                    apply_scheduled_lr(
+                        config,
+                        global_step,
+                        total_steps,
+                        &mut adamw,
+                        Some(&mut hybrid),
+                    );
                     model.apply_accumulated_lm_grads(
                         &accum,
                         &mut hybrid,
@@ -533,6 +635,7 @@ pub fn train_with_encoder(
                     )?;
                     accum.clear();
                     micro = 0;
+                    global_step += 1;
                 }
             }
         }
@@ -566,12 +669,11 @@ pub fn train_classifier(
     validate_dataset_for_classifier(&dataset.meta.dataset_type)?;
     resolve_use_hybrid(config)?;
     enable_grad(true);
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    let mut adamw = AdamW::new(adamw_config_from_train(config));
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), batch_size);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
     for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
@@ -598,7 +700,9 @@ pub fn train_classifier(
             };
             valid_step += 1;
             if batch_size == 1 {
+                apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
                 loss_sum += model.train_step(text, label_idx, &mut adamw, &mut param_id, None)?;
+                global_step += 1;
             } else {
                 micro += 1;
                 loss_sum += model.train_step(
@@ -610,6 +714,7 @@ pub fn train_classifier(
                 )?;
                 let flush = micro >= batch_size || valid_step == total_valid;
                 if flush {
+                    apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
                     model.apply_accumulated_classifier_grads(
                         &accum,
                         &mut adamw,
@@ -617,6 +722,7 @@ pub fn train_classifier(
                     )?;
                     accum.clear();
                     micro = 0;
+                    global_step += 1;
                 }
             }
         }
@@ -647,11 +753,11 @@ pub fn train_diffusion(
         });
     }
     enable_grad(true);
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    validate_train_config(config)?;
+    let mut adamw = AdamW::new(adamw_config_from_train(config));
     let mut param_id = 0usize;
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), 1);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
     for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
@@ -666,7 +772,9 @@ pub fn train_diffusion(
             let path = dataset.resolve_image_path(&sample.image_path);
             let x = mmn_data::rgb_nchw_tensor_from_image_path(&path)?;
             let t = rng.gen_range(0..1000);
+            apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
             loss_sum += model.train_step_denoise(&x, t, &mut adamw, &mut param_id)?;
+            global_step += 1;
         }
         let mean = loss_sum / indices.len() as f32;
         report_epoch(config, epoch, mean);
@@ -691,11 +799,11 @@ pub fn train_diffusion_edit(
         });
     }
     enable_grad(true);
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    validate_train_config(config)?;
+    let mut adamw = AdamW::new(adamw_config_from_train(config));
     let mut param_id = 0usize;
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), 1);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
     for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
@@ -712,7 +820,9 @@ pub fn train_diffusion_edit(
             let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path)?;
             let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path)?;
             let t = rng.gen_range(0..1000);
+            apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
             loss_sum += model.train_step_denoise_masked(&x, &mask, t, &mut adamw, &mut param_id)?;
+            global_step += 1;
         }
         let mean = loss_sum / indices.len() as f32;
         report_epoch(config, epoch, mean);

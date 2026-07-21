@@ -50,6 +50,7 @@ Regression matrices live under `docs/*_coverage.md`. Extend the relevant doc whe
 | [quantize_coverage.md](quantize_coverage.md) | int8/int4 quantize parity |
 | [image_coverage.md](image_coverage.md) | ImageGen/ImageEdit fixtures |
 | [diffusion_coverage.md](diffusion_coverage.md) | Diffusion smoke / dataset validation |
+| [feature_parity.md](feature_parity.md) | PyTorch / llama.cpp / Ollama parity matrix (Wave 1+) |
 | [limitations.md](limitations.md) | Alpha gaps and post-alpha roadmap |
 | [mmn_py_coverage.md](mmn_py_coverage.md) | Split `mmn-py` module map + binding smoke tests |
 | [mmn_py_split_plan.md](mmn_py_split_plan.md) | `mmn-py` split (complete — pass 78) |

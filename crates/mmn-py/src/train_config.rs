@@ -12,6 +12,16 @@ pub(crate) fn validate_optimizer_name(optimizer: &str) -> PyResult<()> {
     }
 }
 
+pub(crate) fn validate_lr_schedule(schedule: &str) -> PyResult<()> {
+    if mmn_train::VALID_LR_SCHEDULES.contains(&schedule) {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "Unknown lr_schedule {schedule:?}. Valid options: \"constant\", \"cosine\"."
+        )))
+    }
+}
+
 /// Training settings shared by `Train`, `TrainClassifier`, and `TrainDiffusion`.
 #[pyclass(name = "TrainConfig")]
 pub struct PyTrainConfig {
@@ -26,28 +36,52 @@ pub struct PyTrainConfig {
     #[pyo3(get, set)]
     pub learning_rate: f32,
     #[pyo3(get, set)]
+    pub weight_decay: f32,
+    #[pyo3(get, set)]
+    pub lr_schedule: String,
+    #[pyo3(get, set)]
+    pub warmup_steps: usize,
+    #[pyo3(get, set)]
     pub verbose: bool,
 }
 
 #[pymethods]
 impl PyTrainConfig {
     #[new]
-    #[pyo3(signature = (epochs=1, batch_size=8, cuda=false, optimizer="hybrid", learning_rate=3e-4, verbose=false))]
+    #[pyo3(signature = (
+        epochs=1,
+        batch_size=8,
+        cuda=false,
+        optimizer="hybrid",
+        learning_rate=3e-4,
+        weight_decay=0.01,
+        lr_schedule="constant",
+        warmup_steps=0,
+        verbose=false
+    ))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         epochs: usize,
         batch_size: usize,
         cuda: bool,
         optimizer: &str,
         learning_rate: f32,
+        weight_decay: f32,
+        lr_schedule: &str,
+        warmup_steps: usize,
         verbose: bool,
     ) -> PyResult<Self> {
         validate_optimizer_name(optimizer)?;
+        validate_lr_schedule(lr_schedule)?;
         Ok(Self {
             epochs,
             batch_size,
             cuda,
             optimizer: optimizer.to_string(),
             learning_rate,
+            weight_decay,
+            lr_schedule: lr_schedule.to_string(),
+            warmup_steps,
             verbose,
         })
     }
@@ -55,12 +89,15 @@ impl PyTrainConfig {
     fn __repr__(&self) -> String {
         let py_bool = |b: bool| if b { "True" } else { "False" };
         format!(
-            "TrainConfig(epochs={}, batch_size={}, cuda={}, optimizer={:?}, learning_rate={}, verbose={})",
+            "TrainConfig(epochs={}, batch_size={}, cuda={}, optimizer={:?}, learning_rate={}, weight_decay={}, lr_schedule={:?}, warmup_steps={}, verbose={})",
             self.epochs,
             self.batch_size,
             py_bool(self.cuda),
             self.optimizer,
             self.learning_rate,
+            self.weight_decay,
+            self.lr_schedule,
+            self.warmup_steps,
             py_bool(self.verbose)
         )
     }
@@ -74,6 +111,9 @@ impl PyTrainConfig {
             cuda: self.cuda,
             optimizer: self.optimizer.clone(),
             learning_rate: self.learning_rate,
+            weight_decay: self.weight_decay,
+            lr_schedule: self.lr_schedule.clone(),
+            warmup_steps: self.warmup_steps,
             verbose: self.verbose,
         }
     }
@@ -113,5 +153,6 @@ pub(crate) fn resolve_train_config(
         cfg.verbose = v;
     }
     validate_optimizer_name(&cfg.optimizer)?;
+    validate_lr_schedule(&cfg.lr_schedule)?;
     Ok(cfg)
 }

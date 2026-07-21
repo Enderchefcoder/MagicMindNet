@@ -409,4 +409,22 @@ example-only benches as the canonical API while keeping examples as thin demos.
 [X] LoopLora: per-loop down/up, QKV deltas in attn, train grads, IO, Python
 [X] Docs/examples/eval + verify_gate + push
 [X] Fix: optional final_norm.beta for GGUF RMS output_norm (Qwen load)
+[X] verify_gate OK (607 Rust / 1179 pytest)
+
+## Task: Feature parity wave — PyTorch / llama.cpp / Ollama
+
+Goal: close high-impact gaps vs llama.cpp sampling, Ollama serve/chat/embed,
+and PyTorch training knobs. Full ecosystem parity is multi-wave; this wave
+ships the biggest user-facing holes with tests + `docs/feature_parity.md`.
+
+Wave 1 (this session):
+[ ] Mirostat v2 + typical_p sampling (llama.cpp)
+[ ] generate_stream token chunks (Ollama streaming)
+[ ] Chatbot.embed / embed_texts mean-pool (Ollama embeddings)
+[ ] TrainConfig weight_decay + lr_schedule cosine + warmup_steps (PyTorch)
+[ ] format_chat_messages helper (OpenAI/Ollama messages)
+[ ] docs/feature_parity.md matrix + eval tasks + verify_gate
+
+Later waves (documented, not blocking): grammar/GBNF, OpenAI HTTP server,
+dropout, flash-attn, speculative decoding, Modelfile, tool-calling JSON schema.
 

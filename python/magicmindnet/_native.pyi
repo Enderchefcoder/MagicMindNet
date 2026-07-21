@@ -161,6 +161,9 @@ class TrainConfig:
     cuda: bool
     optimizer: str
     learning_rate: float
+    weight_decay: float
+    lr_schedule: str
+    warmup_steps: int
     verbose: bool
     def __init__(
         self,
@@ -169,6 +172,9 @@ class TrainConfig:
         cuda: bool = False,
         optimizer: str = "hybrid",
         learning_rate: float = 3e-4,
+        weight_decay: float = 0.01,
+        lr_schedule: str = "constant",
+        warmup_steps: int = 0,
         verbose: bool = False,
     ) -> None: ...
 
@@ -319,6 +325,10 @@ class Chatbot:
         top_k: int = 0,
         top_p: float = 0.0,
         min_p: float = 0.0,
+        typical_p: float = 0.0,
+        mirostat: int = 0,
+        mirostat_tau: float = 5.0,
+        mirostat_eta: float = 0.1,
         repetition_penalty: float = 1.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
@@ -330,6 +340,30 @@ class Chatbot:
         stop_token_ids: list[int] | None = None,
         stop_strings: list[str] | None = None,
     ) -> str: ...
+    def generate_stream(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int = 32,
+        temperature: float = 0.0,
+        top_k: int = 0,
+        top_p: float = 0.0,
+        min_p: float = 0.0,
+        typical_p: float = 0.0,
+        mirostat: int = 0,
+        mirostat_tau: float = 5.0,
+        mirostat_eta: float = 0.1,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        use_kv_cache: bool = True,
+        bpe_encoder: BytePairEncoder | None = None,
+        unigram_encoder: UnigramEncoder | None = None,
+        image_patch: list[float] | None = None,
+        image_patches: list[list[float]] | None = None,
+        stop_token_ids: list[int] | None = None,
+        stop_strings: list[str] | None = None,
+    ) -> list[str]: ...
     def generate_tokens(
         self,
         prompt: str,
@@ -339,6 +373,10 @@ class Chatbot:
         top_k: int = 0,
         top_p: float = 0.0,
         min_p: float = 0.0,
+        typical_p: float = 0.0,
+        mirostat: int = 0,
+        mirostat_tau: float = 5.0,
+        mirostat_eta: float = 0.1,
         repetition_penalty: float = 1.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
@@ -350,6 +388,41 @@ class Chatbot:
         stop_token_ids: list[int] | None = None,
         stop_strings: list[str] | None = None,
     ) -> list[int]: ...
+    def embed(
+        self,
+        texts: str | list[str],
+        *,
+        bpe_encoder: BytePairEncoder | None = None,
+        unigram_encoder: UnigramEncoder | None = None,
+    ) -> list[float] | list[list[float]]: ...
+    def chat_messages(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_new_tokens: int = 32,
+        temperature: float = 0.0,
+        top_k: int = 0,
+        top_p: float = 0.0,
+        min_p: float = 0.0,
+        typical_p: float = 0.0,
+        mirostat: int = 0,
+        mirostat_tau: float = 5.0,
+        mirostat_eta: float = 0.1,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        use_kv_cache: bool = True,
+        bpe_encoder: BytePairEncoder | None = None,
+        unigram_encoder: UnigramEncoder | None = None,
+        stop_token_ids: list[int] | None = None,
+        stop_strings: list[str] | None = None,
+    ) -> str: ...
+
+def format_chat_messages(
+    messages: list[dict[str, str]],
+    *,
+    add_generation_prompt: bool = True,
+) -> str: ...
 
 class Classifier:
     def __init__(self, num_labels: int, input_dim: int, seed: int | None = None) -> None: ...

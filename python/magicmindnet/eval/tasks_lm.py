@@ -208,6 +208,67 @@ def lm_generate_latency(*, seed: int = 1, work_dir: Path | None = None) -> TaskR
 
 
 @register(
+    "gen_typical_p_smoke",
+    suites=("smoke", "generate"),
+    description="generate with typical_p and mirostat kwargs",
+)
+def gen_typical_p_smoke(*, seed: int = 1, work_dir: Path | None = None) -> TaskResult:
+    del work_dir
+    bot = tiny_chatbot(seed, n_layer=1)
+    t0 = time.perf_counter()
+    a = bot.generate("hi", max_new_tokens=4, temperature=0.8, typical_p=0.9)
+    b = bot.generate("hi", max_new_tokens=4, temperature=0.8, mirostat=2)
+    ms = (time.perf_counter() - t0) * 1000
+    return TaskResult(
+        name="gen_typical_p_smoke",
+        ok=isinstance(a, str) and isinstance(b, str),
+        elapsed_ms=ms,
+        metrics=[Metric("generate_ms", ms, unit="ms", higher_is_better=False)],
+    )
+
+
+@register(
+    "stream_generate",
+    suites=("smoke", "generate"),
+    description="generate_stream chunks join to generate",
+)
+def stream_generate(*, seed: int = 2, work_dir: Path | None = None) -> TaskResult:
+    del work_dir
+    bot = tiny_chatbot(seed, n_layer=1)
+    t0 = time.perf_counter()
+    chunks = bot.generate_stream("ab", max_new_tokens=5, temperature=0.0)
+    full = bot.generate("ab", max_new_tokens=5, temperature=0.0)
+    ms = (time.perf_counter() - t0) * 1000
+    ok = isinstance(chunks, list) and "".join(chunks) == full
+    return TaskResult(
+        name="stream_generate",
+        ok=ok,
+        elapsed_ms=ms,
+        metrics=[Metric("n_chunks", float(len(chunks)))],
+    )
+
+
+@register(
+    "embed_mean_pool",
+    suites=("smoke", "generate"),
+    description="Chatbot.embed mean-pool d_model vector",
+)
+def embed_mean_pool(*, seed: int = 3, work_dir: Path | None = None) -> TaskResult:
+    del work_dir
+    bot = tiny_chatbot(seed, n_layer=1)
+    t0 = time.perf_counter()
+    v = bot.embed("hello")
+    ms = (time.perf_counter() - t0) * 1000
+    ok = isinstance(v, list) and len(v) == bot.d_model
+    return TaskResult(
+        name="embed_mean_pool",
+        ok=ok,
+        elapsed_ms=ms,
+        metrics=[Metric("d_model", float(len(v) if isinstance(v, list) else 0))],
+    )
+
+
+@register(
     "merge_chatbot_roundtrip",
     suites=("smoke", "lm", "io"),
     description="merge(Chatbot, Chatbot) preserves shape",

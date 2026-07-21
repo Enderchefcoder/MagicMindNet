@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0 — 2026-07-21
+
+### Added (feature parity Wave 1)
+- llama.cpp sampling: `typical_p`, Mirostat v2 (`mirostat` / `mirostat_tau` / `mirostat_eta`)
+- Ollama-style `Chatbot.generate_stream` (token chunks) and `Chatbot.embed` (mean-pool hidden)
+- ChatML: `ai.format_chat_messages` + `Chatbot.chat_messages`
+- PyTorch-style `TrainConfig`: `weight_decay`, `lr_schedule` (`constant`|`cosine`), `warmup_steps`
+- Docs: [docs/feature_parity.md](docs/feature_parity.md); eval tasks `gen_typical_p_smoke`,
+  `stream_generate`, `embed_mean_pool`
+- Tests: `tests/test_feature_parity_py.py` + Rust sampling helpers
+
 ## 0.1.0 — 2026-07-06
 
 ### Added (final_norm + LoopLoRA QKV adapters)

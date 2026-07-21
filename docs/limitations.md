@@ -53,5 +53,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 | Production tokenizer | this doc § Training | ~~BPE trainer~~; **UnigramEncoder** (`mmn-unigram-v1`) + Viterbi; SentencePiece-scale vocab next |
 | Vision encoder | [vision_coverage.md](vision_coverage.md) | ~~DatasetQA image file loading~~; multi-patch tiles done |
 | HF binary safetensors | this doc § IO | ~~Chatbot + Classifier export/import~~; ~~native GQA forward~~ done |
+| Feature parity Wave 1 | [feature_parity.md](feature_parity.md) | ~~typical_p / Mirostat v2 / stream / embed / cosine LR / ChatML~~ |
+| Feature parity Wave 2+ | [feature_parity.md](feature_parity.md) | grammars, tools, speculative decode (planned) |
 
 See also [optimizers_coverage.md](optimizers_coverage.md) (Muon matrix routing) and [training_coverage.md](training_coverage.md).
