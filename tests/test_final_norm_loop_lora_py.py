@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import magicmindnet as ai
 import pytest
+
+import magicmindnet as ai
 
 
 def test_qwen_gguf_output_norm_weight_only_loads():
