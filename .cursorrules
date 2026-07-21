@@ -43,6 +43,9 @@
 - Hub optional deps (`transformers`/`diffusers`/`torch`) stay out of required/dev extras; hands-on + `@pytest.mark.network` only.
 - Real `torch` in the venv makes `install_fake_torch()` a no-op; pt pickle cross-check tests must stub `_rebuild_tensor_v2` in their Unpickler `find_class` (see `tests/test_interop_pt_py.py`).
 - Shell pipelines hide exit codes unless `set -o pipefail` — use it when wrapping `verify_gate.sh | tee | tail`.
+- Classifier train loss deltas are seed-sensitive on tiny ad-hoc JSON; prefer `tests/fixtures/labels_small.json` + adamw `epochs=20 batch_size=2 lr=0.05`.
+- `ai.save_arrays(path, arrays)` takes path first (swapped args look like “cannot infer format”).
+- GGUF/HF RMS `output_norm` is weight-only — `final_norm.beta` must be optional on import (zeros); requiring beta breaks Qwen/Llama GGUF loads.
 
 # Scratchpad
 
@@ -364,8 +367,8 @@ Shipped this session (verify_gate OK; 602 Rust / 1145 pytest):
 [X] Wave F — prefer_native, --list, NLLB max_length clear (~5)
 [X] Wave G — embedding/zero-shot/fill-mask/QA/vlm routes (~10)
 [X] Wave H — verify_gate + PR updates
-[ ] LoopLoRA QKV adapters (roadmap)
-[ ] final_norm / output_norm (roadmap)
+[ ] LoopLoRA QKV adapters (roadmap) — DONE: `lora_rank`
+[X] final_norm / output_norm — DONE (GGUF weight-only beta optional)
 [ ] ModelScope live download=False card without network flake
 
 Net: ~1050+ LOC in wave-2 commit alone; continue from LoopLoRA next.
@@ -405,5 +408,5 @@ example-only benches as the canonical API while keeping examples as thin demos.
 [X] final_norm: Chatbot field, forward/train, IO (GGUF output_norm map), Python
 [X] LoopLora: per-loop down/up, QKV deltas in attn, train grads, IO, Python
 [X] Docs/examples/eval + verify_gate + push
-[ ] verify_gate confirmation this session
+[X] Fix: optional final_norm.beta for GGUF RMS output_norm (Qwen load)
 
