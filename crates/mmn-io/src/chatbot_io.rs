@@ -66,6 +66,27 @@ pub fn export_safetensors<'a>(
         meta["loop_embed"] = serde_json::json!(true);
         map.insert("loop_embed.weight".to_string(), tensor_to_entry(&le.weight));
     }
+    if let Some(fnorm) = &model.final_norm {
+        meta["final_norm"] = serde_json::json!(true);
+        map.insert(
+            "final_norm.gamma".to_string(),
+            tensor_to_entry(&fnorm.gamma),
+        );
+        map.insert("final_norm.beta".to_string(), tensor_to_entry(&fnorm.beta));
+    }
+    if let Some(lora) = &model.loop_lora {
+        meta["lora_rank"] = serde_json::json!(lora.rank);
+        for i in 0..lora.n_loops {
+            map.insert(
+                format!("loop_lora.{i}.down"),
+                tensor_to_entry(&lora.down[i].weight),
+            );
+            map.insert(
+                format!("loop_lora.{i}.up"),
+                tensor_to_entry(&lora.up[i].weight),
+            );
+        }
+    }
     if model.vision {
         meta["vision_patch_dim"] = serde_json::json!(mmn_models::VISION_PATCH_DIM);
         meta["vision_rgb_dim"] = serde_json::json!(mmn_models::VISION_RGB_DIM);
@@ -223,6 +244,32 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         le.weight = tensor_from_entry(require_tensor_entry(tensors, "loop_embed.weight")?)?;
         expect_tensor_shape(&le.weight, &[model.n_loops, d_model], "loop_embed.weight")?;
     }
+    if let Some(fnorm) = model.final_norm.as_mut() {
+        fnorm.gamma = tensor_from_entry(require_tensor_entry(tensors, "final_norm.gamma")?)?;
+        expect_tensor_shape(&fnorm.gamma, &[d_model], "final_norm.gamma")?;
+        fnorm.beta = tensor_from_entry(require_tensor_entry(tensors, "final_norm.beta")?)?;
+        expect_tensor_shape(&fnorm.beta, &[d_model], "final_norm.beta")?;
+    }
+    if let Some(lora) = model.loop_lora.as_mut() {
+        let q_dim = model.shape.q_dim();
+        let kv_dim = model.shape.kv_dim();
+        for i in 0..lora.n_loops {
+            lora.down[i].weight =
+                tensor_from_entry(require_tensor_entry(tensors, &format!("loop_lora.{i}.down"))?)?;
+            expect_tensor_shape(
+                &lora.down[i].weight,
+                &[lora.rank, d_model],
+                &format!("loop_lora.{i}.down"),
+            )?;
+            lora.up[i].weight =
+                tensor_from_entry(require_tensor_entry(tensors, &format!("loop_lora.{i}.up"))?)?;
+            expect_tensor_shape(
+                &lora.up[i].weight,
+                &[q_dim + 2 * kv_dim, lora.rank],
+                &format!("loop_lora.{i}.up"),
+            )?;
+        }
+    }
     if use_learned_pos_embed {
         let pe = model.pos_embed.as_mut().ok_or_else(|| MmnError::Other {
             message: "use_learned_pos_embed meta set but model has no pos_embed".into(),
@@ -308,12 +355,16 @@ fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
         .and_then(|v| v.as_str())
         .unwrap_or("gelu");
     let loop_embed = meta["loop_embed"].as_bool().unwrap_or(false);
+    let final_norm = meta["final_norm"].as_bool().unwrap_or(false);
+    let lora_rank = meta["lora_rank"].as_u64().unwrap_or(0) as usize;
     ChatbotArchExtras {
         n_loops: n_loops.max(1),
         tie_embeddings,
         use_rms_norm: norm == "rms",
         use_swiglu: ffn == "swiglu",
         loop_embed: loop_embed && n_loops > 1,
+        final_norm,
+        lora_rank,
     }
 }
 
@@ -348,12 +399,14 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         || a.norm_kind != b.norm_kind
         || a.ffn_kind != b.ffn_kind
         || a.loop_embed.is_some() != b.loop_embed.is_some()
+        || a.final_norm.is_some() != b.final_norm.is_some()
+        || a.loop_lora.as_ref().map(|l| l.rank) != b.loop_lora.as_ref().map(|l| l.rank)
     {
         return Err(MmnError::ModelMismatch {
             message: "Cannot merge models with different Glint-style arch settings".into(),
-            fix: "Use two models with the same n_loops, tie_embeddings, norm, ffn, and loop_embed."
+            fix: "Use two models with the same n_loops, tie_embeddings, norm, ffn, loop_embed, final_norm, and lora_rank."
                 .into(),
-            explanation: "merge() requires matching loop/norm/FFN/tie configuration.".into(),
+            explanation: "merge() requires matching loop/norm/FFN/tie/LoRA configuration.".into(),
         });
     }
     let extras = ChatbotArchExtras {
@@ -362,6 +415,8 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         use_rms_norm: a.norm_kind == "rms",
         use_swiglu: a.ffn_kind == "swiglu",
         loop_embed: a.loop_embed.is_some(),
+        final_norm: a.final_norm.is_some(),
+        lora_rank: a.loop_lora.as_ref().map(|l| l.rank).unwrap_or(0),
     };
     let mut out = Chatbot::new_with_arch(
         a.vision || b.vision,
@@ -460,6 +515,17 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
     {
         oo.weight = average_tensors(&aa.weight, &bb.weight);
     }
+    if let (Some(aa), Some(bb), Some(oo)) = (&a.final_norm, &b.final_norm, out.final_norm.as_mut())
+    {
+        oo.gamma = average_tensors(&aa.gamma, &bb.gamma);
+        oo.beta = average_tensors(&aa.beta, &bb.beta);
+    }
+    if let (Some(aa), Some(bb), Some(oo)) = (&a.loop_lora, &b.loop_lora, out.loop_lora.as_mut()) {
+        for i in 0..oo.n_loops {
+            oo.down[i].weight = average_tensors(&aa.down[i].weight, &bb.down[i].weight);
+            oo.up[i].weight = average_tensors(&aa.up[i].weight, &bb.up[i].weight);
+        }
+    }
     if out.tie_embeddings {
         out.lm_head.weight = out.embed.weight.clone();
     }
@@ -478,6 +544,16 @@ pub fn quantize_model(model: &mut Chatbot, mode: &str) -> Result<(), MmnError> {
             }
             if let Some(le) = &mut model.loop_embed {
                 quantize_tensor(&mut le.weight, scale);
+            }
+            if let Some(fnorm) = &mut model.final_norm {
+                quantize_tensor(&mut fnorm.gamma, scale);
+                quantize_tensor(&mut fnorm.beta, scale);
+            }
+            if let Some(lora) = &mut model.loop_lora {
+                for i in 0..lora.n_loops {
+                    quantize_tensor(&mut lora.down[i].weight, scale);
+                    quantize_tensor(&mut lora.up[i].weight, scale);
+                }
             }
             if let Some(proj) = &mut model.vision_patch_proj {
                 quantize_tensor(&mut proj.weight, scale);
@@ -562,6 +638,12 @@ pub fn export_bin(model: &Chatbot, path: &str) -> Result<(), MmnError> {
     }
     if model.loop_embed.is_some() {
         json["loop_embed"] = serde_json::json!(true);
+    }
+    if model.final_norm.is_some() {
+        json["final_norm"] = serde_json::json!(true);
+    }
+    if let Some(lora) = &model.loop_lora {
+        json["lora_rank"] = serde_json::json!(lora.rank);
     }
     write_file_create_parents(path, json.to_string())?;
     Ok(())
@@ -673,6 +755,7 @@ mod tests {
                 use_rms_norm: true,
                 use_swiglu: true,
                 loop_embed: true,
+                ..Default::default()
             },
         );
         let path = std::env::temp_dir().join(format!(

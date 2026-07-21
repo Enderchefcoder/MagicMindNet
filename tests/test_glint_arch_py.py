@@ -56,3 +56,5 @@ def test_glint_defaults_match_classic_chatbot():
     assert classic.ffn == "gelu"
     assert classic.tie_embeddings is False
     assert classic.loop_embed is False
+    assert classic.final_norm is False
+    assert classic.lora_rank == 0

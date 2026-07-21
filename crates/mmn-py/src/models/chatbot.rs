@@ -120,6 +120,8 @@ impl PyChatbot {
         norm="layer",
         ffn="gelu",
         loop_embed=false,
+        final_norm=false,
+        lora_rank=0,
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -142,6 +144,8 @@ impl PyChatbot {
         norm: &str,
         ffn: &str,
         loop_embed: bool,
+        final_norm: bool,
+        lora_rank: isize,
     ) -> PyResult<Self> {
         if use_learned_pos_embed && use_rope {
             return Err(PyValueError::new_err(
@@ -158,6 +162,11 @@ impl PyChatbot {
         if vocab_size == 0 {
             return Err(PyValueError::new_err(
                 "vocab_size must be at least 1.\nFix: Use vocab_size=512 for byte-level toy models or 32000 for BPE-scale vocabularies.",
+            ));
+        }
+        if lora_rank < 0 {
+            return Err(PyValueError::new_err(
+                "lora_rank must be >= 0.\nFix: Use lora_rank=0 to disable LoopLoRA or a positive rank (e.g. 4).",
             ));
         }
         let use_rms_norm = match norm {
@@ -205,6 +214,8 @@ impl PyChatbot {
                     use_rms_norm,
                     use_swiglu,
                     loop_embed,
+                    final_norm,
+                    lora_rank: lora_rank as usize,
                 },
             ),
         })
@@ -446,6 +457,20 @@ impl PyChatbot {
     #[getter]
     fn loop_embed(&self) -> bool {
         self.inner.loop_embed.is_some()
+    }
+
+    #[getter]
+    fn final_norm(&self) -> bool {
+        self.inner.final_norm.is_some()
+    }
+
+    #[getter]
+    fn lora_rank(&self) -> usize {
+        self.inner
+            .loop_lora
+            .as_ref()
+            .map(|l| l.rank)
+            .unwrap_or(0)
     }
 
     fn __repr__(&self) -> String {

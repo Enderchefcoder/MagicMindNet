@@ -18,8 +18,13 @@ def main() -> None:
         ffn="swiglu",
         tie_embeddings=True,
         use_rope=True,
+        final_norm=True,
+        lora_rank=2,
     )
-    print(f"norm={bot.norm} ffn={bot.ffn} n_loops={bot.n_loops} params={bot.parameters}")
+    print(
+        f"norm={bot.norm} ffn={bot.ffn} n_loops={bot.n_loops} "
+        f"final_norm={bot.final_norm} lora_rank={bot.lora_rank} params={bot.parameters}"
+    )
     data = ai.DatasetCorpus(data=["glint style tiny train " * 4] * 8)
     before = bot.compute_mean_loss(data)
     bot.train(data, epochs=2, learning_rate=1e-2, batch_size=1)

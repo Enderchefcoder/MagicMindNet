@@ -2,6 +2,14 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (final_norm + LoopLoRA QKV adapters)
+- `Chatbot(final_norm=True)` — optional final LayerNorm/RMSNorm after all loops
+  (GGUF `output_norm.*` / meta `mmn.final_norm`)
+- `Chatbot(lora_rank=N)` — per-loop LoRA QKV adapters (zero-init up = identity at
+  init; trained via `Train()`); checkpoint keys `loop_lora.{i}.down/up`
+- Defaults `final_norm=False`, `lora_rank=0` preserve classic Chatbot bit-identity
+- Tests: `tests/test_final_norm_loop_lora_py.py`; Rust nn/models coverage
+
 ### Added (unified eval harness / benchmarking suite)
 - `magicmindnet.eval`: `EvalHarness` / `BenchmarkRunner`, `Metric`, `TaskResult`,
   `SuiteReport`, `list_tasks` / `list_suites` / `get_task` / `run_suite`

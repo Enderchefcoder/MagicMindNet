@@ -198,6 +198,8 @@ bot = ai.Chatbot(
     ffn="gelu",                # or "swiglu"
     tie_embeddings=False,      # share lm_head with embed
     loop_embed=False,          # per-loop additive embedding when n_loops>1
+    final_norm=False,          # optional final LayerNorm/RMSNorm (Glint output_norm)
+    lora_rank=0,               # LoopLoRA QKV adapters (0 = off; zero-init up = identity)
 )
 ```
 
@@ -220,7 +222,7 @@ bot = ai.Chatbot(
 `use_learned_pos_embed=True` and `use_rope=True` raise `ValueError` at
 construction time.
 
-**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `head_dim`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `tie_embeddings`, `norm`, `ffn`, `loop_embed`
+**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `head_dim`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `tie_embeddings`, `norm`, `ffn`, `loop_embed`, `final_norm`, `lora_rank`
 **Core methods:**
 
 - `train(dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None) -> list[float]` — accepts `DatasetQA` or `DatasetCorpus`; keyword overrides win over `config`; returns per-epoch mean losses

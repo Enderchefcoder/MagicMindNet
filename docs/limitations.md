@@ -8,8 +8,7 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 - Training sequences use the model's **`max_seq_len`** (no longer hard-capped at 32 tokens).
 - Token embeddings use **sinusoidal position encoding** by default (runtime, not checkpointed). Opt-in **learned `pos_embed`** or **RoPE** (`use_rope=True`) — see [position_encoding_coverage.md](position_encoding_coverage.md).
 - Each `TransformerBlock` uses **two residuals**: `x2 = x + attn(ln1(x))` and `out = x2 + ffn(ln2(x2))` (pass 83). Backward routes skip grads through both adds.
-- **Glint-style knobs** (defaults preserve classic Chatbot): `n_loops` (reuse the block stack with shared weights), `norm="rms"` (RMSNorm), `ffn="swiglu"` (gate×up SiLU), `tie_embeddings`, `loop_embed` (per-loop additive embedding). LoopLoRA QKV adapters remain on the roadmap.
-- LoopLoRA / private FineWeb demos are out of scope for the native Chatbot; use `ai.from_pretrained` + foreign backends for arbitrary Hub architectures (see [hub.md](hub.md)).
+- **Glint-style knobs** (defaults preserve classic Chatbot): `n_loops` (reuse the block stack with shared weights), `norm="rms"` (RMSNorm), `ffn="swiglu"` (gate×up SiLU), `tie_embeddings`, `loop_embed` (per-loop additive embedding), `final_norm` (optional final LayerNorm/RMSNorm), `lora_rank` (LoopLoRA QKV adapters; `0` = off, zero-init up = identity at init).
 - Autoset presets: `sub-1M` / `sub-10M` / `sub-50M` / `sub-100M` / `sub-1B` / `sub-10B` for easy parameter sizing.
 - CoT: `DatasetQA(cot=True)` with empty `thinktag` defaults to `<think>…</think>` wrappers;
   pass `thinktag="reason"` or `thinktag="a|b"` for custom open/close tags.- `TrainClassifier` updates backbone + head with CE; byte features are not a production text encoder.

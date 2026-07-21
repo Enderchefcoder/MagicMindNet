@@ -24,8 +24,10 @@ pub fn gguf_name_to_mmn(name: &str) -> Option<String> {
         "output.weight" => return Some("lm_head".into()),
         "position_embd.weight" => return Some("pos_embed".into()),
         "loop_embd.weight" => return Some("loop_embed.weight".into()),
-        // Final-norm has no MMN equivalent (blocks carry their own norms).
-        "output_norm.weight" | "output_norm.bias" => return None,
+        "output_norm.weight" => return Some("final_norm.gamma".into()),
+        "output_norm.bias" => return Some("final_norm.beta".into()),
+        // Legacy GGML single final norm.
+        "norm.weight" => return Some("final_norm.gamma".into()),
         // MMN vision prefix tensors (mmproj-style `v.` namespace).
         "v.patch_proj.weight" => return Some("vision_patch_proj".into()),
         "v.patch_conv.weight" => return Some("vision_patch_conv".into()),
@@ -63,6 +65,8 @@ pub fn mmn_name_to_gguf(key: &str) -> Option<String> {
         "lm_head" => return Some("output.weight".into()),
         "pos_embed" => return Some("position_embd.weight".into()),
         "loop_embed.weight" => return Some("loop_embd.weight".into()),
+        "final_norm.gamma" => return Some("output_norm.weight".into()),
+        "final_norm.beta" => return Some("output_norm.bias".into()),
         "vision_patch_proj" => return Some("v.patch_proj.weight".into()),
         "vision_patch_conv" => return Some("v.patch_conv.weight".into()),
         "vision_cross_attn.q" => return Some("v.cross_attn_q.weight".into()),
@@ -220,6 +224,20 @@ fn gguf_meta_to_mmn(file: &GgufFile, tensors: &HashMap<String, Tensor>) -> serde
         .unwrap_or(false)
     {
         meta["loop_embed"] = serde_json::json!(true);
+    }
+    if file
+        .metadata
+        .get(&format!("{arch}.final_norm"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || tensors.contains_key("final_norm.gamma")
+    {
+        meta["final_norm"] = serde_json::json!(true);
+    }
+    if let Some(rank) = meta_u64(file, &format!("{arch}.lora_rank")) {
+        if rank > 0 {
+            meta["lora_rank"] = serde_json::json!(rank);
+        }
     }
     let vision = file
         .metadata
@@ -389,6 +407,15 @@ fn chatbot_gguf_metadata(model: &Chatbot) -> Vec<(String, GgufValue)> {
     if model.loop_embed.is_some() {
         meta.push(("mmn.loop_embed".to_string(), GgufValue::Bool(true)));
     }
+    if model.final_norm.is_some() {
+        meta.push(("mmn.final_norm".to_string(), GgufValue::Bool(true)));
+    }
+    if let Some(lora) = &model.loop_lora {
+        meta.push((
+            "mmn.lora_rank".to_string(),
+            GgufValue::U32(lora.rank as u32),
+        ));
+    }
     meta
 }
 
@@ -495,7 +522,14 @@ mod tests {
             gguf_name_to_mmn("blk.0.ffn_up.weight").as_deref(),
             Some("blocks.0.ffn.up")
         );
-        assert_eq!(gguf_name_to_mmn("output_norm.weight"), None);
+        assert_eq!(
+            gguf_name_to_mmn("output_norm.weight").as_deref(),
+            Some("final_norm.gamma")
+        );
+        assert_eq!(
+            gguf_name_to_mmn("output_norm.bias").as_deref(),
+            Some("final_norm.beta")
+        );
         assert_eq!(gguf_name_to_mmn("unknown.weight"), None);
     }
 
@@ -637,6 +671,7 @@ mod tests {
             use_rms_norm: true,
             use_swiglu: true,
             loop_embed: true,
+            ..Default::default()
         };
         let model = Chatbot::new_with_arch(
             false,

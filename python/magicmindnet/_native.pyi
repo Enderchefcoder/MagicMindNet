@@ -198,6 +198,8 @@ class Chatbot:
         norm: str = "layer",
         ffn: str = "gelu",
         loop_embed: bool = False,
+        final_norm: bool = False,
+        lora_rank: int = 0,
     ) -> None: ...
     @property
     def parameters(self) -> int: ...
@@ -253,6 +255,10 @@ class Chatbot:
     def ffn(self) -> str: ...
     @property
     def loop_embed(self) -> bool: ...
+    @property
+    def final_norm(self) -> bool: ...
+    @property
+    def lora_rank(self) -> int: ...
     def save(
         self,
         path: str,

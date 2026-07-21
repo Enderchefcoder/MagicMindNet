@@ -2,9 +2,9 @@ use crate::autoset::{autoset, ModelShape};
 use mmn_core::{cross_entropy_grad, embedding_backward, linear_backward, Device, Result, Tensor};
 use mmn_data::DatasetType;
 use mmn_nn::{
-    gelu, gelu_backward, vision_cross_attn_residual, vision_cross_attn_residual_backward,
-    BlockForwardCache, Conv2d, CrossAttention, CrossAttentionForwardCache, Embedding, Linear,
-    TransformerBlock,
+    gelu, gelu_backward, layernorm_backward, vision_cross_attn_residual,
+    vision_cross_attn_residual_backward, BlockForwardCache, Conv2d, CrossAttention,
+    CrossAttentionForwardCache, Embedding, LayerNorm, Linear, LoopLora, TransformerBlock,
 };
 use ndarray::ArrayD;
 use rand::SeedableRng;
@@ -119,6 +119,10 @@ pub struct Chatbot {
     pub ffn_kind: String,
     /// Optional per-loop additive embedding `[n_loops, d_model]`.
     pub loop_embed: Option<Embedding>,
+    /// Optional final LayerNorm / RMSNorm after the last loop (Glint `output_norm`).
+    pub final_norm: Option<LayerNorm>,
+    /// Optional per-loop LoRA QKV adapters (`lora_rank > 0`).
+    pub loop_lora: Option<LoopLora>,
 }
 
 /// Optional Glint-like architecture knobs (defaults preserve classic Chatbot).
@@ -129,6 +133,10 @@ pub struct ChatbotArchExtras {
     pub use_rms_norm: bool,
     pub use_swiglu: bool,
     pub loop_embed: bool,
+    /// Apply a final norm after all loops (default false).
+    pub final_norm: bool,
+    /// LoopLoRA rank; `0` disables adapters (default).
+    pub lora_rank: usize,
 }
 
 impl Default for ChatbotArchExtras {
@@ -139,6 +147,8 @@ impl Default for ChatbotArchExtras {
             use_rms_norm: false,
             use_swiglu: false,
             loop_embed: false,
+            final_norm: false,
+            lora_rank: 0,
         }
     }
 }
@@ -528,6 +538,27 @@ impl Chatbot {
         } else {
             None
         };
+        let final_norm = if extras.final_norm {
+            Some(if extras.use_rms_norm {
+                LayerNorm::new_rms(shape.d_model)
+            } else {
+                LayerNorm::new(shape.d_model)
+            })
+        } else {
+            None
+        };
+        let loop_lora = if extras.lora_rank > 0 {
+            Some(LoopLora::new_rng(
+                shape.d_model,
+                shape.q_dim(),
+                shape.kv_dim(),
+                extras.lora_rank,
+                n_loops,
+                &mut rng,
+            ))
+        } else {
+            None
+        };
         let vision_patch_proj = if vision {
             Some(Linear::new_rng(
                 VISION_PATCH_DIM,
@@ -586,6 +617,8 @@ impl Chatbot {
                 "gelu".into()
             },
             loop_embed,
+            final_norm,
+            loop_lora,
         }
     }
 
@@ -644,6 +677,19 @@ impl Chatbot {
             .as_ref()
             .map(|e| e.vocab_size * e.d_model)
             .unwrap_or(0);
+        let final_n = self
+            .final_norm
+            .as_ref()
+            .map(|ln| {
+                // Count gamma + beta (blocks do the same even for RMS).
+                2 * ln.normalized_shape
+            })
+            .unwrap_or(0);
+        let lora_n = self
+            .loop_lora
+            .as_ref()
+            .map(|l| l.parameters())
+            .unwrap_or(0);
         let vision = self
             .vision_patch_proj
             .as_ref()
@@ -659,7 +705,7 @@ impl Chatbot {
                 .as_ref()
                 .map(|c| 4 * c.d_model * c.d_model)
                 .unwrap_or(0);
-        total + pe + loop_pe + vision
+        total + pe + loop_pe + final_n + lora_n + vision
     }
 
     pub fn vision_patch_dim(&self) -> usize {
@@ -846,14 +892,26 @@ impl Chatbot {
                 let row = le.forward(&[loop_i.min(le.vocab_size.saturating_sub(1))])?;
                 h = add_broadcast_loop_embed(&h, &row)?;
             }
+            let deltas = if let Some(lora) = &self.loop_lora {
+                Some(lora.forward_delta(loop_i, &h)?)
+            } else {
+                None
+            };
             for (i, block) in self.blocks.iter().enumerate() {
-                h = block.forward(&h)?;
+                h = if let Some(ref d) = deltas {
+                    block.forward_with_cache_qkv_delta(&h, Some(d))?.0
+                } else {
+                    block.forward(&h)?
+                };
                 if i == 0 && n_patch > 0 {
                     if let Some(cross) = &self.vision_cross_attn {
                         h = vision_cross_attn_residual(cross, &h, n_patch)?.0;
                     }
                 }
             }
+        }
+        if let Some(fnorm) = &self.final_norm {
+            h = fnorm.forward(&h)?;
         }
         Ok(h)
     }
@@ -1225,6 +1283,52 @@ impl Chatbot {
                 &grad,
             );
         }
+        if self.final_norm.is_some() {
+            i += 1;
+            let grad = accum.averaged_grad(i);
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.final_norm.as_mut().unwrap().gamma,
+                &grad,
+            );
+            i += 1;
+            let grad = accum.averaged_grad(i);
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.final_norm.as_mut().unwrap().beta,
+                &grad,
+            );
+        }
+        if let Some(lora) = self.loop_lora.as_mut() {
+            for li in 0..lora.n_loops {
+                i += 1;
+                let grad = accum.averaged_grad(i);
+                optim_step_weight(
+                    &mut hybrid_opt,
+                    adamw,
+                    use_hybrid,
+                    param_id_base,
+                    &mut lora.down[li].weight,
+                    &grad,
+                );
+                i += 1;
+                let grad = accum.averaged_grad(i);
+                optim_step_weight(
+                    &mut hybrid_opt,
+                    adamw,
+                    use_hybrid,
+                    param_id_base,
+                    &mut lora.up[li].weight,
+                    &grad,
+                );
+            }
+        }
         if let Some(proj) = self.vision_patch_proj.as_mut() {
             i += 1;
             let grad = accum.averaged_grad(i);
@@ -1357,6 +1461,48 @@ impl Chatbot {
                 &grads[i],
             );
         }
+        if self.final_norm.is_some() {
+            i += 1;
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.final_norm.as_mut().unwrap().gamma,
+                &grads[i],
+            );
+            i += 1;
+            optim_step_weight(
+                &mut hybrid_opt,
+                adamw,
+                use_hybrid,
+                param_id_base,
+                &mut self.final_norm.as_mut().unwrap().beta,
+                &grads[i],
+            );
+        }
+        if let Some(lora) = self.loop_lora.as_mut() {
+            for li in 0..lora.n_loops {
+                i += 1;
+                optim_step_weight(
+                    &mut hybrid_opt,
+                    adamw,
+                    use_hybrid,
+                    param_id_base,
+                    &mut lora.down[li].weight,
+                    &grads[i],
+                );
+                i += 1;
+                optim_step_weight(
+                    &mut hybrid_opt,
+                    adamw,
+                    use_hybrid,
+                    param_id_base,
+                    &mut lora.up[li].weight,
+                    &grads[i],
+                );
+            }
+        }
         if let Some(proj) = self.vision_patch_proj.as_mut() {
             i += 1;
             optim_step_weight(
@@ -1398,6 +1544,12 @@ impl Chatbot {
             loop_i: usize,
             /// Hidden before adding loop_embed (for loop_embed backward).
             h_before_loop_embed: Option<Tensor>,
+            /// LoRA input (= h after loop_embed).
+            lora_input: Option<Tensor>,
+            /// Down-projection mid activation.
+            lora_mid: Option<Tensor>,
+            /// QKV deltas applied to every block in this loop.
+            qkv_delta: Option<(Tensor, Tensor, Tensor)>,
             block_caches: Vec<BlockFfnCache>,
             cross_cache: Option<CrossAttentionForwardCache>,
         }
@@ -1413,10 +1565,16 @@ impl Chatbot {
                 let row = le.forward(&[loop_i.min(le.vocab_size.saturating_sub(1))])?;
                 h = add_broadcast_loop_embed(&h, &row)?;
             }
+            let (lora_input, lora_mid, qkv_delta) = if let Some(lora) = &self.loop_lora {
+                let (mid, dq, dk, dv) = lora.forward_delta_with_mid(loop_i, &h)?;
+                (Some(h.clone()), Some(mid), Some((dq, dk, dv)))
+            } else {
+                (None, None, None)
+            };
             let mut block_caches = Vec::with_capacity(n_blocks);
             let mut cross_cache: Option<CrossAttentionForwardCache> = None;
             for (i, block) in self.blocks.iter().enumerate() {
-                let (out, cache) = block.forward_with_cache(&h)?;
+                let (out, cache) = block.forward_with_cache_qkv_delta(&h, qkv_delta.as_ref())?;
                 block_caches.push(BlockFfnCache { block: cache });
                 h = out;
                 if i == 0 && n_patch > 0 {
@@ -1430,9 +1588,21 @@ impl Chatbot {
             loop_caches.push(LoopCache {
                 loop_i,
                 h_before_loop_embed,
+                lora_input,
+                lora_mid,
+                qkv_delta,
                 block_caches,
                 cross_cache,
             });
+        }
+
+        let h_before_final_norm = if self.final_norm.is_some() {
+            Some(h.clone())
+        } else {
+            None
+        };
+        if let Some(fnorm) = &self.final_norm {
+            h = fnorm.forward(&h)?;
         }
 
         let logits = self.logits_from_hidden(&h)?;
@@ -1454,12 +1624,33 @@ impl Chatbot {
             vec![grad_head_w.clone()]
         };
 
+        let mut final_norm_grads: Option<(ArrayD<f32>, ArrayD<f32>)> = None;
+        if let Some(fnorm) = &self.final_norm {
+            let (grad_h_new, grad_gamma, grad_beta) =
+                layernorm_backward(fnorm, h_before_final_norm.as_ref().unwrap(), &grad_h)?;
+            grad_h = grad_h_new;
+            final_norm_grads = Some((grad_gamma, grad_beta));
+        }
+
         // Accumulate shared-weight grads across loops.
         let mut accum_block: Vec<Option<Vec<ArrayD<f32>>>> = vec![None; n_blocks];
         let mut accum_cross: Option<[ArrayD<f32>; 4]> = None;
         let mut accum_loop_embed: Option<ArrayD<f32>> = None;
+        let mut accum_lora: Option<Vec<(ArrayD<f32>, ArrayD<f32>)>> = self.loop_lora.as_ref().map(|l| {
+            (0..l.n_loops)
+                .map(|i| {
+                    (
+                        ArrayD::zeros(l.down[i].weight.data.raw_dim()),
+                        ArrayD::zeros(l.up[i].weight.data.raw_dim()),
+                    )
+                })
+                .collect()
+        });
 
         for lc in loop_caches.into_iter().rev() {
+            let mut sum_gdq: Option<ArrayD<f32>> = None;
+            let mut sum_gdk: Option<ArrayD<f32>> = None;
+            let mut sum_gdv: Option<ArrayD<f32>> = None;
             for bi in (0..n_blocks).rev() {
                 let block = &self.blocks[bi];
                 let cache = &lc.block_caches[bi];
@@ -1480,8 +1671,25 @@ impl Chatbot {
                         }
                     }
                 }
-                let (grad_h_block, block_grads) =
-                    block.backward_attn_ffn(&cache.block, &grad_h)?;
+                let (grad_h_block, block_grads, (gdq, gdk, gdv)) =
+                    block.backward_attn_ffn_qkv_delta(&cache.block, &grad_h)?;
+                if lc.qkv_delta.is_some() {
+                    if let Some(ref mut acc) = sum_gdq {
+                        *acc = &*acc + &gdq;
+                    } else {
+                        sum_gdq = Some(gdq);
+                    }
+                    if let Some(ref mut acc) = sum_gdk {
+                        *acc = &*acc + &gdk;
+                    } else {
+                        sum_gdk = Some(gdk);
+                    }
+                    if let Some(ref mut acc) = sum_gdv {
+                        *acc = &*acc + &gdv;
+                    } else {
+                        sum_gdv = Some(gdv);
+                    }
+                }
                 if bi == 0 && self.vision_cross_attn.is_some() {
                     let cg = cross_grads.unwrap_or_else(|| {
                         let z = ArrayD::zeros(
@@ -1511,6 +1719,23 @@ impl Chatbot {
                     accum_block[bi] = Some(block_grads);
                 }
                 grad_h = grad_h_block;
+            }
+            if let (Some(lora), Some(inp), Some(mid), Some(gdq), Some(gdk), Some(gdv)) = (
+                self.loop_lora.as_ref(),
+                lc.lora_input.as_ref(),
+                lc.lora_mid.as_ref(),
+                sum_gdq.as_ref(),
+                sum_gdk.as_ref(),
+                sum_gdv.as_ref(),
+            ) {
+                let (grad_h_lora, grad_down, grad_up) =
+                    lora.backward_delta(lc.loop_i, inp, mid, gdq, gdk, gdv)?;
+                grad_h = &grad_h + &grad_h_lora;
+                let li = lc.loop_i.min(lora.n_loops.saturating_sub(1));
+                if let Some(ref mut acc) = accum_lora {
+                    acc[li].0 = &acc[li].0 + &grad_down;
+                    acc[li].1 = &acc[li].1 + &grad_up;
+                }
             }
             if let Some(le) = &self.loop_embed {
                 let _ = lc.h_before_loop_embed;
@@ -1606,6 +1831,32 @@ impl Chatbot {
             grads.push(accum_loop_embed.unwrap_or_else(|| {
                 ArrayD::zeros(le.weight.data.raw_dim())
             }));
+        }
+        if let Some(fnorm) = &self.final_norm {
+            let (gg, gb) = final_norm_grads.unwrap_or_else(|| {
+                (
+                    ArrayD::zeros(fnorm.gamma.data.raw_dim()),
+                    ArrayD::zeros(fnorm.beta.data.raw_dim()),
+                )
+            });
+            grads.push(gg);
+            grads.push(gb);
+        }
+        if let Some(lora) = &self.loop_lora {
+            let acc = accum_lora.take().unwrap_or_else(|| {
+                (0..lora.n_loops)
+                    .map(|i| {
+                        (
+                            ArrayD::zeros(lora.down[i].weight.data.raw_dim()),
+                            ArrayD::zeros(lora.up[i].weight.data.raw_dim()),
+                        )
+                    })
+                    .collect()
+            });
+            for (gd, gu) in acc {
+                grads.push(gd);
+                grads.push(gu);
+            }
         }
         if let Some(proj) = &self.vision_patch_proj {
             let (grad_proj, grad_conv) = if n_patch > 0 {
@@ -1930,6 +2181,214 @@ mod chatbot_tests {
             .sum();
         assert!(diff > 1e-3, "n_loops=3 should change hidden vs n_loops=1, diff={diff}");
         assert_eq!(looped.n_loops, 3);
+    }
+
+    #[test]
+    fn final_norm_changes_logits() {
+        let plain = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            None,
+            None,
+            Some(2),
+            false,
+            32,
+            true,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras::default(),
+        );
+        let with_fn = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            None,
+            None,
+            Some(2),
+            false,
+            32,
+            true,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                final_norm: true,
+                use_rms_norm: true,
+                ..Default::default()
+            },
+        );
+        assert!(with_fn.final_norm.is_some());
+        // Copy shared weights so only final_norm differs.
+        let mut with_fn = with_fn;
+        with_fn.embed.weight = plain.embed.weight.clone();
+        with_fn.lm_head.weight = plain.lm_head.weight.clone();
+        for (a, b) in with_fn.blocks.iter_mut().zip(plain.blocks.iter()) {
+            a.attn.q_proj.weight = b.attn.q_proj.weight.clone();
+            a.attn.k_proj.weight = b.attn.k_proj.weight.clone();
+            a.attn.v_proj.weight = b.attn.v_proj.weight.clone();
+            a.attn.out_proj.weight = b.attn.out_proj.weight.clone();
+            a.ffn.weight = b.ffn.weight.clone();
+            a.ffn2.weight = b.ffn2.weight.clone();
+            a.ln1.gamma = b.ln1.gamma.clone();
+            a.ln1.beta = b.ln1.beta.clone();
+            a.ln2.gamma = b.ln2.gamma.clone();
+            a.ln2.beta = b.ln2.beta.clone();
+        }
+        let tokens = [1usize, 2, 3];
+        let a = plain.forward_logits(&tokens).unwrap();
+        let b = with_fn.forward_logits(&tokens).unwrap();
+        let diff: f32 = a
+            .data
+            .iter()
+            .zip(b.data.iter())
+            .map(|(x, y)| (x - y).abs())
+            .sum();
+        assert!(diff > 1e-3, "final_norm should change logits, diff={diff}");
+    }
+
+    #[test]
+    fn loop_lora_zero_init_matches_no_lora() {
+        let extras_base = ChatbotArchExtras {
+            n_loops: 3,
+            use_rms_norm: true,
+            use_swiglu: true,
+            loop_embed: true,
+            ..Default::default()
+        };
+        let plain = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            None,
+            None,
+            Some(7),
+            false,
+            64,
+            true,
+            DEFAULT_ROPE_THETA,
+            extras_base.clone(),
+        );
+        let lora = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            None,
+            None,
+            Some(7),
+            false,
+            64,
+            true,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                lora_rank: 4,
+                ..extras_base
+            },
+        );
+        assert!(lora.loop_lora.is_some());
+        assert!(lora.parameters() > plain.parameters());
+        // Align non-LoRA weights so only zero-init LoRA differs.
+        let mut lora = lora;
+        lora.embed.weight = plain.embed.weight.clone();
+        lora.lm_head.weight = plain.lm_head.weight.clone();
+        if let (Some(a), Some(b)) = (&mut lora.loop_embed, &plain.loop_embed) {
+            a.weight = b.weight.clone();
+        }
+        for (a, b) in lora.blocks.iter_mut().zip(plain.blocks.iter()) {
+            a.attn.q_proj.weight = b.attn.q_proj.weight.clone();
+            a.attn.k_proj.weight = b.attn.k_proj.weight.clone();
+            a.attn.v_proj.weight = b.attn.v_proj.weight.clone();
+            a.attn.out_proj.weight = b.attn.out_proj.weight.clone();
+            a.ffn.weight = b.ffn.weight.clone();
+            a.ffn2.weight = b.ffn2.weight.clone();
+            if let (Some(ag), Some(bg)) = (&mut a.ffn_gate, &b.ffn_gate) {
+                ag.weight = bg.weight.clone();
+            }
+            a.ln1.gamma = b.ln1.gamma.clone();
+            a.ln1.beta = b.ln1.beta.clone();
+            a.ln2.gamma = b.ln2.gamma.clone();
+            a.ln2.beta = b.ln2.beta.clone();
+        }
+        let tokens = [1usize, 2, 3, 4];
+        let a = plain.forward_logits(&tokens).unwrap();
+        let b = lora.forward_logits(&tokens).unwrap();
+        let diff: f32 = a
+            .data
+            .iter()
+            .zip(b.data.iter())
+            .map(|(x, y)| (x - y).abs())
+            .sum();
+        assert!(diff < 1e-5, "zero-init LoopLoRA should match, diff={diff}");
+    }
+
+    #[test]
+    fn train_step_updates_loop_lora_and_final_norm() {
+        use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
+        let mut model = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            None,
+            None,
+            Some(3),
+            false,
+            32,
+            true,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                n_loops: 2,
+                use_rms_norm: true,
+                final_norm: true,
+                lora_rank: 2,
+                ..Default::default()
+            },
+        );
+        let up0_before = model.loop_lora.as_ref().unwrap().up[0].weight.data[[0, 0]];
+        let gamma_before = model.final_norm.as_ref().unwrap().gamma.data[0];
+        let tokens = [1usize, 2, 3, 4];
+        let targets = [2usize, 3, 4, 5];
+        let mut hybrid = HybridOptimizer::new(MuonConfig::default(), AdamWConfig::default());
+        let mut adamw = AdamW::new(AdamWConfig {
+            lr: 0.05,
+            ..Default::default()
+        });
+        let mut pid = 0usize;
+        let loss = model
+            .train_step_lm(
+                &tokens,
+                &targets,
+                &mut hybrid,
+                &mut adamw,
+                false,
+                &mut pid,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(loss.is_finite());
+        let up0_after = model.loop_lora.as_ref().unwrap().up[0].weight.data[[0, 0]];
+        let gamma_after = model.final_norm.as_ref().unwrap().gamma.data[0];
+        assert!(
+            (up0_after - up0_before).abs() > 1e-8 || (gamma_after - gamma_before).abs() > 1e-8,
+            "expected LoopLoRA or final_norm update"
+        );
     }
 
     #[test]

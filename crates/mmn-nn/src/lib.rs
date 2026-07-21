@@ -323,6 +323,38 @@ impl Linear {
         }
     }
 
+    /// Xavier-ish init without a bias term (used by LoopLoRA down projections).
+    pub fn new_rng_no_bias(in_features: usize, out_features: usize, rng: &mut impl Rng) -> Self {
+        let scale = (2.0 / (in_features + out_features) as f32).sqrt();
+        let w: Vec<f32> = (0..in_features * out_features)
+            .map(|_| rng.gen::<f32>() * scale - scale / 2.0)
+            .collect();
+        let weight = Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[out_features, in_features]), w).unwrap(),
+            true,
+        );
+        Self {
+            weight,
+            bias: None,
+            in_features,
+            out_features,
+        }
+    }
+
+    /// Zero-initialized weight, no bias (LoopLoRA up projections — identity at init).
+    pub fn new_zeros_no_bias(in_features: usize, out_features: usize) -> Self {
+        let weight = Tensor::from_array(
+            ArrayD::zeros(IxDyn(&[out_features, in_features])),
+            true,
+        );
+        Self {
+            weight,
+            bias: None,
+            in_features,
+            out_features,
+        }
+    }
+
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let out = x.matmul(&transpose_tensor(&self.weight)?)?;
         if let Some(ref b) = self.bias {
@@ -331,6 +363,202 @@ impl Linear {
             Ok(out)
         }
     }
+}
+
+/// Per-loop LoRA adapters that produce additive Q/K/V deltas (Glint-style LoopLoRA).
+///
+/// Each loop index has its own `down` (`d_model → rank`) and `up`
+/// (`rank → q_dim+2*kv_dim`) pair. Up weights are zero-initialized so a fresh
+/// adapter is a no-op on the forward pass.
+pub struct LoopLora {
+    pub rank: usize,
+    pub n_loops: usize,
+    pub q_dim: usize,
+    pub kv_dim: usize,
+    pub down: Vec<Linear>,
+    pub up: Vec<Linear>,
+}
+
+impl LoopLora {
+    pub fn new_rng(
+        d_model: usize,
+        q_dim: usize,
+        kv_dim: usize,
+        rank: usize,
+        n_loops: usize,
+        rng: &mut impl Rng,
+    ) -> Self {
+        assert!(rank > 0, "LoopLora rank must be > 0");
+        assert!(n_loops > 0, "LoopLora n_loops must be > 0");
+        let out_dim = q_dim + kv_dim + kv_dim;
+        let mut down = Vec::with_capacity(n_loops);
+        let mut up = Vec::with_capacity(n_loops);
+        for _ in 0..n_loops {
+            down.push(Linear::new_rng_no_bias(d_model, rank, rng));
+            up.push(Linear::new_zeros_no_bias(rank, out_dim));
+        }
+        Self {
+            rank,
+            n_loops,
+            q_dim,
+            kv_dim,
+            down,
+            up,
+        }
+    }
+
+    /// Parameter count: `n_loops * (d_model*rank + rank*(q_dim+2*kv_dim))`.
+    pub fn parameters(&self) -> usize {
+        let d_model = self.down[0].in_features;
+        self.n_loops * (d_model * self.rank + self.rank * (self.q_dim + 2 * self.kv_dim))
+    }
+
+    /// Forward LoRA for `loop_i`, returning `(dq, dk, dv)` with shapes
+    /// `[seq, q_dim]`, `[seq, kv_dim]`, `[seq, kv_dim]`.
+    pub fn forward_delta(
+        &self,
+        loop_i: usize,
+        h: &Tensor,
+    ) -> Result<(Tensor, Tensor, Tensor)> {
+        let (_mid, dq, dk, dv) = self.forward_delta_with_mid(loop_i, h)?;
+        Ok((dq, dk, dv))
+    }
+
+    /// Like [`Self::forward_delta`] but also returns the down-projection mid activation.
+    pub fn forward_delta_with_mid(
+        &self,
+        loop_i: usize,
+        h: &Tensor,
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
+        let i = loop_i.min(self.n_loops.saturating_sub(1));
+        let mid = self.down[i].forward(h)?;
+        let up_out = self.up[i].forward(&mid)?;
+        let (dq, dk, dv) = split_qkv_delta(&up_out, self.q_dim, self.kv_dim)?;
+        Ok((mid, dq, dk, dv))
+    }
+
+    /// Backward through one loop's LoRA.
+    /// Returns `(grad_h, grad_down_w, grad_up_w)`.
+    pub fn backward_delta(
+        &self,
+        loop_i: usize,
+        h: &Tensor,
+        mid: &Tensor,
+        grad_dq: &ArrayD<f32>,
+        grad_dk: &ArrayD<f32>,
+        grad_dv: &ArrayD<f32>,
+    ) -> Result<(ArrayD<f32>, ArrayD<f32>, ArrayD<f32>)> {
+        use mmn_core::linear_backward;
+        let i = loop_i.min(self.n_loops.saturating_sub(1));
+        let grad_up_out = concat_qkv_delta_grads(grad_dq, grad_dk, grad_dv, self.q_dim, self.kv_dim)?;
+        let (grad_up_w, grad_mid) = linear_backward(
+            mid.data.as_ref(),
+            self.up[i].weight.data.as_ref(),
+            &grad_up_out,
+        )?;
+        let (grad_down_w, grad_h) = linear_backward(
+            h.data.as_ref(),
+            self.down[i].weight.data.as_ref(),
+            &grad_mid,
+        )?;
+        Ok((grad_h, grad_down_w, grad_up_w))
+    }
+}
+
+fn split_qkv_delta(up_out: &Tensor, q_dim: usize, kv_dim: usize) -> Result<(Tensor, Tensor, Tensor)> {
+    if up_out.shape.len() != 2 {
+        return Err(MmnError::Shape {
+            message: "LoopLora up output expects [seq, q+2kv]".into(),
+        });
+    }
+    let seq = up_out.shape[0];
+    let expected = q_dim + 2 * kv_dim;
+    if up_out.shape[1] != expected {
+        return Err(MmnError::Shape {
+            message: format!(
+                "LoopLora up width {} != q_dim+2*kv_dim {expected}",
+                up_out.shape[1]
+            ),
+        });
+    }
+    let v = up_out
+        .data
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    let mut dq = vec![0.0f32; seq * q_dim];
+    let mut dk = vec![0.0f32; seq * kv_dim];
+    let mut dv = vec![0.0f32; seq * kv_dim];
+    for r in 0..seq {
+        for c in 0..q_dim {
+            dq[r * q_dim + c] = v[[r, c]];
+        }
+        for c in 0..kv_dim {
+            dk[r * kv_dim + c] = v[[r, q_dim + c]];
+            dv[r * kv_dim + c] = v[[r, q_dim + kv_dim + c]];
+        }
+    }
+    Ok((
+        Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[seq, q_dim]), dq).unwrap(),
+            up_out.requires_grad,
+        ),
+        Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[seq, kv_dim]), dk).unwrap(),
+            up_out.requires_grad,
+        ),
+        Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[seq, kv_dim]), dv).unwrap(),
+            up_out.requires_grad,
+        ),
+    ))
+}
+
+fn concat_qkv_delta_grads(
+    grad_dq: &ArrayD<f32>,
+    grad_dk: &ArrayD<f32>,
+    grad_dv: &ArrayD<f32>,
+    q_dim: usize,
+    kv_dim: usize,
+) -> Result<ArrayD<f32>> {
+    let gq = grad_dq
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    let gk = grad_dk
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    let gv = grad_dv
+        .view()
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| MmnError::Shape {
+            message: e.to_string(),
+        })?;
+    let seq = gq.shape()[0];
+    if gq.shape()[1] != q_dim || gk.shape() != [seq, kv_dim] || gv.shape() != [seq, kv_dim] {
+        return Err(MmnError::Shape {
+            message: "LoopLora delta grad shapes mismatch".into(),
+        });
+    }
+    let width = q_dim + 2 * kv_dim;
+    let mut out = ArrayD::zeros(IxDyn(&[seq, width]));
+    for r in 0..seq {
+        for c in 0..q_dim {
+            out[[r, c]] = gq[[r, c]];
+        }
+        for c in 0..kv_dim {
+            out[[r, q_dim + c]] = gk[[r, c]];
+            out[[r, q_dim + kv_dim + c]] = gv[[r, c]];
+        }
+    }
+    Ok(out)
 }
 
 pub fn gelu(t: &Tensor) -> Tensor {
@@ -648,6 +876,90 @@ mod glint_arch_nn_tests {
         let y = block.forward(&x).unwrap();
         assert_eq!(y.shape, x.shape);
         assert!(y.data.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn loop_lora_zero_up_delta_matches_no_delta_forward() {
+        let mut rng = rng_from_seed(Some(3));
+        let d_model = 8;
+        let n_heads = 2;
+        let block = TransformerBlock::new_rng_rope_gqa_arch(
+            d_model,
+            n_heads,
+            n_heads,
+            16,
+            Some(10_000.0),
+            true,
+            false,
+            &mut rng,
+        );
+        let q_dim = n_heads * (d_model / n_heads);
+        let kv_dim = q_dim;
+        let lora = LoopLora::new_rng(d_model, q_dim, kv_dim, 2, 1, &mut rng);
+        let x = Tensor::from_array(
+            arr2(&[
+                [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8],
+                [0.2, 0.1, -0.3, 0.4, 0.0, 0.5, -0.2, 0.3],
+            ])
+            .into_dyn(),
+            false,
+        );
+        let (dq, dk, dv) = lora.forward_delta(0, &x).unwrap();
+        assert!(dq.data.iter().all(|&v| v.abs() < 1e-8));
+        assert!(dk.data.iter().all(|&v| v.abs() < 1e-8));
+        assert!(dv.data.iter().all(|&v| v.abs() < 1e-8));
+        let y0 = block.forward_with_cache(&x).unwrap().0;
+        let y1 = block
+            .forward_with_cache_qkv_delta(&x, Some(&(dq, dk, dv)))
+            .unwrap()
+            .0;
+        let diff: f32 = y0
+            .data
+            .iter()
+            .zip(y1.data.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(diff < 1e-6, "zero LoRA delta should match no-delta, diff={diff}");
+    }
+
+    #[test]
+    fn loop_lora_nonzero_delta_changes_block_output() {
+        let mut rng = rng_from_seed(Some(5));
+        let d_model = 8;
+        let n_heads = 2;
+        let block = TransformerBlock::new_rng_rope_gqa_arch(
+            d_model,
+            n_heads,
+            n_heads,
+            16,
+            None,
+            false,
+            false,
+            &mut rng,
+        );
+        let x = Tensor::from_array(
+            arr2(&[
+                [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8],
+                [0.2, 0.1, -0.3, 0.4, 0.0, 0.5, -0.2, 0.3],
+            ])
+            .into_dyn(),
+            false,
+        );
+        let y0 = block.forward_with_cache(&x).unwrap().0;
+        let dq = Tensor::from_array(ArrayD::from_elem(IxDyn(&[2, d_model]), 0.5), false);
+        let dk = Tensor::from_array(ArrayD::zeros(IxDyn(&[2, d_model])), false);
+        let dv = Tensor::from_array(ArrayD::zeros(IxDyn(&[2, d_model])), false);
+        let y1 = block
+            .forward_with_cache_qkv_delta(&x, Some(&(dq, dk, dv)))
+            .unwrap()
+            .0;
+        let diff: f32 = y0
+            .data
+            .iter()
+            .zip(y1.data.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(diff > 1e-3, "nonzero Q delta should change output, diff={diff}");
     }
 }
 
@@ -981,10 +1293,19 @@ impl MultiHeadAttention {
         }
     }
 
-    fn project_qkv(&self, x: &Tensor) -> Result<(Tensor, Tensor, Tensor, Option<Tensor>, Option<Tensor>)> {
-        let q_lin = self.q_proj.forward(x)?;
-        let k_lin = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+    fn project_qkv(
+        &self,
+        x: &Tensor,
+        deltas: Option<&(Tensor, Tensor, Tensor)>,
+    ) -> Result<(Tensor, Tensor, Tensor, Option<Tensor>, Option<Tensor>)> {
+        let mut q_lin = self.q_proj.forward(x)?;
+        let mut k_lin = self.k_proj.forward(x)?;
+        let mut v = self.v_proj.forward(x)?;
+        if let Some((dq, dk, dv)) = deltas {
+            q_lin = q_lin.add(dq)?;
+            k_lin = k_lin.add(dk)?;
+            v = v.add(dv)?;
+        }
         if let Some(theta) = self.rope_theta {
             let (q, k) = apply_rope(&q_lin, &k_lin, self.n_heads, self.n_kv_heads, theta)?;
             Ok((q, k, v, Some(q_lin), Some(k_lin)))
@@ -994,7 +1315,7 @@ impl MultiHeadAttention {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let (q, k, v, _, _) = self.project_qkv(x)?;
+        let (q, k, v, _, _) = self.project_qkv(x, None)?;
         let (merged, _) = scaled_dot_product_attention_with_cache(
             &q,
             &k,
@@ -1019,7 +1340,24 @@ impl MultiHeadAttention {
         Option<Tensor>,
         SdpAttentionCache,
     )> {
-        let (q, k, v, q_lin, k_lin) = self.project_qkv(x)?;
+        self.forward_with_cache_qkv_delta(x, None)
+    }
+
+    pub fn forward_with_cache_qkv_delta(
+        &self,
+        x: &Tensor,
+        deltas: Option<&(Tensor, Tensor, Tensor)>,
+    ) -> Result<(
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Option<Tensor>,
+        Option<Tensor>,
+        SdpAttentionCache,
+    )> {
+        let (q, k, v, q_lin, k_lin) = self.project_qkv(x, deltas)?;
         let (merged, sdp) = scaled_dot_product_attention_with_cache(
             &q,
             &k,
@@ -1642,9 +1980,19 @@ impl TransformerBlock {
 
     /// Returns `(block_output, activations for backward)`.
     pub fn forward_with_cache(&self, x: &Tensor) -> Result<(Tensor, BlockForwardCache)> {
+        self.forward_with_cache_qkv_delta(x, None)
+    }
+
+    /// Like [`Self::forward_with_cache`], adding optional LoopLoRA Q/K/V deltas before RoPE.
+    pub fn forward_with_cache_qkv_delta(
+        &self,
+        x: &Tensor,
+        qkv_delta: Option<&(Tensor, Tensor, Tensor)>,
+    ) -> Result<(Tensor, BlockForwardCache)> {
         let x_in = x.clone();
         let h_ln1 = self.ln1.forward(x)?;
-        let (a, q, k, v, merged, q_lin, k_lin, sdp) = self.attn.forward_with_cache(&h_ln1)?;
+        let (a, q, k, v, merged, q_lin, k_lin, sdp) =
+            self.attn.forward_with_cache_qkv_delta(&h_ln1, qkv_delta)?;
         let x2 = x.add(&a)?;
         let h2 = self.ln2.forward(&x2)?;
         let f_lin = self.ffn.forward(&h2)?;
@@ -1698,6 +2046,22 @@ impl TransformerBlock {
         cache: &BlockForwardCache,
         grad_out: &ArrayD<f32>,
     ) -> Result<(ArrayD<f32>, Vec<ArrayD<f32>>)> {
+        let (grad_x, grads, _) = self.backward_attn_ffn_qkv_delta(cache, grad_out)?;
+        Ok((grad_x, grads))
+    }
+
+    /// Like [`Self::backward_attn_ffn`], also returning `(grad_dq, grad_dk, grad_dv)` —
+    /// grads w.r.t. pre-RoPE Q/K/V (i.e. after adding LoopLoRA deltas, before linear_backward
+    /// into the q/k/v projections).
+    pub fn backward_attn_ffn_qkv_delta(
+        &self,
+        cache: &BlockForwardCache,
+        grad_out: &ArrayD<f32>,
+    ) -> Result<(
+        ArrayD<f32>,
+        Vec<ArrayD<f32>>,
+        (ArrayD<f32>, ArrayD<f32>, ArrayD<f32>),
+    )> {
         use mmn_core::linear_backward;
 
         let (grad_ffn2_w, grad_f) = linear_backward(
@@ -1774,6 +2138,8 @@ impl TransformerBlock {
         } else {
             (grad_q, grad_k)
         };
+        // Pre-projection Q/K/V grads (= LoopLoRA delta grads when deltas were added).
+        let delta_grads = (grad_q.clone(), grad_k.clone(), grad_v.clone());
         let (grad_q_w, grad_q_in) = linear_backward(
             cache.h_ln1.data.as_ref(),
             self.attn.q_proj.weight.data.as_ref(),
@@ -1811,7 +2177,7 @@ impl TransformerBlock {
             grad_ln1_gamma,
             grad_ln1_beta,
         ]);
-        Ok((grad_x, grads))
+        Ok((grad_x, grads, delta_grads))
     }
 
     /// Returns `(block_output, ln2_output, ffn_hidden_pre_gelu, ffn_hidden_post_gelu)`.

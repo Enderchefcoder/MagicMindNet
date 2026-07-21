@@ -75,6 +75,12 @@ pub(crate) fn chatbot_meta_json(
     if model.loop_embed.is_some() {
         meta["loop_embed"] = serde_json::json!(true);
     }
+    if model.final_norm.is_some() {
+        meta["final_norm"] = serde_json::json!(true);
+    }
+    if let Some(lora) = &model.loop_lora {
+        meta["lora_rank"] = serde_json::json!(lora.rank);
+    }
     if let Some(bpe_path) = tokenizer_sidecars.bpe {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
     }
@@ -106,6 +112,16 @@ pub(crate) fn collect_named_tensors(model: &Chatbot) -> HashMap<String, Tensor> 
     }
     if let Some(le) = &model.loop_embed {
         map.insert("loop_embed.weight".to_string(), le.weight.clone());
+    }
+    if let Some(fnorm) = &model.final_norm {
+        map.insert("final_norm.gamma".to_string(), fnorm.gamma.clone());
+        map.insert("final_norm.beta".to_string(), fnorm.beta.clone());
+    }
+    if let Some(lora) = &model.loop_lora {
+        for i in 0..lora.n_loops {
+            map.insert(format!("loop_lora.{i}.down"), lora.down[i].weight.clone());
+            map.insert(format!("loop_lora.{i}.up"), lora.up[i].weight.clone());
+        }
     }
     if let Some(proj) = &model.vision_patch_proj {
         map.insert("vision_patch_proj".to_string(), proj.weight.clone());
@@ -161,7 +177,7 @@ pub fn is_hf_safetensors_bytes(bytes: &[u8]) -> bool {
 
 /// Map HF / MMN tensor names to canonical MMN checkpoint keys.
 pub fn hf_name_to_mmn(name: &str) -> Option<String> {
-    if name.starts_with("blocks.") {
+    if name.starts_with("blocks.") || name.starts_with("loop_lora.") {
         return Some(name.to_string());
     }
     match name {
@@ -171,6 +187,14 @@ pub fn hf_name_to_mmn(name: &str) -> Option<String> {
         "lm_head" | "lm_head.weight" | "model.lm_head.weight" => Some("lm_head".into()),
         "model.embed_positions.weight" | "transformer.wpe.weight" | "pos_embed" => {
             Some("pos_embed".into())
+        }
+        "loop_embed.weight" | "final_norm.gamma" | "final_norm.beta" => Some(name.to_string()),
+        "model.norm.weight" | "model.norm.bias" | "transformer.ln_f.weight" | "transformer.ln_f.bias" => {
+            if name.ends_with("bias") {
+                Some("final_norm.beta".into())
+            } else {
+                Some("final_norm.gamma".into())
+            }
         }
         "vision_patch_proj" | "vision_patch_conv" => Some(name.to_string()),
         "vision_cross_attn.out" | "vision_cross_attn.q" | "vision_cross_attn.k" | "vision_cross_attn.v" => {
@@ -288,12 +312,16 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         .and_then(|v| v.as_str())
         .unwrap_or("gelu");
     let loop_embed = meta["loop_embed"].as_bool().unwrap_or(false);
+    let final_norm = meta["final_norm"].as_bool().unwrap_or(false);
+    let lora_rank = meta["lora_rank"].as_u64().unwrap_or(0) as usize;
     let extras = mmn_models::ChatbotArchExtras {
         n_loops: n_loops.max(1),
         tie_embeddings,
         use_rms_norm: norm == "rms",
         use_swiglu: ffn_kind == "swiglu",
         loop_embed: loop_embed && n_loops > 1,
+        final_norm,
+        lora_rank,
     };
     let mut model = Chatbot::new_with_arch(
         vision,
@@ -370,6 +398,37 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
             &[model.n_loops, d_model],
             "loop_embed.weight",
         )?;
+    }
+    if let Some(fnorm) = model.final_norm.as_mut() {
+        fnorm.gamma =
+            tensor_from_entry(require_tensor_entry(&json_tensors, "final_norm.gamma")?)?;
+        expect_tensor_shape(&fnorm.gamma, &[d_model], "final_norm.gamma")?;
+        fnorm.beta = tensor_from_entry(require_tensor_entry(&json_tensors, "final_norm.beta")?)?;
+        expect_tensor_shape(&fnorm.beta, &[d_model], "final_norm.beta")?;
+    }
+    if let Some(lora) = model.loop_lora.as_mut() {
+        let q_dim = model.shape.q_dim();
+        let kv_dim = model.shape.kv_dim();
+        for i in 0..lora.n_loops {
+            lora.down[i].weight = tensor_from_entry(require_tensor_entry(
+                &json_tensors,
+                &format!("loop_lora.{i}.down"),
+            )?)?;
+            expect_tensor_shape(
+                &lora.down[i].weight,
+                &[lora.rank, d_model],
+                &format!("loop_lora.{i}.down"),
+            )?;
+            lora.up[i].weight = tensor_from_entry(require_tensor_entry(
+                &json_tensors,
+                &format!("loop_lora.{i}.up"),
+            )?)?;
+            expect_tensor_shape(
+                &lora.up[i].weight,
+                &[q_dim + 2 * kv_dim, lora.rank],
+                &format!("loop_lora.{i}.up"),
+            )?;
+        }
     }
     Ok(model)
 }

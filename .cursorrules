@@ -399,3 +399,10 @@ example-only benches as the canonical API while keeping examples as thin demos.
   `tests/fixtures/labels_small.json` + adamw epochs=20 batch=2 lr=0.05.
 - `save_arrays(path, arrays)` — path first (not arrays first).
 
+## Task: final_norm + LoopLoRA QKV adapters (Glint parity)
+
+[ ] Python failing tests (final_norm, lora_rank getters/train/IO)
+[ ] final_norm: Chatbot field, forward/train, IO (GGUF output_norm map), Python
+[ ] LoopLora: per-loop down/up, QKV deltas in attn, train grads, IO, Python
+[ ] Docs/examples/eval + verify_gate + push
+

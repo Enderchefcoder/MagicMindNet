@@ -162,6 +162,8 @@ def lm_glint_train(*, seed: int = 1, work_dir: Path | None = None) -> TaskResult
         ffn="swiglu",
         tie_embeddings=True,
         loop_embed=True,
+        final_norm=True,
+        lora_rank=2,
     )
     return _loss_train_result(
         "lm_glint_train",
@@ -174,6 +176,8 @@ def lm_glint_train(*, seed: int = 1, work_dir: Path | None = None) -> TaskResult
             "ffn": bot.ffn,
             "tie_embeddings": bot.tie_embeddings,
             "loop_embed": bot.loop_embed,
+            "final_norm": bot.final_norm,
+            "lora_rank": bot.lora_rank,
         },
     )
 
