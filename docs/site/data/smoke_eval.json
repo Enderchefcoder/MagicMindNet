@@ -1,0 +1,345 @@
+{
+  "suite": "smoke",
+  "ok": true,
+  "elapsed_ms": 37.74837497621775,
+  "seed": 1,
+  "n_tasks": 16,
+  "n_failed": 0,
+  "meta": {
+    "fail_fast": false
+  },
+  "results": [
+    {
+      "name": "cls_mean_loss",
+      "ok": true,
+      "elapsed_ms": 0.20092702470719814,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "mean_loss",
+          "value": 0.6937834024429321,
+          "unit": "",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "cls_train",
+      "ok": true,
+      "elapsed_ms": 1.384975970722735,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "loss_before",
+          "value": 0.6937834024429321,
+          "unit": "",
+          "higher_is_better": false
+        },
+        {
+          "name": "loss_after",
+          "value": 6.973785275476985e-06,
+          "unit": "",
+          "higher_is_better": false
+        },
+        {
+          "name": "loss_delta",
+          "value": -0.6937764286576567,
+          "unit": "",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "diffusion_denoise",
+      "ok": true,
+      "elapsed_ms": 9.756317012943327,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "mean_denoise_loss",
+          "value": 175334192.0,
+          "unit": "",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "lm_vision_flag",
+      "ok": true,
+      "elapsed_ms": 0.3963469644077122,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "vision_patch_dim",
+          "value": 64.0,
+          "unit": "",
+          "higher_is_better": null
+        },
+        {
+          "name": "has_vision",
+          "value": 1.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    },
+    {
+      "name": "arrays_npz_roundtrip",
+      "ok": true,
+      "elapsed_ms": 0.4064710228703916,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "size_bytes",
+          "value": 474.0,
+          "unit": "B",
+          "higher_is_better": false
+        },
+        {
+          "name": "n_tensors",
+          "value": 2.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    },
+    {
+      "name": "hub_causal_generate",
+      "ok": true,
+      "elapsed_ms": 0.2545239985920489,
+      "error": null,
+      "meta": {
+        "family": "causal-lm",
+        "preview": "\ufffdO\r\ufffd"
+      },
+      "metrics": [
+        {
+          "name": "max_new_tokens",
+          "value": 4.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    },
+    {
+      "name": "hub_capabilities_matrix",
+      "ok": true,
+      "elapsed_ms": 0.28615602059289813,
+      "error": null,
+      "meta": {
+        "missing_families": []
+      },
+      "metrics": [
+        {
+          "name": "n_families",
+          "value": 16.0,
+          "unit": "",
+          "higher_is_better": null
+        },
+        {
+          "name": "n_synthetics",
+          "value": 5.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    },
+    {
+      "name": "io_roundtrip_safetensors",
+      "ok": true,
+      "elapsed_ms": 6.8073850707151,
+      "error": null,
+      "meta": {
+        "format": "safetensors"
+      },
+      "metrics": [
+        {
+          "name": "size_bytes",
+          "value": 925708.0,
+          "unit": "B",
+          "higher_is_better": false
+        },
+        {
+          "name": "save_ms",
+          "value": 3.7907740334048867,
+          "unit": "ms",
+          "higher_is_better": false
+        },
+        {
+          "name": "load_ms",
+          "value": 3.016611037310213,
+          "unit": "ms",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "lm_qa_loss",
+      "ok": true,
+      "elapsed_ms": 0.40697003714740276,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "mean_loss",
+          "value": 5.4966654777526855,
+          "unit": "",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "lm_qa_train",
+      "ok": true,
+      "elapsed_ms": 6.462174002081156,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "loss_before",
+          "value": 5.4966654777526855,
+          "unit": "",
+          "higher_is_better": false
+        },
+        {
+          "name": "loss_after",
+          "value": 4.1456074714660645,
+          "unit": "",
+          "higher_is_better": false
+        },
+        {
+          "name": "loss_delta",
+          "value": -1.351058006286621,
+          "unit": "",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "lm_glint_train",
+      "ok": true,
+      "elapsed_ms": 8.074557001236826,
+      "error": null,
+      "meta": {
+        "n_loops": 2,
+        "norm": "rms",
+        "ffn": "swiglu",
+        "tie_embeddings": true,
+        "loop_embed": true,
+        "final_norm": true,
+        "lora_rank": 2
+      },
+      "metrics": [
+        {
+          "name": "loss_before",
+          "value": 11.18295669555664,
+          "unit": "",
+          "higher_is_better": false
+        },
+        {
+          "name": "loss_after",
+          "value": 5.782049655914307,
+          "unit": "",
+          "higher_is_better": false
+        },
+        {
+          "name": "loss_delta",
+          "value": -5.400907039642334,
+          "unit": "",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "lm_generate_latency",
+      "ok": true,
+      "elapsed_ms": 0.29876595363020897,
+      "error": null,
+      "meta": {
+        "preview": "\ufffdkD8!8&6"
+      },
+      "metrics": [
+        {
+          "name": "generate_ms",
+          "value": 0.29876595363020897,
+          "unit": "ms",
+          "higher_is_better": false
+        },
+        {
+          "name": "max_new_tokens",
+          "value": 8.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    },
+    {
+      "name": "gen_typical_p_smoke",
+      "ok": true,
+      "elapsed_ms": 0.30258699553087354,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "generate_ms",
+          "value": 0.30258699553087354,
+          "unit": "ms",
+          "higher_is_better": false
+        }
+      ]
+    },
+    {
+      "name": "stream_generate",
+      "ok": true,
+      "elapsed_ms": 0.27579301968216896,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "n_chunks",
+          "value": 5.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    },
+    {
+      "name": "embed_mean_pool",
+      "ok": true,
+      "elapsed_ms": 0.03892299719154835,
+      "error": null,
+      "meta": {},
+      "metrics": [
+        {
+          "name": "d_model",
+          "value": 32.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    },
+    {
+      "name": "merge_chatbot_roundtrip",
+      "ok": true,
+      "elapsed_ms": 0.29419001657515764,
+      "error": null,
+      "meta": {
+        "d_model": 32,
+        "vocab_size": 256
+      },
+      "metrics": [
+        {
+          "name": "parameters",
+          "value": 41216.0,
+          "unit": "",
+          "higher_is_better": null
+        }
+      ]
+    }
+  ]
+}

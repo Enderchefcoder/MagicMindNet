@@ -23,4 +23,10 @@ examples/_inpaint_sample.png
 examples/_roundtrip_diffusion_quant.mmn
 examples/*.bpe.mmn
 examples/_tmp_labels.json
+examples/_pip_quickstart.mmn
+examples/_openai_server_demo.mmn
+examples/_hub_catalog_local.mmn
+_pip_quickstart.mmn
+_openai_server_demo.mmn
+_hub_catalog_local.mmn
 user_saved/

@@ -8,8 +8,23 @@ use crate::st_codec::SafeTensorError;
 pub const HF_CHATBOT_FORMAT: &str = "mmn-hf-safetensors-v1";
 pub const HF_CLASSIFIER_FORMAT: &str = "mmn-hf-classifier-v1";
 
+/// True when the buffer looks like a binary safetensors container:
+/// little-endian u64 header length followed by a `{` JSON header.
+pub fn looks_like_safetensors(bytes: &[u8]) -> bool {
+    if bytes.len() < 9 {
+        return false;
+    }
+    let header_len = u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]) as usize;
+    header_len > 0
+        && header_len.checked_add(8).is_some_and(|end| end <= bytes.len())
+        && bytes[8] == b'{'
+}
+
+/// Prefer structural safetensors sniffing over "not JSON".
 pub fn is_hf_binary_bytes(bytes: &[u8]) -> bool {
-    !bytes.is_empty() && bytes[0] != b'{'
+    looks_like_safetensors(bytes)
 }
 
 pub fn hf_err(e: SafeTensorError) -> MmnError {

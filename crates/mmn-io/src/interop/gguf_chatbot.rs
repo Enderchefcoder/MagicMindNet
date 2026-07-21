@@ -23,8 +23,11 @@ pub fn gguf_name_to_mmn(name: &str) -> Option<String> {
         "token_embd.weight" => return Some("embed".into()),
         "output.weight" => return Some("lm_head".into()),
         "position_embd.weight" => return Some("pos_embed".into()),
-        // Final-norm has no MMN equivalent (blocks carry their own norms).
-        "output_norm.weight" | "output_norm.bias" => return None,
+        "loop_embd.weight" => return Some("loop_embed.weight".into()),
+        "output_norm.weight" => return Some("final_norm.gamma".into()),
+        "output_norm.bias" => return Some("final_norm.beta".into()),
+        // Legacy GGML single final norm.
+        "norm.weight" => return Some("final_norm.gamma".into()),
         // MMN vision prefix tensors (mmproj-style `v.` namespace).
         "v.patch_proj.weight" => return Some("vision_patch_proj".into()),
         "v.patch_conv.weight" => return Some("vision_patch_conv".into()),
@@ -43,7 +46,7 @@ pub fn gguf_name_to_mmn(name: &str) -> Option<String> {
         "attn_v.weight" => "attn.v",
         "attn_output.weight" => "attn.out",
         "attn_qkv.weight" => "attn.qkv",
-        "ffn_gate.weight" => "ffn",
+        "ffn_gate.weight" => "ffn_gate",
         "ffn_up.weight" => "ffn.up",
         "ffn_down.weight" => "ffn2",
         "attn_norm.weight" => "ln1.gamma",
@@ -61,6 +64,9 @@ pub fn mmn_name_to_gguf(key: &str) -> Option<String> {
         "embed" => return Some("token_embd.weight".into()),
         "lm_head" => return Some("output.weight".into()),
         "pos_embed" => return Some("position_embd.weight".into()),
+        "loop_embed.weight" => return Some("loop_embd.weight".into()),
+        "final_norm.gamma" => return Some("output_norm.weight".into()),
+        "final_norm.beta" => return Some("output_norm.bias".into()),
         "vision_patch_proj" => return Some("v.patch_proj.weight".into()),
         "vision_patch_conv" => return Some("v.patch_conv.weight".into()),
         "vision_cross_attn.q" => return Some("v.cross_attn_q.weight".into()),
@@ -78,6 +84,7 @@ pub fn mmn_name_to_gguf(key: &str) -> Option<String> {
         "attn.v" => "attn_v.weight",
         "attn.out" => "attn_output.weight",
         "ffn" => "ffn_up.weight",
+        "ffn_gate" => "ffn_gate.weight",
         "ffn2" => "ffn_down.weight",
         "ln1.gamma" => "attn_norm.weight",
         "ln1.beta" => "attn_norm.bias",
@@ -137,6 +144,30 @@ fn gguf_meta_to_mmn(file: &GgufFile, tensors: &HashMap<String, Tensor>) -> serde
     if let Some(n_kv) = meta_u64(file, &format!("{arch}.attention.head_count_kv")) {
         meta["num_key_value_heads"] = serde_json::json!(n_kv);
     }
+    // Qwen / modern GGUF: head_dim may differ from d_model / n_heads.
+    if let Some(key_len) = meta_u64(file, &format!("{arch}.attention.key_length")) {
+        meta["head_dim"] = serde_json::json!(key_len);
+    } else if let Some(val_len) = meta_u64(file, &format!("{arch}.attention.value_length")) {
+        meta["head_dim"] = serde_json::json!(val_len);
+    } else if let (Some(n_heads), Some(q)) = (
+        meta.get("num_attention_heads")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+        tensors.get("blocks.0.attn.q"),
+    ) {
+        let shape = q.data.shape();
+        if shape.len() == 2 && n_heads > 0 && shape[0].is_multiple_of(n_heads) {
+            let inferred = shape[0] / n_heads;
+            let d_model = meta
+                .get("d_model")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(shape[1]);
+            if inferred != d_model / n_heads {
+                meta["head_dim"] = serde_json::json!(inferred);
+            }
+        }
+    }
     let rope_base = file
         .metadata
         .get(&format!("{arch}.rope.freq_base"))
@@ -160,6 +191,53 @@ fn gguf_meta_to_mmn(file: &GgufFile, tensors: &HashMap<String, Tensor>) -> serde
     }
     if let Some(seed) = meta_u64(file, &format!("{arch}.seed")) {
         meta["seed"] = serde_json::json!(seed);
+    }
+    if let Some(n_loops) = meta_u64(file, &format!("{arch}.n_loops")) {
+        meta["n_loops"] = serde_json::json!(n_loops);
+    }
+    if file
+        .metadata
+        .get(&format!("{arch}.tie_embeddings"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        meta["tie_embeddings"] = serde_json::json!(true);
+    }
+    if let Some(norm) = file
+        .metadata
+        .get(&format!("{arch}.norm"))
+        .and_then(|v| v.as_str())
+    {
+        meta["norm"] = serde_json::json!(norm);
+    }
+    if let Some(ffn) = file
+        .metadata
+        .get(&format!("{arch}.ffn_kind"))
+        .and_then(|v| v.as_str())
+    {
+        meta["ffn_kind"] = serde_json::json!(ffn);
+    }
+    if file
+        .metadata
+        .get(&format!("{arch}.loop_embed"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        meta["loop_embed"] = serde_json::json!(true);
+    }
+    if file
+        .metadata
+        .get(&format!("{arch}.final_norm"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || tensors.contains_key("final_norm.gamma")
+    {
+        meta["final_norm"] = serde_json::json!(true);
+    }
+    if let Some(rank) = meta_u64(file, &format!("{arch}.lora_rank")) {
+        if rank > 0 {
+            meta["lora_rank"] = serde_json::json!(rank);
+        }
     }
     let vision = file
         .metadata
@@ -276,6 +354,14 @@ fn chatbot_gguf_metadata(model: &Chatbot) -> Vec<(String, GgufValue)> {
             GgufValue::U32(model.shape.n_kv_heads as u32),
         ),
         (
+            "mmn.attention.key_length".to_string(),
+            GgufValue::U32(model.shape.effective_head_dim() as u32),
+        ),
+        (
+            "mmn.attention.value_length".to_string(),
+            GgufValue::U32(model.shape.effective_head_dim() as u32),
+        ),
+        (
             "mmn.vocab_size".to_string(),
             GgufValue::U32(model.shape.vocab_size as u32),
         ),
@@ -296,6 +382,39 @@ fn chatbot_gguf_metadata(model: &Chatbot) -> Vec<(String, GgufValue)> {
     }
     if model.vision {
         meta.push(("mmn.vision".to_string(), GgufValue::Bool(true)));
+    }
+    if model.n_loops != 1 {
+        meta.push((
+            "mmn.n_loops".to_string(),
+            GgufValue::U32(model.n_loops as u32),
+        ));
+    }
+    if model.tie_embeddings {
+        meta.push(("mmn.tie_embeddings".to_string(), GgufValue::Bool(true)));
+    }
+    if model.norm_kind != "layer" {
+        meta.push((
+            "mmn.norm".to_string(),
+            GgufValue::String(model.norm_kind.clone()),
+        ));
+    }
+    if model.ffn_kind != "gelu" {
+        meta.push((
+            "mmn.ffn_kind".to_string(),
+            GgufValue::String(model.ffn_kind.clone()),
+        ));
+    }
+    if model.loop_embed.is_some() {
+        meta.push(("mmn.loop_embed".to_string(), GgufValue::Bool(true)));
+    }
+    if model.final_norm.is_some() {
+        meta.push(("mmn.final_norm".to_string(), GgufValue::Bool(true)));
+    }
+    if let Some(lora) = &model.loop_lora {
+        meta.push((
+            "mmn.lora_rank".to_string(),
+            GgufValue::U32(lora.rank as u32),
+        ));
     }
     meta
 }
@@ -403,7 +522,14 @@ mod tests {
             gguf_name_to_mmn("blk.0.ffn_up.weight").as_deref(),
             Some("blocks.0.ffn.up")
         );
-        assert_eq!(gguf_name_to_mmn("output_norm.weight"), None);
+        assert_eq!(
+            gguf_name_to_mmn("output_norm.weight").as_deref(),
+            Some("final_norm.gamma")
+        );
+        assert_eq!(
+            gguf_name_to_mmn("output_norm.bias").as_deref(),
+            Some("final_norm.beta")
+        );
         assert_eq!(gguf_name_to_mmn("unknown.weight"), None);
     }
 
@@ -537,6 +663,47 @@ mod tests {
     }
 
     #[test]
+    fn gguf_glint_arch_meta_roundtrip() {
+        use mmn_models::ChatbotArchExtras;
+        let extras = ChatbotArchExtras {
+            n_loops: 2,
+            tie_embeddings: true,
+            use_rms_norm: true,
+            use_swiglu: true,
+            loop_embed: true,
+            ..Default::default()
+        };
+        let model = Chatbot::new_with_arch(
+            false,
+            None,
+            64,
+            Some(1),
+            Some(16),
+            None,
+            Some(4),
+            None,
+            None,
+            Some(7),
+            false,
+            64,
+            false,
+            10_000.0,
+            extras,
+        );
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("mmn_gguf_glint_{}.gguf", std::process::id()));
+        export_gguf(&model, path.to_str().unwrap(), "f32").unwrap();
+        let loaded = import_gguf(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.n_loops, 2);
+        assert!(loaded.tie_embeddings);
+        assert_eq!(loaded.norm_kind, "rms");
+        assert_eq!(loaded.ffn_kind, "swiglu");
+        assert!(loaded.loop_embed.is_some());
+        assert!(loaded.blocks[0].ffn_gate.is_some());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn iq4_exports_roundtrip_close() {
         let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(256), Some(15));
         let dir = std::env::temp_dir();
@@ -586,5 +753,94 @@ mod tests {
         assert_eq!(loaded.shape.n_kv_heads, model.shape.n_kv_heads);
         assert_eq!(loaded.shape.ffn_dim, model.shape.ffn_dim);
         let _ = fs::remove_file(&path);
+    }
+
+    /// Synthetic Qwen-style GGUF: d_model=8, n_heads=2, head_dim=8 → q [16, 8].
+    #[test]
+    fn import_gguf_custom_head_dim_from_key_length() {
+        let d_model = 8usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 8usize;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let vocab = 32usize;
+        let ffn_dim = 16usize;
+
+        let storages: Vec<(String, Vec<usize>, Vec<f32>)> = [
+            ("token_embd.weight", vec![vocab, d_model], 0.01),
+            ("output.weight", vec![vocab, d_model], 0.02),
+            ("blk.0.attn_q.weight", vec![q_dim, d_model], 0.03),
+            ("blk.0.attn_k.weight", vec![kv_dim, d_model], 0.04),
+            ("blk.0.attn_v.weight", vec![kv_dim, d_model], 0.05),
+            ("blk.0.attn_output.weight", vec![d_model, q_dim], 0.06),
+            ("blk.0.ffn_up.weight", vec![ffn_dim, d_model], 0.07),
+            ("blk.0.ffn_down.weight", vec![d_model, ffn_dim], 0.08),
+            ("blk.0.attn_norm.weight", vec![d_model], 1.0),
+            ("blk.0.ffn_norm.weight", vec![d_model], 1.0),
+        ]
+        .into_iter()
+        .map(|(name, shape, fill)| {
+            let n: usize = shape.iter().product();
+            (name.to_string(), shape, vec![fill; n])
+        })
+        .collect();
+        let tensors: Vec<GgufWriteTensor<'_>> = storages
+            .iter()
+            .map(|(name, shape, data)| GgufWriteTensor {
+                name: name.clone(),
+                shape: shape.clone(),
+                values: data.as_slice(),
+                ggml_type: GgmlType::F32,
+            })
+            .collect();
+
+        let meta = vec![
+            (
+                "general.architecture".to_string(),
+                GgufValue::String("qwen3".into()),
+            ),
+            (
+                "qwen3.embedding_length".to_string(),
+                GgufValue::U32(d_model as u32),
+            ),
+            ("qwen3.block_count".to_string(), GgufValue::U32(1)),
+            (
+                "qwen3.feed_forward_length".to_string(),
+                GgufValue::U32(ffn_dim as u32),
+            ),
+            (
+                "qwen3.attention.head_count".to_string(),
+                GgufValue::U32(n_heads as u32),
+            ),
+            (
+                "qwen3.attention.head_count_kv".to_string(),
+                GgufValue::U32(n_kv_heads as u32),
+            ),
+            (
+                "qwen3.attention.key_length".to_string(),
+                GgufValue::U32(head_dim as u32),
+            ),
+            (
+                "qwen3.attention.value_length".to_string(),
+                GgufValue::U32(head_dim as u32),
+            ),
+            ("qwen3.rope.freq_base".to_string(), GgufValue::F32(10_000.0)),
+        ];
+        let bytes = write_gguf(&meta, &tensors).unwrap();
+        let loaded = import_gguf_bytes(&bytes).unwrap();
+        assert_eq!(loaded.shape.d_model, d_model);
+        assert_eq!(loaded.shape.n_heads, n_heads);
+        assert_eq!(loaded.shape.n_kv_heads, n_kv_heads);
+        assert_eq!(loaded.shape.head_dim, Some(head_dim));
+        assert_eq!(loaded.blocks[0].attn.head_dim, head_dim);
+        assert_eq!(
+            loaded.blocks[0].attn.q_proj.weight.data.shape(),
+            &[q_dim, d_model]
+        );
+        assert_eq!(
+            loaded.blocks[0].attn.out_proj.weight.data.shape(),
+            &[d_model, q_dim]
+        );
     }
 }

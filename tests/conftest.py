@@ -63,6 +63,11 @@ def install_fake_torch():
     """
     import types
 
+    if "torch" in sys.modules and getattr(sys.modules["torch"], "__file__", None):
+        # Real torch already imported (optional hub deps). Do not replace it —
+        # callers that need stub rebuild (pt pickle cross-checks) must supply
+        # their own find_class stubs. Returning the live modules keeps Trainer OK.
+        return sys.modules["torch"], sys.modules.get("torch._utils") or sys.modules["torch"]
     if "torch" in sys.modules:
         return sys.modules["torch"], sys.modules["torch._utils"]
     torch = types.ModuleType("torch")

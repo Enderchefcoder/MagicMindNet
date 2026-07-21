@@ -1,0 +1,64 @@
+{
+  "model": {
+    "vocab": 1024,
+    "n_layer": 1,
+    "d_model": 256,
+    "params": 1311744
+  },
+  "formats": [
+    {
+      "format": "safetensors",
+      "size_kib": 18141,
+      "save_ms": 58.2,
+      "load_ms": 56.8
+    },
+    {
+      "format": "hf-safetensors",
+      "size_kib": 5125,
+      "save_ms": 8.2,
+      "load_ms": 11.4
+    },
+    {
+      "format": "gguf",
+      "size_kib": 5125,
+      "save_ms": 7.0,
+      "load_ms": 12.1
+    },
+    {
+      "format": "gguf-f16",
+      "size_kib": 2563,
+      "save_ms": 5.7,
+      "load_ms": 11.4
+    },
+    {
+      "format": "gguf-q8_0",
+      "size_kib": 1362,
+      "save_ms": 6.0,
+      "load_ms": 10.3
+    },
+    {
+      "format": "gguf-q6_k",
+      "size_kib": 1052,
+      "save_ms": 44.4,
+      "load_ms": 10.1
+    },
+    {
+      "format": "gguf-q4_k",
+      "size_kib": 722,
+      "save_ms": 44.5,
+      "load_ms": 9.9
+    },
+    {
+      "format": "npz",
+      "size_kib": 5127,
+      "save_ms": 17.7,
+      "load_ms": 18.5
+    },
+    {
+      "format": "pt",
+      "size_kib": 5128,
+      "save_ms": 16.6,
+      "load_ms": 18.1
+    }
+  ]
+}

@@ -33,7 +33,7 @@ use io::{
     write_pt, write_safetensors,
     write_tf_checkpoint,
 };
-use models::{PyChatbot, PyClassifier, PyDiffusion};
+use models::{format_chat_messages_py, PyChatbot, PyClassifier, PyDiffusion};
 use resource::{limit_percent, limit_resources};
 use tokenizer::{PyBytePairEncoder, PyGpt2BpeEncoder, PyUnigramEncoder};
 use train::{RL, SPIN, Train, TrainClassifier, TrainDiffusion};
@@ -111,6 +111,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(write_h5, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patch_from_image_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(vision_rgb_patches_from_image_path_py, m)?)?;
+    m.add_function(wrap_pyfunction!(format_chat_messages_py, m)?)?;
     m.add("vision_rgb_patch_from_image_path", m.getattr("vision_rgb_patch_from_image_path_py")?)?;
     m.add(
         "vision_rgb_patches_from_image_path",

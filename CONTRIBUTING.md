@@ -69,6 +69,7 @@ Master index: [docs/testing.md](docs/testing.md). When adding features, extend t
 | Training | [docs/training_coverage.md](docs/training_coverage.md) |
 | Datasets | [docs/dataset_coverage.md](docs/dataset_coverage.md) |
 | Examples smoke | [docs/examples_coverage.md](docs/examples_coverage.md) |
+| Eval harness | [docs/eval_coverage.md](docs/eval_coverage.md) / [docs/benchmarks.md](docs/benchmarks.md) |
 | Optimizers | [docs/optimizers_coverage.md](docs/optimizers_coverage.md) |
 | Attention (alpha) | [docs/attention_coverage.md](docs/attention_coverage.md) |
 | LayerNorm (alpha) | [docs/layernorm_coverage.md](docs/layernorm_coverage.md) |

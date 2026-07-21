@@ -135,6 +135,46 @@ edit.mask_path_at(0)
 
 ## Models
 
+### Universal hub — `ai.from_pretrained`
+
+```python
+model = ai.from_pretrained("org/name")                 # Hugging Face
+model = ai.from_pretrained("hf://org/name")
+model = ai.from_pretrained("ms://org/name")            # ModelScope
+model = ai.from_pretrained("ollama://llama3.2:1b")
+model = ai.from_pretrained("./checkpoint.mmn")
+model = ai.from_pretrained("Qwen/Qwen3-0.6B-GGUF", filename="Qwen3-0.6B-Q8_0.gguf")
+```
+
+Returns a native `Chatbot`/`Classifier`/`Diffusion` when weights adapt, otherwise a
+`HubModel` with the same methods: `generate`, `chat`, `predict`, `predict_label`,
+`score_pairs`, `rerank`, `embed`, `capabilities`, `finetune`, `train`, `save`,
+`to_native()`. Helpers: `inspect_source`, `resolve_source`, `list_hub_families`,
+`ModelCard`. Full routing table: [hub.md](hub.md); coverage: [hub_coverage.md](hub_coverage.md).
+
+```python
+print(model.capabilities())
+model.score_pairs("query", ["doc a", "doc b"])
+model.rerank("query", docs, top_k=5)
+model.embed(["sentence one", "sentence two"])  # embedding family
+```
+
+### Eval harness — `ai.run_suite` / `EvalHarness`
+
+Unified offline benchmarks across LM / classifier / diffusion / hub / IO / RL:
+
+```python
+report = ai.run_suite("smoke")
+print("\n".join(report.summary_lines()))
+
+harness = ai.EvalHarness(seed=1)
+report = harness.run(tasks=["lm_glint_train", "io_roundtrip_gguf"])
+report.write_json("report.json")
+```
+
+CLI: `python -m magicmindnet.eval smoke` (or `all`, `lm`, `cls`, `io`, …).
+Docs: [benchmarks.md](benchmarks.md), [eval_coverage.md](eval_coverage.md).
+
 ### Chatbot
 
 ```python
@@ -144,11 +184,22 @@ bot = ai.Chatbot(
     d_model=128,
     n_heads=4,                 # optional; default 4 when not using autoset
     n_kv_heads=2,              # optional grouped-query attention (default = n_heads)
+    head_dim=None,             # optional; Qwen-style when n_heads*head_dim != d_model
+    ffn_dim=None,              # optional FFN width (default 4 * d_model)
     vision=False,
-    autoset=None,              # or "sub-100M" | "sub-1B" | "sub-10B"
+    autoset=None,              # "sub-1M"|"sub-10M"|"sub-50M"|"sub-100M"|"sub-1B"|"sub-10B"
     seed=42,                   # optional deterministic init
     use_learned_pos_embed=False,  # default: fixed sinusoidal PE at runtime
-    max_seq_len=512,           # learned PE table rows when use_learned_pos_embed=True
+    max_seq_len=512,           # context / train seq length (+ learned PE rows)
+    use_rope=False,
+    # Glint-style architecture (defaults = classic stacked Chatbot)
+    n_loops=1,                 # reuse the block stack this many times
+    norm="layer",              # or "rms"
+    ffn="gelu",                # or "swiglu"
+    tie_embeddings=False,      # share lm_head with embed
+    loop_embed=False,          # per-loop additive embedding when n_loops>1
+    final_norm=False,          # optional final LayerNorm/RMSNorm (Glint output_norm)
+    lora_rank=0,               # LoopLoRA QKV adapters (0 = off; zero-init up = identity)
 )
 ```
 
@@ -158,9 +209,11 @@ bot = ai.Chatbot(
 |------|------|------------|----------------------|
 | Sinusoidal (default) | `use_learned_pos_embed=False` | none | no |
 | Learned table | `use_learned_pos_embed=True` | safetensors key `pos_embed` | yes |
+| RoPE | `use_rope=True` | none (theta in meta) | rotates Q/K |
 
 - Sinusoidal PE is applied at forward time (no extra checkpoint keys).
 - Learned `pos_embed` is `[max_seq_len, d_model]`; sequences longer than `max_seq_len` raise a shape error.
+- Training tokenization uses `max_seq_len` (no hard 32-token cap).
 - `export(..., "bin")` stores `use_learned_pos_embed` / `max_seq_len` in the architecture stub (weights are not saved in `bin`).
 - RL updates `lm_head` only; SPIN runs `Train()` and can update learned PE. See [position_encoding_coverage.md](position_encoding_coverage.md).
 - Runnable roundtrip: `python examples/learned_pos_embed_roundtrip.py`
@@ -169,8 +222,7 @@ bot = ai.Chatbot(
 `use_learned_pos_embed=True` and `use_rope=True` raise `ValueError` at
 construction time.
 
-**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`
-
+**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `head_dim`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `tie_embeddings`, `norm`, `ffn`, `loop_embed`, `final_norm`, `lora_rank`
 **Core methods:**
 
 - `train(dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None) -> list[float]` — accepts `DatasetQA` or `DatasetCorpus`; keyword overrides win over `config`; returns per-epoch mean losses
@@ -182,9 +234,17 @@ construction time.
 
 - `compute_loss(input_str, target_str, bpe_encoder=None, ...) -> float` — same tokenization as `Train`
 - `compute_mean_loss(dataset_qa | dataset_corpus, bpe_encoder=None) -> float`
-- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=True, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None) -> str`
+- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, typical_p=0.0, mirostat=0, mirostat_tau=5.0, mirostat_eta=0.1, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=True, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, json_mode=False, grammar=None) -> str`
+- `generate_stream(...)` — same kwargs; returns `list[str]` pieces (join equals `generate` for greedy)
 - `generate_tokens(...)` — same sampling kwargs; returns new token ids only
+- `json_mode=True` / `grammar="json"` — constrained JSON decoding (+ `finalize_json` repair); `grammar="digit"` — ASCII digits only (byte vocab)
+- `embed(texts, bpe_encoder=None, unigram_encoder=None)` — mean-pool hidden → `list[float]` or `list[list[float]]`
+- `chat_messages(messages, **generate_kwargs) -> str` — ChatML format + generate
+- `ai.format_chat_messages(messages, add_generation_prompt=True) -> str` — ChatML helper
+- `ai.OpenAIServer(model_path, host="127.0.0.1", port=8000)` — local OpenAI-compatible HTTP (`/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/health`); CLI `python -m magicmindnet.serve --model path.mmn`
 - `stop_token_ids` / `stop_strings` optional on both (generation halts early)
+
+See [feature_parity.md](feature_parity.md) for the PyTorch / llama.cpp / Ollama matrix.
 
 ### Classifier
 
@@ -235,14 +295,18 @@ cfg = ai.TrainConfig(
     cuda=False,                # True requires CUDA build + GPU
     optimizer="hybrid",        # "adamw" | "muon" | "hybrid" (Muon+AdamW)
     learning_rate=3e-4,
+    weight_decay=0.01,         # AdamW weight decay
+    lr_schedule="constant",    # or "cosine" (+ warmup_steps)
+    warmup_steps=0,
     verbose=False,             # True prints "[magicmindnet] epoch i/n - mean loss ..."
 )
 ```
 
 All fields are readable/writable on `cfg`. `repr(cfg)` summarizes settings.
-Unknown optimizer names raise `ValueError` (at construction and at train time).
+Unknown optimizer or `lr_schedule` names raise `ValueError` (at construction and at train time).
 `"muon"` routes matrix weights through Muon with AdamW for vectors — the same
 hybrid path, named for discoverability.
+Cosine schedule: linear warmup then cosine decay to `0.1 * learning_rate`.
 
 ```python
 losses = ai.Train(chatbot, dataset_qa, cfg)              # list[float], one per epoch
@@ -440,6 +504,7 @@ All subclass `Exception` with `message`, `fix`, and `explanation` fields where a
 | Train benchmark | `python examples/benchmark_train.py` (optional `--learned-pe`) |
 | RL + SPIN | `python examples/rl_spin.py` |
 | Mean loss | `python examples/eval_mean_loss.py qa`, `cls`, or `corpus` (optional `--train`, `--learned-pe`) |
+| Eval harness | `python examples/eval_harness.py smoke` (or `all`; see [benchmarks.md](benchmarks.md)) |
 | Classification | `python examples/classification.py` |
 | Roundtrips | `python examples/checkpoint_roundtrip.py` |
 | Learned PE roundtrip | `python examples/learned_pos_embed_roundtrip.py` |

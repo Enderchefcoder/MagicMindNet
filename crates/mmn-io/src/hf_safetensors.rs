@@ -4,8 +4,8 @@ use crate::hf_adapt::{adapt_external_hf_tensors, fill_missing_block_layernorm_de
 use crate::block_tensors::import_block_tensors;
 use crate::chatbot_io::TokenizerSidecarRefs;
 use crate::checkpoint_util::{
-    expect_tensor_shape, require_tensor_entry, tensor_from_entry, tensor_to_entry, TensorMap,
-    write_file_create_parents,
+    expect_tensor_shape, optional_tensor_entry, require_tensor_entry, tensor_from_entry,
+    tensor_to_entry, TensorMap, write_file_create_parents,
 };
 use mmn_core::{MmnError, Tensor};
 use mmn_models::{Chatbot, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA};
@@ -49,10 +49,37 @@ pub(crate) fn chatbot_meta_json(
         meta["use_rope"] = serde_json::json!(true);
         meta["rope_theta"] = serde_json::json!(model.rope_theta);
     }
-    if model.shape.n_kv_heads != model.shape.n_heads {
-        meta["n_kv_heads"] = serde_json::json!(model.shape.n_kv_heads);
-        meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
-        meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
+    // Always emit head counts so classic MHA roundtrips do not rely on GQA guessing
+    // (which otherwise prefers n_heads=1 for square Q/K).
+    meta["n_heads"] = serde_json::json!(model.shape.n_heads);
+    meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
+    meta["n_kv_heads"] = serde_json::json!(model.shape.n_kv_heads);
+    meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
+    if let Some(hd) = model.shape.head_dim {
+        if hd != model.shape.d_model / model.shape.n_heads {
+            meta["head_dim"] = serde_json::json!(hd);
+        }
+    }
+    if model.n_loops != 1 {
+        meta["n_loops"] = serde_json::json!(model.n_loops);
+    }
+    if model.tie_embeddings {
+        meta["tie_embeddings"] = serde_json::json!(true);
+    }
+    if model.norm_kind != "layer" {
+        meta["norm"] = serde_json::json!(model.norm_kind);
+    }
+    if model.ffn_kind != "gelu" {
+        meta["ffn_kind"] = serde_json::json!(model.ffn_kind);
+    }
+    if model.loop_embed.is_some() {
+        meta["loop_embed"] = serde_json::json!(true);
+    }
+    if model.final_norm.is_some() {
+        meta["final_norm"] = serde_json::json!(true);
+    }
+    if let Some(lora) = &model.loop_lora {
+        meta["lora_rank"] = serde_json::json!(lora.rank);
     }
     if let Some(bpe_path) = tokenizer_sidecars.bpe {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
@@ -75,10 +102,26 @@ pub(crate) fn collect_named_tensors(model: &Chatbot) -> HashMap<String, Tensor> 
         map.insert(format!("{p}.attn.out"), block.attn.out_proj.weight.clone());
         map.insert(format!("{p}.ffn"), block.ffn.weight.clone());
         map.insert(format!("{p}.ffn2"), block.ffn2.weight.clone());
+        if let Some(gate) = &block.ffn_gate {
+            map.insert(format!("{p}.ffn_gate"), gate.weight.clone());
+        }
         map.insert(format!("{p}.ln1.gamma"), block.ln1.gamma.clone());
         map.insert(format!("{p}.ln1.beta"), block.ln1.beta.clone());
         map.insert(format!("{p}.ln2.gamma"), block.ln2.gamma.clone());
         map.insert(format!("{p}.ln2.beta"), block.ln2.beta.clone());
+    }
+    if let Some(le) = &model.loop_embed {
+        map.insert("loop_embed.weight".to_string(), le.weight.clone());
+    }
+    if let Some(fnorm) = &model.final_norm {
+        map.insert("final_norm.gamma".to_string(), fnorm.gamma.clone());
+        map.insert("final_norm.beta".to_string(), fnorm.beta.clone());
+    }
+    if let Some(lora) = &model.loop_lora {
+        for i in 0..lora.n_loops {
+            map.insert(format!("loop_lora.{i}.down"), lora.down[i].weight.clone());
+            map.insert(format!("loop_lora.{i}.up"), lora.up[i].weight.clone());
+        }
     }
     if let Some(proj) = &model.vision_patch_proj {
         map.insert("vision_patch_proj".to_string(), proj.weight.clone());
@@ -134,7 +177,7 @@ pub fn is_hf_safetensors_bytes(bytes: &[u8]) -> bool {
 
 /// Map HF / MMN tensor names to canonical MMN checkpoint keys.
 pub fn hf_name_to_mmn(name: &str) -> Option<String> {
-    if name.starts_with("blocks.") {
+    if name.starts_with("blocks.") || name.starts_with("loop_lora.") {
         return Some(name.to_string());
     }
     match name {
@@ -144,6 +187,14 @@ pub fn hf_name_to_mmn(name: &str) -> Option<String> {
         "lm_head" | "lm_head.weight" | "model.lm_head.weight" => Some("lm_head".into()),
         "model.embed_positions.weight" | "transformer.wpe.weight" | "pos_embed" => {
             Some("pos_embed".into())
+        }
+        "loop_embed.weight" | "final_norm.gamma" | "final_norm.beta" => Some(name.to_string()),
+        "model.norm.weight" | "model.norm.bias" | "transformer.ln_f.weight" | "transformer.ln_f.bias" => {
+            if name.ends_with("bias") {
+                Some("final_norm.beta".into())
+            } else {
+                Some("final_norm.gamma".into())
+            }
         }
         "vision_patch_proj" | "vision_patch_conv" => Some(name.to_string()),
         "vision_cross_attn.out" | "vision_cross_attn.q" | "vision_cross_attn.k" | "vision_cross_attn.v" => {
@@ -215,6 +266,26 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
         .unwrap_or(n_heads);
+    let head_dim = meta
+        .get("head_dim")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .or_else(|| {
+            // Infer from Q projection when wider than d_model.
+            tensors.get("blocks.0.attn.q").and_then(|q| {
+                let shape = q.data.shape();
+                if shape.len() == 2 && n_heads > 0 && shape[0].is_multiple_of(n_heads) {
+                    let inferred = shape[0] / n_heads;
+                    if inferred != d_model / n_heads {
+                        Some(inferred)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+        });
     let vision = meta["vision"].as_bool().unwrap_or(false);
     let init_seed = meta["seed"].as_u64();
     let use_learned_pos_embed = meta["use_learned_pos_embed"].as_bool().unwrap_or(false);
@@ -228,7 +299,31 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
 
     fill_missing_block_layernorm_defaults(&mut tensors, n_layer, d_model);
     let json_tensors = tensors_to_entry_map(&tensors);
-    let mut model = Chatbot::new_with_position_and_ffn(
+    let n_loops = meta["n_loops"].as_u64().unwrap_or(1) as usize;
+    let tie_embeddings = meta["tie_embeddings"].as_bool().unwrap_or(false);
+    let norm = meta
+        .get("norm")
+        .or_else(|| meta.get("norm_kind"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("layer");
+    let ffn_kind = meta
+        .get("ffn_kind")
+        .or_else(|| meta.get("ffn"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("gelu");
+    let loop_embed = meta["loop_embed"].as_bool().unwrap_or(false);
+    let final_norm = meta["final_norm"].as_bool().unwrap_or(false);
+    let lora_rank = meta["lora_rank"].as_u64().unwrap_or(0) as usize;
+    let extras = mmn_models::ChatbotArchExtras {
+        n_loops: n_loops.max(1),
+        tie_embeddings,
+        use_rms_norm: norm == "rms",
+        use_swiglu: ffn_kind == "swiglu",
+        loop_embed: loop_embed && n_loops > 1,
+        final_norm,
+        lora_rank,
+    };
+    let mut model = Chatbot::new_with_arch(
         vision,
         None,
         vocab_size,
@@ -237,11 +332,13 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         Some(ffn_dim),
         Some(n_heads),
         Some(n_kv_heads),
+        head_dim,
         init_seed,
         use_learned_pos_embed,
         max_seq_len,
         use_rope,
         rope_theta,
+        extras,
     );
     model.embed.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "embed")?)?;
     model.lm_head.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "lm_head")?)?;
@@ -294,6 +391,49 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         }
     }
     import_block_tensors(&mut model, &json_tensors)?;
+    if let Some(le) = model.loop_embed.as_mut() {
+        le.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "loop_embed.weight")?)?;
+        expect_tensor_shape(
+            &le.weight,
+            &[model.n_loops, d_model],
+            "loop_embed.weight",
+        )?;
+    }
+    if let Some(fnorm) = model.final_norm.as_mut() {
+        fnorm.gamma =
+            tensor_from_entry(require_tensor_entry(&json_tensors, "final_norm.gamma")?)?;
+        expect_tensor_shape(&fnorm.gamma, &[d_model], "final_norm.gamma")?;
+        if let Some(entry) = optional_tensor_entry(&json_tensors, "final_norm.beta") {
+            fnorm.beta = tensor_from_entry(entry)?;
+            expect_tensor_shape(&fnorm.beta, &[d_model], "final_norm.beta")?;
+        } else {
+            fnorm.beta = mmn_core::Tensor::zeros(&[d_model], true);
+        }
+    }
+    if let Some(lora) = model.loop_lora.as_mut() {
+        let q_dim = model.shape.q_dim();
+        let kv_dim = model.shape.kv_dim();
+        for i in 0..lora.n_loops {
+            lora.down[i].weight = tensor_from_entry(require_tensor_entry(
+                &json_tensors,
+                &format!("loop_lora.{i}.down"),
+            )?)?;
+            expect_tensor_shape(
+                &lora.down[i].weight,
+                &[lora.rank, d_model],
+                &format!("loop_lora.{i}.down"),
+            )?;
+            lora.up[i].weight = tensor_from_entry(require_tensor_entry(
+                &json_tensors,
+                &format!("loop_lora.{i}.up"),
+            )?)?;
+            expect_tensor_shape(
+                &lora.up[i].weight,
+                &[q_dim + 2 * kv_dim, lora.rank],
+                &format!("loop_lora.{i}.up"),
+            )?;
+        }
+    }
     Ok(model)
 }
 
@@ -462,6 +602,13 @@ mod tests {
         assert_eq!(
             model.embed.weight.data[[0, 0]],
             loaded.embed.weight.data[[0, 0]]
+        );
+        assert_eq!(loaded.shape.n_heads, model.shape.n_heads);
+        assert_eq!(loaded.shape.n_kv_heads, model.shape.n_kv_heads);
+        assert_eq!(loaded.shape.head_dim, model.shape.head_dim);
+        assert_eq!(
+            loaded.shape.head_dim.unwrap_or(loaded.shape.d_model / loaded.shape.n_heads),
+            model.shape.d_model / model.shape.n_heads
         );
     }
 

@@ -33,6 +33,10 @@ Regression matrices live under `docs/*_coverage.md`. Extend the relevant doc whe
 |-----|--------|
 | [checkpoint_coverage.md](checkpoint_coverage.md) | Chatbot/classifier IO contract (100% tensor keys) |
 | [interop.md](interop.md) | Global formats: GGUF, PyTorch `.pt`, NumPy `.npy`/`.npz`, universal `ai.load` |
+| [hub.md](hub.md) | `ai.from_pretrained` — HF / ModelScope / Ollama / local |
+| [hub_coverage.md](hub_coverage.md) | Hub offline + hands-on coverage matrix |
+| [benchmarks.md](benchmarks.md) | Unified eval harness + legacy example benches |
+| [eval_coverage.md](eval_coverage.md) | `magicmindnet.eval` task/suite matrix |
 | [training_coverage.md](training_coverage.md) | `Train`, `TrainClassifier`, RL/SPIN, mean loss |
 | [dataset_coverage.md](dataset_coverage.md) | QA, corpus, classification, image loaders |
 | [examples_coverage.md](examples_coverage.md) | Runnable `examples/` × smoke × pytest |
@@ -46,6 +50,7 @@ Regression matrices live under `docs/*_coverage.md`. Extend the relevant doc whe
 | [quantize_coverage.md](quantize_coverage.md) | int8/int4 quantize parity |
 | [image_coverage.md](image_coverage.md) | ImageGen/ImageEdit fixtures |
 | [diffusion_coverage.md](diffusion_coverage.md) | Diffusion smoke / dataset validation |
+| [feature_parity.md](feature_parity.md) | PyTorch / llama.cpp / Ollama parity matrix (Wave 1+) |
 | [limitations.md](limitations.md) | Alpha gaps and post-alpha roadmap |
 | [mmn_py_coverage.md](mmn_py_coverage.md) | Split `mmn-py` module map + binding smoke tests |
 | [mmn_py_split_plan.md](mmn_py_split_plan.md) | `mmn-py` split (complete — pass 78) |

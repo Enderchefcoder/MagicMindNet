@@ -17,7 +17,8 @@ pub use chatbot_io::{
     export_bin, export_safetensors, import_bin, import_safetensors, merge_models, quantize_model,
     TokenizerSidecarRefs,
 };
-pub use detect::{detect_checkpoint_kind, CheckpointKind};
+pub use detect::{detect_checkpoint_kind, detect_checkpoint_kind_bytes, CheckpointKind};
+pub use hf_tensor_codec::looks_like_safetensors;
 pub use interop::gguf::{
     is_gguf_bytes, read_gguf, read_gguf_header_file, write_gguf, GgufValue, GgufWriteTensor,
 };

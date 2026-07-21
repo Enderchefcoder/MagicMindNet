@@ -55,6 +55,14 @@ pub(crate) fn require_tensor_entry<'a>(
     })
 }
 
+/// Optional tensor lookup (GGUF RMS `output_norm` has weight only — no bias).
+pub(crate) fn optional_tensor_entry<'a>(
+    tensors: &'a TensorMap,
+    key: &str,
+) -> Option<&'a TensorEntry> {
+    tensors.get(key)
+}
+
 pub(crate) fn expect_tensor_shape(t: &Tensor, expected: &[usize], name: &str) -> Result<(), MmnError> {
     let shape: Vec<usize> = t.data.shape().to_vec();
     if shape.as_slice() != expected {

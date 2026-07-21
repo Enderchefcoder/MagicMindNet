@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "half",
  "ndarray",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-cuda"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cudarc",
  "mmn-core",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-data"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "image",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "half",
  "mmn-core",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-models"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mmn-core",
  "mmn-data",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-nn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mmn-core",
  "mmn-ops",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-ops"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mmn-core",
  "mmn-cuda",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-optim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "half",
  "mmn-core",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mmn-core",
  "mmn-cuda",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-resource"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "mmn-core",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "mmn-train"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "image",
  "mmn-core",

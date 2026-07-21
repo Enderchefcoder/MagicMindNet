@@ -145,8 +145,11 @@ pub(crate) fn import_chatbot_from_path(
         "npz" | "numpy" => import_npz(path).map_err(mmn_err_to_py),
         "pt" | "pytorch" | "torch" => import_torch_pt(path).map_err(mmn_err_to_py),
         "sharded" => mmn_io::import_sharded(path).map_err(mmn_err_to_py),
+        "ggml-legacy" | "ggml" | "ggjt" | "ggmf" => {
+            mmn_io::import_ggml_legacy_chatbot(path).map_err(mmn_err_to_py)
+        }
         _ => Err(PyValueError::new_err(format!(
-            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, npz, pt, sharded"
+            "Unknown format: {format}. Supported: safetensors, hf-safetensors, bin, gguf, npz, pt, sharded, ggml-legacy"
         ))),
     }
 }

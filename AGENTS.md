@@ -39,7 +39,7 @@ CUDA: `maturin develop --release --features cuda -m crates/mmn-py/Cargo.toml`
 - `crates/mmn-models` — Chatbot, Classifier, Diffusion
 - `crates/mmn-train` — Train, RL, SPIN
 - `crates/mmn-py` — PyO3 `_native` module ([split complete](docs/mmn_py_split_plan.md); `lib.rs` ~58 lines)
-- `python/magicmindnet` — public Python API
+- `python/magicmindnet` — public Python API (`hub.py`: `ai.from_pretrained` / HubModel)
 
 ## Conventions
 

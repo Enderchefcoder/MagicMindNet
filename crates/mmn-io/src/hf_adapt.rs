@@ -138,21 +138,42 @@ fn fuse_swiglu_gate_up_tensors(tensors: &mut HashMap<String, Tensor>) {
         })
         .collect();
     for i in indices {
-        let gate_key = format!("blocks.{i}.ffn");
+        let gate_key = format!("blocks.{i}.ffn_gate");
         let up_key = format!("blocks.{i}.ffn.up");
+        let ffn_key = format!("blocks.{i}.ffn");
+        // Native MMN SwiGLU exports `ffn` as GGUF `ffn_up` (maps back to `ffn.up`)
+        // plus a real `ffn_gate`. Remap `ffn.up` → `ffn` and keep the gate.
+        if tensors.contains_key(&gate_key)
+            && tensors.contains_key(&up_key)
+            && !tensors.contains_key(&ffn_key)
+        {
+            if let Some(up) = tensors.remove(&up_key) {
+                tensors.insert(ffn_key, up);
+            }
+            continue;
+        }
         let Some(up) = tensors.remove(&up_key) else {
             continue;
         };
-        let Some(gate) = tensors.get(&gate_key) else {
-            // Plain MLP checkpoints name the first layer `up_proj`/`ffn_up`
-            // with no gate: treat it as the FFN weight directly.
-            tensors.insert(gate_key, up);
+        // Native MMN SwiGLU already has both `ffn` and `ffn_gate` — leave them alone.
+        if tensors.contains_key(&ffn_key) && tensors.contains_key(&gate_key) {
+            tensors.insert(up_key, up);
+            continue;
+        }
+        // External Llama: gate may be keyed as `ffn_gate` (new) or `ffn` (legacy map).
+        let gate = if let Some(g) = tensors.remove(&gate_key) {
+            g
+        } else if let Some(g) = tensors.remove(&ffn_key) {
+            g
+        } else {
+            tensors.insert(ffn_key, up);
             continue;
         };
-        if let Ok(fused) = elementwise_mul(gate, &up) {
-            tensors.insert(gate_key, fused);
+        if let Ok(fused) = elementwise_mul(&gate, &up) {
+            tensors.insert(ffn_key, fused);
         } else {
             tensors.insert(up_key, up);
+            tensors.insert(gate_key, gate);
         }
     }
 }
@@ -191,14 +212,11 @@ fn infer_ffn_dim_meta(tensors: &HashMap<String, Tensor>, meta: &mut serde_json::
     }
 }
 
-/// Record grouped-query head counts in meta from checkpoint tensor shapes (no KV expansion).
+/// Record grouped-query head counts / head_dim in meta from checkpoint tensor shapes.
 fn ensure_gqa_meta(
     tensors: &HashMap<String, Tensor>,
     meta: &mut serde_json::Value,
 ) -> Result<(), MmnError> {
-    if meta.get("num_attention_heads").is_some() && meta.get("num_key_value_heads").is_some() {
-        return Ok(());
-    }
     let q = tensors.get("blocks.0.attn.q");
     let k = tensors.get("blocks.0.attn.k");
     let Some((q, k)) = q.zip(k) else {
@@ -206,33 +224,84 @@ fn ensure_gqa_meta(
     };
     let q_shape: Vec<usize> = q.data.shape().to_vec();
     let k_shape: Vec<usize> = k.data.shape().to_vec();
-    if q_shape.len() != 2 || k_shape.len() != 2 || q_shape[0] != q_shape[1] {
+    if q_shape.len() != 2 || k_shape.len() != 2 {
         return Ok(());
     }
-    let d_model = q_shape[0];
+    // Linear weights are [out, in]: q [n_heads*head_dim, d_model], k [n_kv*head_dim, d_model].
+    let d_model = q_shape[1];
     if k_shape[1] != d_model {
         return Ok(());
     }
+    let q_dim = q_shape[0];
     let kv_dim = k_shape[0];
-    if kv_dim >= d_model {
+
+    // Prefer explicit head_dim from meta / config.
+    if meta.get("head_dim").is_none() {
+        if let Some(n_heads) = meta
+            .get("num_attention_heads")
+            .or_else(|| meta.get("n_heads"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+        {
+            if n_heads > 0 && q_dim.is_multiple_of(n_heads) {
+                let inferred = q_dim / n_heads;
+                if inferred != d_model / n_heads {
+                    meta["head_dim"] = serde_json::json!(inferred);
+                }
+            }
+        }
+    }
+
+    if meta_has_attention_heads(meta) && meta_has_kv_heads(meta) {
         return Ok(());
     }
-    let Some((_, n_heads, n_kv_heads)) = gqa_dims_from_meta_or_guess(meta, d_model, kv_dim) else {
+
+    // Classic square MHA (Q/K both [d_model, d_model]) without head counts in meta:
+    // do NOT guess — largest-head_dim search would pick n_heads=1 and break MMN
+    // roundtrips that omit n_heads. Leave Chatbot defaults (n_heads=4).
+    if q_dim == d_model && kv_dim == d_model && !meta_has_attention_heads(meta) {
+        return Ok(());
+    }
+
+    let head_dim = meta
+        .get("head_dim")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+
+    let Some((_, n_heads, n_kv_heads)) =
+        gqa_dims_from_meta_or_guess(meta, d_model, q_dim, kv_dim, head_dim)
+    else {
         return Ok(());
     };
-    if meta.get("num_attention_heads").is_none() {
+    if !meta_has_attention_heads(meta) {
         meta["num_attention_heads"] = serde_json::json!(n_heads);
     }
-    if meta.get("num_key_value_heads").is_none() {
+    if !meta_has_kv_heads(meta) {
         meta["num_key_value_heads"] = serde_json::json!(n_kv_heads);
     }
     Ok(())
 }
 
+fn meta_has_attention_heads(meta: &serde_json::Value) -> bool {
+    meta.get("num_attention_heads")
+        .or_else(|| meta.get("n_heads"))
+        .and_then(|v| v.as_u64())
+        .is_some()
+}
+
+fn meta_has_kv_heads(meta: &serde_json::Value) -> bool {
+    meta.get("num_key_value_heads")
+        .or_else(|| meta.get("n_kv_heads"))
+        .and_then(|v| v.as_u64())
+        .is_some()
+}
+
 fn gqa_dims_from_meta_or_guess(
     meta: &serde_json::Value,
     d_model: usize,
+    q_dim: usize,
     kv_dim: usize,
+    head_dim_hint: Option<usize>,
 ) -> Option<(usize, usize, usize)> {
     if let (Some(n_heads), Some(n_kv)) = (
         meta.get("num_attention_heads")
@@ -244,9 +313,21 @@ fn gqa_dims_from_meta_or_guess(
     ) {
         let n_heads = n_heads as usize;
         let n_kv_heads = n_kv as usize;
-        if n_heads > 0 && n_kv_heads > 0 && d_model.is_multiple_of(n_heads) {
-            let head_dim = d_model / n_heads;
-            if kv_dim == n_kv_heads * head_dim {
+        if n_heads > 0 && n_kv_heads > 0 {
+            let head_dim = head_dim_hint
+                .or_else(|| {
+                    meta.get("head_dim")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as usize)
+                })
+                .unwrap_or_else(|| {
+                    if q_dim.is_multiple_of(n_heads) {
+                        q_dim / n_heads
+                    } else {
+                        d_model / n_heads
+                    }
+                });
+            if q_dim == n_heads * head_dim && kv_dim == n_kv_heads * head_dim {
                 return Some((head_dim, n_heads, n_kv_heads));
             }
         }
@@ -257,8 +338,8 @@ fn gqa_dims_from_meta_or_guess(
         .and_then(|v| v.as_u64())
     {
         let n_heads = n_heads as usize;
-        if n_heads > 0 && d_model.is_multiple_of(n_heads) {
-            let head_dim = d_model / n_heads;
+        if n_heads > 0 && q_dim.is_multiple_of(n_heads) {
+            let head_dim = q_dim / n_heads;
             if kv_dim.is_multiple_of(head_dim) {
                 let n_kv_heads = kv_dim / head_dim;
                 if n_heads.is_multiple_of(n_kv_heads) && n_heads >= n_kv_heads {
@@ -267,7 +348,12 @@ fn gqa_dims_from_meta_or_guess(
             }
         }
     }
-    guess_gqa_dims(d_model, kv_dim)
+    // Classic square-Q GQA guess (head_dim = d_model / n_heads).
+    if q_dim == d_model {
+        return guess_gqa_dims(d_model, kv_dim);
+    }
+    // Non-square Q: try divisors of both q_dim and kv_dim.
+    guess_gqa_dims_wide(q_dim, kv_dim)
 }
 
 fn guess_gqa_dims(d_model: usize, kv_dim: usize) -> Option<(usize, usize, usize)> {
@@ -278,10 +364,30 @@ fn guess_gqa_dims(d_model: usize, kv_dim: usize) -> Option<(usize, usize, usize)
         }
         let n_heads = d_model / head_dim;
         let n_kv_heads = kv_dim / head_dim;
-        if n_heads.is_multiple_of(n_kv_heads) && n_heads >= n_kv_heads
-            && best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true) {
-                best = Some((head_dim, n_heads, n_kv_heads));
-            }
+        if n_heads.is_multiple_of(n_kv_heads)
+            && n_heads >= n_kv_heads
+            && best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true)
+        {
+            best = Some((head_dim, n_heads, n_kv_heads));
+        }
+    }
+    best
+}
+
+fn guess_gqa_dims_wide(q_dim: usize, kv_dim: usize) -> Option<(usize, usize, usize)> {
+    let mut best: Option<(usize, usize, usize)> = None;
+    for head_dim in 1..=q_dim.min(kv_dim) {
+        if !q_dim.is_multiple_of(head_dim) || !kv_dim.is_multiple_of(head_dim) {
+            continue;
+        }
+        let n_heads = q_dim / head_dim;
+        let n_kv_heads = kv_dim / head_dim;
+        if n_heads.is_multiple_of(n_kv_heads)
+            && n_heads >= n_kv_heads
+            && best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true)
+        {
+            best = Some((head_dim, n_heads, n_kv_heads));
+        }
     }
     best
 }
@@ -367,7 +473,38 @@ mod tests {
             "num_attention_heads": 8,
             "num_key_value_heads": 2,
         });
-        let (hd, nh, nkv) = gqa_dims_from_meta_or_guess(&meta, 512, 128).unwrap();
+        let (hd, nh, nkv) = gqa_dims_from_meta_or_guess(&meta, 512, 512, 128, None).unwrap();
         assert_eq!((hd, nh, nkv), (64, 8, 2));
+    }
+
+    #[test]
+    fn gqa_dims_custom_head_dim_from_q_width() {
+        let meta = serde_json::json!({
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "head_dim": 8,
+        });
+        // d_model=8, q_dim=16 (=2*8), kv_dim=8
+        let (hd, nh, nkv) = gqa_dims_from_meta_or_guess(&meta, 8, 16, 8, Some(8)).unwrap();
+        assert_eq!((hd, nh, nkv), (8, 2, 1));
+    }
+
+    #[test]
+    fn ensure_gqa_meta_skips_classic_square_mha_without_heads() {
+        let d_model = 16usize;
+        let mut tensors = HashMap::new();
+        tensors.insert(
+            "blocks.0.attn.q".into(),
+            Tensor::from_array(ndarray::Array2::<f32>::zeros((d_model, d_model)).into_dyn(), true),
+        );
+        tensors.insert(
+            "blocks.0.attn.k".into(),
+            Tensor::from_array(ndarray::Array2::<f32>::zeros((d_model, d_model)).into_dyn(), true),
+        );
+        let mut meta = serde_json::json!({});
+        ensure_gqa_meta(&tensors, &mut meta).unwrap();
+        assert!(meta.get("num_attention_heads").is_none());
+        assert!(meta.get("num_key_value_heads").is_none());
+        assert!(meta.get("head_dim").is_none());
     }
 }

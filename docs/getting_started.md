@@ -4,7 +4,17 @@ This tutorial takes you from zero to a trained, saved, reloaded chatbot and clas
 
 ## 1. Install
 
-You need Python 3.12+ and [Rust](https://rustup.rs/) (the library core is compiled Rust).
+You need **Python 3.12+**. The easiest path is PyPI (prebuilt native extension):
+
+```bash
+pip install magicmindnet
+pip install "magicmindnet[hub]"   # optional: Hugging Face / ModelScope / Diffusers
+python -c "import magicmindnet as ai; print(ai.__version__)"
+```
+
+CLI tools: `mmn-eval smoke` · `mmn-serve --help`
+
+**From source** (contributors): you also need [Rust](https://rustup.rs/).
 
 ```bash
 git clone https://github.com/Enderchefcoder/MagicMindNet
@@ -15,11 +25,7 @@ pip install -e ".[dev]"
 maturin develop --release
 ```
 
-Check it worked:
-
-```bash
-python -c "import magicmindnet as ai; print(ai.__version__)"
-```
+Pretty docs with benchmark charts: [docs/site/index.html](site/index.html).
 
 ## 2. Your first chatbot
 
@@ -99,6 +105,22 @@ print(clf.predict("sunny warm bright"))         # -> {"nice": 0.93, "gloomy": 0.
 ```
 
 Classifier checkpoints save and load the same way: `clf.save("clf.mmn")`, `ai.load("clf.mmn")`.
+
+### Load any Hugging Face / ModelScope / Ollama model
+
+```python
+bot = ai.from_pretrained("Qwen/Qwen3-0.6B-GGUF", filename="Qwen3-0.6B-Q8_0.gguf")
+print(bot.generate("Hello", max_new_tokens=32))
+
+clf = ai.from_pretrained("j-hartmann/emotion-english-distilroberta-base")
+print(clf.predict_label("I love this!"))
+clf.finetune(ai.DatasetClassification(data=[
+    {"text": "great day", "label": "joy"},
+    {"text": "so mad", "label": "anger"},
+]), epochs=1)
+```
+
+Also: `hf://…`, `ms://…`, `ollama://…`, Diffusers repos, TTS, video. See [hub.md](hub.md).
 
 ## 5. Tuning training
 

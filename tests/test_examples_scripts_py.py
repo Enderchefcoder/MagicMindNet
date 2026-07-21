@@ -1,6 +1,30 @@
 """Smoke-test runnable example scripts."""
 
 
+def test_pip_quickstart_example_runs(run_example):
+    proc = run_example("pip_quickstart.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "pip_quickstart ok" in proc.stdout
+
+
+def test_parity_demo_example_runs(run_example):
+    proc = run_example("parity_demo.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "parity_demo ok" in proc.stdout
+
+
+def test_hub_catalog_example_runs(run_example):
+    proc = run_example("hub_catalog.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "hub_catalog ok" in proc.stdout
+
+
+def test_openai_server_demo_example_runs(run_example):
+    proc = run_example("openai_server_demo.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "openai_server_demo ok" in proc.stdout
+
+
 def test_hello_ai_example_runs(run_example):
     proc = run_example("hello_ai.py")
     assert proc.returncode == 0, proc.stderr or proc.stdout

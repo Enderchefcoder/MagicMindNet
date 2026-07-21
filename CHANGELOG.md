@@ -1,6 +1,120 @@
 # Changelog
 
+## 0.2.0 — 2026-07-21
+
+### Production packaging
+- First **PyPI** release: `pip install magicmindnet` (version aligned across
+  `pyproject.toml`, Cargo workspace, and `magicmindnet.__version__`)
+  — https://pypi.org/project/magicmindnet/0.2.0/
+- Manylinux2014 `cp312` wheel + sdist; `LICENSE` included in sdist via maturin `include`
+- Console scripts: `mmn-serve`, `mmn-eval`
+- Classifiers / keywords / project URLs pointed at docs site + feature parity
+- README + getting_started rewritten **pip-first**; source/maturin remains for contributors
+
+### Docs site
+- Professional landing page [docs/site/index.html](docs/site/index.html)
+  (HTML/CSS, Chart.js benchmarks, hub routing, parity matrix, storyboard SVG)
+- Committed chart data: `docs/site/data/interop_benchmark.json`, `smoke_eval.json`
+
+### Examples
+- `examples/pip_quickstart.py`, `openai_server_demo.py`, `hub_catalog.py`, `parity_demo.py`
+
+### Includes (from 0.1.x line)
+- Feature parity Waves 1–3 (sampling, stream/embed, JSON mode, OpenAI server, tools)
+- Eval harness, final_norm / LoopLoRA, hub `from_pretrained`, full interop stack
+
+## 0.1.0 — 2026-07-21
+
+### Added (feature parity Wave 3 — tool calling)
+- `format_tools_prompt` / `parse_tool_calls` / `Chatbot.chat_with_tools`
+  → OpenAI-shaped `{content, tool_calls}`
+- Docs: Wave 3 in [docs/feature_parity.md](docs/feature_parity.md)
+- Tests: `tests/test_feature_parity_wave3_tools_py.py`
+
+### Added (feature parity Wave 2)
+- JSON constrained decoding: `json_mode=True` and `grammar="json"` / `grammar="digit"`
+  on `generate` / `generate_tokens` / `generate_stream` (mask + `finalize_json` repair)
+- OpenAI-compatible local server: `ai.OpenAIServer` / `magicmindnet.serve`
+  (`/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/health`); CLI
+  `python -m magicmindnet.serve --model path.mmn`
+- Docs: Wave 2 rows in [docs/feature_parity.md](docs/feature_parity.md)
+- Tests: `tests/test_feature_parity_wave2_py.py`
+
+### Added (feature parity Wave 1)
+- llama.cpp sampling: `typical_p`, Mirostat v2 (`mirostat` / `mirostat_tau` / `mirostat_eta`)
+- Ollama-style `Chatbot.generate_stream` (token chunks) and `Chatbot.embed` (mean-pool hidden)
+- ChatML: `ai.format_chat_messages` + `Chatbot.chat_messages`
+- PyTorch-style `TrainConfig`: `weight_decay`, `lr_schedule` (`constant`|`cosine`), `warmup_steps`
+- Docs: [docs/feature_parity.md](docs/feature_parity.md); eval tasks `gen_typical_p_smoke`,
+  `stream_generate`, `embed_mean_pool`
+- Tests: `tests/test_feature_parity_py.py` + Rust sampling helpers
+
 ## 0.1.0 — 2026-07-06
+
+### Added (final_norm + LoopLoRA QKV adapters)
+- `Chatbot(final_norm=True)` — optional final LayerNorm/RMSNorm after all loops
+  (GGUF `output_norm.*` / meta `mmn.final_norm`)
+- `Chatbot(lora_rank=N)` — per-loop LoRA QKV adapters (zero-init up = identity at
+  init; trained via `Train()`); checkpoint keys `loop_lora.{i}.down/up`
+- Defaults `final_norm=False`, `lora_rank=0` preserve classic Chatbot bit-identity
+- Tests: `tests/test_final_norm_loop_lora_py.py`; Rust nn/models coverage
+
+### Added (unified eval harness / benchmarking suite)
+- `magicmindnet.eval`: `EvalHarness` / `BenchmarkRunner`, `Metric`, `TaskResult`,
+  `SuiteReport`, `list_tasks` / `list_suites` / `get_task` / `run_suite`
+- Suites: `smoke`, `lm`, `cls`, `diffusion`, `io`, `hub`, `glint`, `generate`,
+  `rl`, `train`, `all` — 35+ tasks covering QA/corpus CE, PE/RoPE/BPE/Unigram,
+  GQA/`head_dim`, Glint, vision flag, classifier accuracy, diffusion denoise/edit,
+  hub synthetics (causal/cls/rerank/diffusion/seq2seq), IO timing (safetensors/HF/
+  GGUF/Q8/npz/pt), arrays roundtrip, RL/SPIN, merge/quantize
+- CLI: `python -m magicmindnet.eval` + `examples/eval_harness.py`
+- Docs: rewritten [benchmarks.md](docs/benchmarks.md), [eval_coverage.md](docs/eval_coverage.md)
+- Tests: `tests/test_eval_harness_py.py`; smoke wires `eval_harness.py smoke`
+
+### Added (hub wave-2 — callable families + offline coverage)
+- HubModel: `capabilities()`, `score_pairs` / `rerank`, `embed`, diffusion/TTS/ASR/embedding/zero-shot/fill-mask/QA/vlm routing
+- Diffusers `generate` → pipeline images/frames; native Diffusion `generate` → `sample_rgb_patch`
+- Ollama `/api/chat` (+ system / messages); clearer GGUF-fail errors
+- `DatasetQA.as_pairs()`; CoT empty `thinktag` defaults to `<think>…</think>` when `cot=True`
+- `list_hub_families()`, `ModelCard.from_dict`, ModelScope URL parse
+- `pip install -e ".[hub]"` optional deps; detect Diffusers dirs + nested checkpoints
+- GGUF/HF Glint meta roundtrip (`n_loops`, RMS/SwiGLU, tie, `loop_embed`, `ffn_gate`)
+- Examples: `hub_local_roundtrip.py`, `glint_tiny.py`; docs: `hub_coverage.md`
+- Tests: `tests/test_hub_wave2_py.py` (+ smoke hub local)
+
+### Fixed (classic MHA HF/npz/pt head_dim roundtrip)
+- `ensure_gqa_meta` no longer guesses `n_heads=1` for square Q/K when head counts are
+  absent (that broke HF/npz/pt loss roundtrips after optional `head_dim`)
+- HF safetensors export always writes `n_heads` / `n_kv_heads` (and HF aliases)
+
+### Added (optional head_dim for Qwen-style GQA)
+- `MultiHeadAttention` / `TransformerBlock` / `Chatbot` accept optional `head_dim`
+  independent of `d_model // n_heads` (Qwen3: d_model=1024, n_heads=16, head_dim=128
+  → q_proj `[2048, 1024]`)
+- GGUF import reads `{arch}.attention.key_length` / `value_length` (or infers from
+  `attn_q` shape); HF/safetensors import infers the same; shape validation uses
+  `q_dim = n_heads * head_dim`
+- Python: `Chatbot(head_dim=…)` + `bot.head_dim` getter; hub `from_pretrained`
+  marks native GGUF loads with `card.backend="native"`
+- Tests: Rust MHA/block forward + synthetic Qwen GGUF; `tests/test_head_dim_py.py`
+
+### Added (universal hub `ai.from_pretrained`)
+- `ai.from_pretrained(source)` loads Hugging Face / ModelScope / Ollama / local models into a native Chatbot/Classifier/Diffusion when possible, otherwise a `HubModel` with `generate` / `predict` / `finetune` / `train` / `save`
+- Routing by pipeline tag + architecture + file layout (GGUF, causal LM, seq-cls/reranker, seq2seq, diffusers/video, TTS) — not per-repo special cases
+- `DatasetClassification.as_pairs()` / `DatasetCorpus.as_texts()` for hub finetune loops
+- Optional `head_dim` for Qwen-style GQA (`n_heads * head_dim != d_model`) — native `Qwen/Qwen3-0.6B-GGUF` import
+- Docs: [docs/hub.md](docs/hub.md); hands-on: `scripts/hub_hands_on.py`; tests: `tests/test_hub_from_pretrained_py.py`
+
+### Added (Glint-style Chatbot architecture knobs)
+- `Chatbot(n_loops=…, norm="rms"|"layer", ffn="swiglu"|"gelu", tie_embeddings=…, loop_embed=…, ffn_dim=…)` — recreate a tiny Glint-like LM in a few lines; defaults preserve classic Chatbot behavior
+- Native **RMSNorm**, **SiLU/SwiGLU** FFN (`blocks.N.ffn_gate` + `ffn_kind` meta), **weight tying**, **loop embeddings**, and **shared-weight block looping** with accumulated train grads
+- Safetensors/bin meta roundtrip for the new fields; KV-cache generation uses full forward when `n_loops>1`
+- Tests: Rust unit (`silu`/`rms`/`swiglu`/`n_loops`/`tie`) + `tests/test_glint_arch_py.py`
+
+### Added (load hardening + tiny train DX)
+- Hardened `ai.load` / `detect_checkpoint_kind`: structural safetensors sniff (no more false positives on noise), TorchScript `constants.pkl` ZIP, HDF5/TFLite/pickle redirect hints, extension-aware errors; `Chatbot.load` supports GGML/GGJT legacy
+- Training uses model `max_seq_len` (lifted hard 32-token cap); CoT `thinktag="think"` wraps Train targets; autoset presets `sub-1M` / `sub-10M` / `sub-50M`
+- Tests: `tests/test_detect_load_hardening_py.py`, `tests/test_seq_len_autoset_cot_py.py`
 
 ### Added (interop wave 21: from-scratch Zstandard — the last compression gap)
 - **zstd decoder (RFC 8878)**: frame headers, raw/RLE/compressed blocks,

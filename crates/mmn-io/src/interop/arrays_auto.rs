@@ -135,19 +135,7 @@ impl ArrayFormat {
     }
 }
 
-/// True when the buffer looks like a binary safetensors container:
-/// little-endian u64 header length followed by a `{` JSON header.
-fn looks_like_safetensors(bytes: &[u8]) -> bool {
-    if bytes.len() < 9 {
-        return false;
-    }
-    let header_len = u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ]) as usize;
-    header_len > 0
-        && header_len.checked_add(8).is_some_and(|end| end <= bytes.len())
-        && bytes[8] == b'{'
-}
+use crate::hf_tensor_codec::looks_like_safetensors;
 
 /// True when the buffer starts like a msgpack fixmap with a string key —
 /// the shape of every Flax pytree (checked after pickle, whose 0x80 PROTO

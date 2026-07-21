@@ -1,12 +1,17 @@
 //! Checkpoint file inspection: which model family does a file store?
 
-use crate::hf_tensor_codec::{hf_err, is_hf_binary_bytes, HF_CHATBOT_FORMAT, HF_CLASSIFIER_FORMAT};
+use crate::hf_tensor_codec::{
+    hf_err, is_hf_binary_bytes, looks_like_safetensors, HF_CHATBOT_FORMAT, HF_CLASSIFIER_FORMAT,
+};
 use crate::interop::gguf::is_gguf_bytes;
+use crate::interop::hdf5::is_hdf5_bytes;
+use crate::interop::tflite::is_tflite_bytes;
 use crate::interop::torch_pt::is_legacy_torch_bytes;
 use crate::interop::zip::{is_zip_bytes, zip_entry_names};
-use mmn_core::MmnError;
 use crate::st_codec::SafeTensors;
+use mmn_core::MmnError;
 use std::fs;
+use std::path::Path;
 
 /// Model family stored in a checkpoint file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,19 +53,68 @@ impl CheckpointKind {
     }
 }
 
+fn extension_hint(path: &str) -> Option<&'static str> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    Some(match ext.as_str() {
+        "gguf" => "GGUF (magic GGUF)",
+        "ggml" | "ggmf" | "ggjt" => "legacy GGML/GGMF/GGJT",
+        "pt" | "pth" => "PyTorch .pt/.pth",
+        "npz" => "NumPy .npz chatbot archive",
+        "safetensors" => "binary safetensors",
+        "bin" => "mmn-bin-v1 stub or HF pytorch_model.bin",
+        "mmn" | "json" => "MagicMindNet JSON checkpoint",
+        "h5" | "hdf5" => "HDF5 (use ai.load_h5 / ai.load_arrays)",
+        "onnx" => "ONNX (use ai.load_onnx / ai.load_arrays)",
+        "tflite" => "TFLite (use ai.load_tflite / ai.load_arrays)",
+        "msgpack" | "flax" => "Flax msgpack (use ai.load_flax / ai.load_arrays)",
+        _ => return None,
+    })
+}
+
+fn unrecognized_checkpoint_error(path: &str, bytes: &[u8]) -> MmnError {
+    let mut hints: Vec<String> = Vec::new();
+    if let Some(h) = extension_hint(path) {
+        hints.push(format!("extension suggests {h}"));
+    }
+    if is_hdf5_bytes(bytes) {
+        hints.push("content looks like HDF5 — use ai.load_h5() or ai.load_arrays()".into());
+    } else if is_tflite_bytes(bytes) {
+        hints.push("content looks like TFLite — use ai.load_tflite() or ai.load_arrays()".into());
+    } else if bytes.starts_with(b"\x80") {
+        hints.push("content looks like pickle — use ai.load_arrays() or ai.load_pt()".into());
+    }
+    let detail = if hints.is_empty() {
+        "unrecognized checkpoint magic/header".into()
+    } else {
+        format!("unrecognized checkpoint ({})", hints.join("; "))
+    };
+    MmnError::Other {
+        message: format!(
+            "{path}: {detail}. Supported model formats: GGUF, GGML/GGJT, PyTorch .pt, NumPy .npz, \
+             binary/JSON safetensors, mmn-bin-v1, sharded HF index. For raw arrays use ai.load_arrays()."
+        ),
+    }
+}
+
 fn detect_zip_kind(bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
     let names = zip_entry_names(bytes)?;
     if names
         .iter()
-        .any(|n| n == "data.pkl" || n.ends_with("/data.pkl"))
+        .any(|n| n.ends_with("data.pkl") || n.ends_with("constants.pkl"))
     {
         return Ok(CheckpointKind::ChatbotTorch);
     }
-    if names.iter().any(|n| n.ends_with(".npy") || n == "meta.json") {
+    let has_npy = names.iter().any(|n| n.ends_with(".npy"));
+    if has_npy {
         return Ok(CheckpointKind::ChatbotNpz);
     }
     Err(MmnError::Other {
-        message: "zip archive is neither a torch checkpoint (data.pkl) nor an npz archive (.npy entries)"
+        message: "zip archive is neither a torch checkpoint (data.pkl/constants.pkl) nor an npz archive (.npy entries). \
+                  Tip: Hugging Face Diffusers dirs use model_index.json (not a single zip); \
+                  safetensors weights are usually standalone files; ONNX is a flatbuffer — use ai.load_onnx / ai.load_arrays."
             .into(),
     })
 }
@@ -112,40 +166,90 @@ fn detect_json_kind(bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
     }
 }
 
-/// Inspect a checkpoint file and report which model family it stores.
-///
-/// Handles every format MagicMindNet can write: JSON `mmn-safetensors-v1` /
-/// `mmn-classifier-v1` / `mmn-diffusion-v1` / `mmn-bin-v1` wrappers and binary
-/// HF safetensors (chatbot and classifier).
-pub fn detect_checkpoint_kind(path: &str) -> Result<CheckpointKind, MmnError> {
-    let bytes = fs::read(path).map_err(|e| MmnError::Other {
-        message: format!("cannot read checkpoint {path}: {e}"),
-    })?;
+/// Inspect checkpoint bytes and report which model family they store.
+pub fn detect_checkpoint_kind_bytes(path: &str, bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
     if bytes.is_empty() {
         return Err(MmnError::Other {
             message: format!("checkpoint {path} is empty"),
         });
     }
-    if is_gguf_bytes(&bytes) {
+    if is_gguf_bytes(bytes) {
         return Ok(CheckpointKind::ChatbotGguf);
     }
-    if crate::interop::ggml_legacy::is_ggml_legacy_bytes(&bytes) {
+    if crate::interop::ggml_legacy::is_ggml_legacy_bytes(bytes) {
         return Ok(CheckpointKind::ChatbotGgmlLegacy);
     }
-    if is_zip_bytes(&bytes) {
-        return detect_zip_kind(&bytes);
+    if is_zip_bytes(bytes) {
+        return detect_zip_kind(bytes).map_err(|e| {
+            if let Some(hint) = extension_hint(path) {
+                MmnError::Other {
+                    message: format!("{} (extension suggests {hint})", e.message()),
+                }
+            } else {
+                e
+            }
+        });
     }
-    if is_legacy_torch_bytes(&bytes) {
+    if is_legacy_torch_bytes(bytes) {
         return Ok(CheckpointKind::ChatbotTorch);
     }
-    if crate::interop::sharded::is_shard_index_bytes(&bytes) {
+    if crate::interop::sharded::is_shard_index_bytes(bytes) {
         return Ok(CheckpointKind::ChatbotSharded);
     }
-    if is_hf_binary_bytes(&bytes) {
-        detect_binary_kind(&bytes)
-    } else {
-        detect_json_kind(&bytes)
+    if looks_like_safetensors(bytes) || is_hf_binary_bytes(bytes) {
+        return detect_binary_kind(bytes);
     }
+    if bytes.first() == Some(&b'{') {
+        return detect_json_kind(bytes);
+    }
+    Err(unrecognized_checkpoint_error(path, bytes))
+}
+
+/// Inspect a checkpoint file and report which model family it stores.
+///
+/// Handles every format MagicMindNet can write: JSON `mmn-safetensors-v1` /
+/// `mmn-classifier-v1` / `mmn-diffusion-v1` / `mmn-bin-v1` wrappers and binary
+/// HF safetensors (chatbot and classifier), plus GGUF / GGML / torch / npz /
+/// sharded HF.
+pub fn detect_checkpoint_kind(path: &str) -> Result<CheckpointKind, MmnError> {
+    let p = Path::new(path);
+    if p.is_dir() {
+        if p.join("model_index.json").is_file() {
+            return Ok(CheckpointKind::Diffusion);
+        }
+        // Prefer a single MagicMindNet / GGUF file inside a snapshot-style folder.
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(rd) = fs::read_dir(p) {
+            for ent in rd.flatten() {
+                let fp = ent.path();
+                let name = fp.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name.ends_with(".mmn")
+                    || name.ends_with(".gguf")
+                    || name.ends_with(".safetensors")
+                    || name.ends_with(".bin")
+                    || name.ends_with(".pt")
+                    || name.ends_with(".npz")
+                {
+                    candidates.push(fp);
+                }
+            }
+        }
+        candidates.sort();
+        if let Some(first) = candidates.first() {
+            return detect_checkpoint_kind(first.to_str().unwrap_or(path));
+        }
+        return Err(MmnError::Other {
+            message: format!(
+                "directory {path} has no model_index.json or recognized checkpoint file \
+                 (.mmn/.gguf/.safetensors/.bin/.pt/.npz). \
+                 Tip: use ai.from_pretrained() for Hugging Face / Diffusers layouts."
+            ),
+        });
+    }
+    let bytes = fs::read(path).map_err(|e| MmnError::Other {
+        message: format!("cannot read checkpoint {path}: {e}"),
+    })?;
+    detect_checkpoint_kind_bytes(path, &bytes)
 }
 
 #[cfg(test)]
@@ -256,6 +360,37 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         let err = detect_checkpoint_kind(path.to_str().unwrap()).unwrap_err();
         assert!(err.message().contains("neither a torch checkpoint"));
+        assert!(err.message().contains("Diffusers") || err.message().contains("safetensors"));
+    }
+
+    #[test]
+    fn detects_diffusers_directory_via_model_index() {
+        let dir = tmp_path("diffusers_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("model_index.json"),
+            r#"{"_class_name":"StableDiffusionPipeline"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            detect_checkpoint_kind(dir.to_str().unwrap()).unwrap(),
+            CheckpointKind::Diffusion
+        );
+    }
+
+    #[test]
+    fn detects_mmn_inside_directory() {
+        let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(2));
+        let dir = tmp_path("snapshot_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let nested = dir.join("bot.mmn");
+        export_safetensors(&model, nested.to_str().unwrap(), None).unwrap();
+        assert_eq!(
+            detect_checkpoint_kind(dir.to_str().unwrap()).unwrap(),
+            CheckpointKind::Chatbot
+        );
     }
 
     #[test]
@@ -270,5 +405,35 @@ mod tests {
     fn missing_file_errors_with_path() {
         let err = detect_checkpoint_kind("/nonexistent/model.mmn").unwrap_err();
         assert!(err.message().contains("/nonexistent/model.mmn"));
+    }
+
+    #[test]
+    fn random_binary_is_not_safetensors() {
+        let path = tmp_path("noise.bin");
+        std::fs::write(&path, b"\x00\x01\x02\x03not-a-checkpoint\xff\xfe").unwrap();
+        let err = detect_checkpoint_kind(path.to_str().unwrap()).unwrap_err();
+        let msg = err.message();
+        assert!(msg.contains("unrecognized"), "{msg}");
+        assert!(msg.contains("Supported model formats"), "{msg}");
+    }
+
+    #[test]
+    fn hdf5_magic_hints_load_arrays() {
+        let path = tmp_path("weights.h5");
+        let mut bytes = b"\x89HDF\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&[0u8; 32]);
+        std::fs::write(&path, bytes).unwrap();
+        let err = detect_checkpoint_kind(path.to_str().unwrap()).unwrap_err();
+        let msg = err.message().to_ascii_lowercase();
+        assert!(
+            msg.contains("hdf5") || msg.contains("load_h5") || msg.contains("load_arrays"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn looks_like_safetensors_rejects_short_noise() {
+        assert!(!looks_like_safetensors(b"abcd"));
+        assert!(!looks_like_safetensors(&[0u8; 16]));
     }
 }

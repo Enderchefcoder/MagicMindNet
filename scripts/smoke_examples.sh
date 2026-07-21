@@ -7,6 +7,18 @@ PY="$(bash "$(dirname "$0")/venv_python.sh")"
 echo "== examples/hello_ai =="
 "$PY" examples/hello_ai.py
 
+echo "== examples/pip_quickstart =="
+"$PY" examples/pip_quickstart.py
+
+echo "== examples/parity_demo =="
+"$PY" examples/parity_demo.py
+
+echo "== examples/hub_catalog =="
+"$PY" examples/hub_catalog.py
+
+echo "== examples/openai_server_demo =="
+"$PY" examples/openai_server_demo.py
+
 echo "== examples/quickstart =="
 "$PY" examples/quickstart.py
 
@@ -105,5 +117,17 @@ echo "== examples/diffusion_benchmark edit =="
 
 echo "== examples/vision_chatbot =="
 "$PY" examples/vision_chatbot.py
+
+echo "== examples/eval_harness smoke =="
+"$PY" examples/eval_harness.py smoke
+
+echo "== examples/hub_local_roundtrip =="
+"$PY" examples/hub_local_roundtrip.py
+
+echo "== examples/glint_tiny =="
+"$PY" examples/glint_tiny.py
+
+echo "== scripts/hub_hands_on local =="
+"$PY" scripts/hub_hands_on.py --only local
 
 echo "Examples smoke: OK"

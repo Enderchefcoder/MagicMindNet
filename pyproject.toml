@@ -4,18 +4,32 @@ build-backend = "maturin"
 
 [project]
 name = "magicmindnet"
-version = "0.1.0"
-description = "Beginner-friendly AI library: train chatbots, classifiers, and diffusion models with a from-scratch Rust core"
+version = "0.2.0"
+description = "Production-ready beginner-friendly AI library: train chatbots, classifiers, and diffusion models with a from-scratch Rust core. Hub load (HF/ModelScope/Ollama), GGUF, OpenAI-compatible server, eval harness."
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.12"
-keywords = ["ai", "machine-learning", "transformer", "chatbot", "beginner", "rust"]
+keywords = [
+    "ai",
+    "machine-learning",
+    "transformer",
+    "chatbot",
+    "gguf",
+    "ollama",
+    "huggingface",
+    "rust",
+    "llm",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
@@ -23,12 +37,26 @@ classifiers = [
 dependencies = []
 
 [project.urls]
+Homepage = "https://github.com/Enderchefcoder/MagicMindNet"
 Repository = "https://github.com/Enderchefcoder/MagicMindNet"
-Documentation = "https://github.com/Enderchefcoder/MagicMindNet/blob/master/docs/getting_started.md"
+Documentation = "https://github.com/Enderchefcoder/MagicMindNet/blob/master/docs/site/index.html"
 Changelog = "https://github.com/Enderchefcoder/MagicMindNet/blob/master/CHANGELOG.md"
+"Feature parity" = "https://github.com/Enderchefcoder/MagicMindNet/blob/master/docs/feature_parity.md"
+
+[project.scripts]
+mmn-serve = "magicmindnet.serve:main"
+mmn-eval = "magicmindnet.eval.__main__:main"
 
 [project.optional-dependencies]
 cuda = []
+hub = [
+    "huggingface_hub>=0.24",
+    "transformers>=4.44",
+    "diffusers>=0.30",
+    "torch>=2.2",
+    "accelerate>=0.33",
+    "modelscope>=1.14",
+]
 dev = ["pytest>=8.0", "maturin>=1.7", "ruff>=0.9", "numpy>=1.26", "h5py>=3.10", "gguf>=0.10", "safetensors>=0.4", "msgpack>=1.0", "zarr>=3.0", "cramjam>=2.8"]
 
 [tool.ruff]
@@ -45,7 +73,13 @@ manifest-path = "crates/mmn-py/Cargo.toml"
 module-name = "magicmindnet._native"
 python-source = "python"
 features = []
+include = [
+  { path = "LICENSE", format = ["sdist", "wheel"] },
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["python"]
+markers = [
+    "network: tests that download models from Hugging Face / ModelScope / Ollama",
+]

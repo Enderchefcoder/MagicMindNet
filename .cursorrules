@@ -37,9 +37,28 @@
 - HDF5 f32 datatype bit fields per h5py: [0x11, 0x20, 0x1F, 0x00] (v1 float, normalized-msb, sign loc 31) + offset0/prec32/exp23,8/man0,23/bias127; include a v2 fill-value message (02 02 02 01 + size 0).
 - TF bundle writer needs SORTED keys ('' header first) — LevelDB tables are ordered; BundleHeaderProto field3 = VersionDef{producer=1}.
 - safetensors container: u64 header_len + JSON {name: {dtype, shape, data_offsets}} (+ __metadata__ string map); pad header with spaces so 8+len is 8-aligned; offsets validated against shape*dtype_size.
+- BPE/unigram "reduces loss" tests can flake under full parallel cargo load with high LR; assert best-of-epoch mean loss and use more epochs / milder LR.
 - Q3_K packs scale l>>4 high bits as scales[8 + j%4] |= high << (2*(j/4)); Q2_K uses use_mad=true qkx2 with weights=|x|.
+- Classic square MHA (Q/K both `[d,d]`) must not GQA-guess `n_heads` from largest `head_dim` — that picks `n_heads=1` and breaks HF/npz/pt loss roundtrips; skip guess when heads absent, and always export `n_heads`/`n_kv_heads` on HF.
+- Hub optional deps (`transformers`/`diffusers`/`torch`) stay out of required/dev extras; hands-on + `@pytest.mark.network` only.
+- Real `torch` in the venv makes `install_fake_torch()` a no-op; pt pickle cross-check tests must stub `_rebuild_tensor_v2` in their Unpickler `find_class` (see `tests/test_interop_pt_py.py`).
+- Shell pipelines hide exit codes unless `set -o pipefail` — use it when wrapping `verify_gate.sh | tee | tail`.
+- Classifier train loss deltas are seed-sensitive on tiny ad-hoc JSON; prefer `tests/fixtures/labels_small.json` + adamw `epochs=20 batch_size=2 lr=0.05`.
+- `ai.save_arrays(path, arrays)` takes path first (swapped args look like “cannot infer format”).
+- GGUF/HF RMS `output_norm` is weight-only — `final_norm.beta` must be optional on import (zeros); requiring beta breaks Qwen/Llama GGUF loads.
+- `json_mode` constrained decode is seed-sensitive; eval/smoke tasks should fix seed + `temperature=0.0` (keep out of default smoke if flaky).
+- Never commit PyPI API tokens; publish via `MATURIN_PYPI_TOKEN` / `TWINE_PASSWORD` env only and revoke the token after upload.
+- Docs site charts need local HTTP (`python -m http.server -d docs/site`) — `file://` often blocks `fetch` of JSON.
 
 # Scratchpad
+
+## Task: Glint-2-like Chatbot architecture
+[X] n_loops shared-weight block looping + train grad accumulate
+[X] tie_embeddings (logits via embed.T; param count once)
+[X] norm=rms RMSNorm + gamma train
+[X] ffn=swiglu + silu/silu_backward + ffn_gate IO
+[X] loop_embed + ffn_dim Python ctor; KV full-forward when n_loops>1
+[X] Rust + pytest + docs/CHANGELOG/stubs; maturin develop
 
 ## Task: MagicMindNet full plan implementation
 
@@ -321,3 +340,95 @@ Lesson: fake-torch conftest helper makes pytest.importorskip("torch") pass in fu
 [X] Docs: getting_started.md, README beginner quickstart, API.md, CHANGELOG, coverage matrices
 [X] examples/hello_ai.py + smoke + pytest wiring
 [X] New tests: ~80 pytest (7 files) + 9 Rust (detect + train regressions)
+## Task: Advanced model support (load/inference + Glint-like)
+
+Goal: better ai.load detection, looped layers, CoT, tiny autosets, native SwiGLU/RMSNorm/tied embeds,
+lift 32-token train cap, resolve Glint recreate blockers.
+Private train+infer scripts — DO NOT COMMIT; final answer only.
+
+[X] Wave A — detect/load fixes
+[X] Wave B — train seq_len
+[X] Wave C — tiny autosets + ffn_dim
+[X] Wave D — n_loops / tie / rms / swiglu / loop_embed
+[X] Wave E — CoT train path
+[X] Wave F — IO meta + tests
+[X] Wave G — docs + verify_gate
+[X] Wave H — private scripts in final answer (not committed)
+
+
+## Task: Hub overhaul wave 2 (130+ items)
+
+Goal: make every advertised hub family actually generate/predict/finetune; offline CI;
+docs/examples/stubs; detect polish; Glint GGUF meta.
+
+Shipped this session (verify_gate OK; 602 Rust / 1145 pytest):
+[X] Wave A — diffusion/TTS/ASR/rerank/Ollama/capabilities/synthetics (~20)
+[X] Wave B — offline hub tests + CI smoke local (~20)
+[X] Wave C — docs/examples/README/API/hub_coverage (~15)
+[X] Wave D — stubs, hub extra, QA.as_pairs, CoT default (~10)
+[X] Wave E — detect dirs, GGUF glint KV, glint example, SwiGLU native (~15)
+[X] Wave F — prefer_native, --list, NLLB max_length clear (~5)
+[X] Wave G — embedding/zero-shot/fill-mask/QA/vlm routes (~10)
+[X] Wave H — verify_gate + PR updates
+[ ] LoopLoRA QKV adapters (roadmap) — DONE: `lora_rank`
+[X] final_norm / output_norm — DONE (GGUF weight-only beta optional)
+[ ] ModelScope live download=False card without network flake
+
+Net: ~1050+ LOC in wave-2 commit alone; continue from LoopLoRA next.
+
+## Task: Optional head_dim for Qwen-style GGUF/HF
+
+[X] MultiHeadAttention/TransformerBlock optional head_dim
+[X] ModelShape.head_dim + Chatbot/Python getter/ctor
+[X] GGUF key_length/value_length + Q-shape inference
+[X] HF/safetensors shape validation (q/k/v/out)
+[X] Rust + pytest synthetic; Qwen3-0.6B-Q8_0.gguf hands-on load+generate
+[X] Fix classic MHA ensure_gqa_meta n_heads=1 regression
+
+## Task: Full eval harness / benchmarking suite
+
+Goal: `magicmindnet.eval` on-par with every feature surface (+ more): unified
+runner, suites, JSON reports, CLI, coverage matrix; supersedes scattered
+example-only benches as the canonical API while keeping examples as thin demos.
+
+[X] Core: Metric / TaskResult / SuiteReport / EvalHarness / registry
+[X] Tasks: LM (qa/corpus/PE/RoPE/BPE/GQA), Glint, classifier, diffusion,
+    generate latency, IO formats, hub synthetics, RL/SPIN, merge/quantize
+[X] Extra: head_dim, unigram, vision flag, gguf-q8, arrays, diffusion-edit train
+[X] Suites: smoke, lm, cls, diffusion, io, hub, glint, generate, rl, train, all
+[X] CLI: `python -m magicmindnet.eval` + `examples/eval_harness.py`
+[X] Docs: benchmarks.md rewrite, eval_coverage.md, testing/API/README wiring
+[X] Tests + smoke + verify_gate + push (602 Rust / 1171 pytest; verify_gate OK)
+
+## Lessons (eval harness)
+- Classifier train loss deltas are seed-sensitive on tiny synthetic JSON; prefer
+  `tests/fixtures/labels_small.json` + adamw epochs=20 batch=2 lr=0.05.
+- `save_arrays(path, arrays)` — path first (not arrays first).
+
+## Task: final_norm + LoopLoRA QKV adapters (Glint parity)
+
+[X] Python failing tests (final_norm, lora_rank getters/train/IO)
+[X] final_norm: Chatbot field, forward/train, IO (GGUF output_norm map), Python
+[X] LoopLora: per-loop down/up, QKV deltas in attn, train grads, IO, Python
+[X] Docs/examples/eval + verify_gate + push
+[X] Fix: optional final_norm.beta for GGUF RMS output_norm (Qwen load)
+[X] verify_gate OK (607 Rust / 1179 pytest)
+
+## Task: Feature parity wave — PyTorch / llama.cpp / Ollama
+
+[X] Waves 1–3 + verify_gate (see prior scratchpad)
+
+## Task: 0.2.0 prod — PyPI, docs site, README pip-first
+
+Goal: ship MagicMindNet as a production pip package on PyPI, professional
+docs site (HTML/CSS/charts), hub/examples polish, README as one install story.
+
+[X] Bump workspace + pyproject + __version__ → 0.2.0; console scripts mmn-serve/mmn-eval
+[X] Fix version assert tests (0.2.0); CHANGELOG 0.2.0 release notes
+[X] docs/site/ professional landing (brand-first, charts from real benches)
+[X] README pip-first (`pip install magicmindnet`); hub catalog example
+[X] Extra examples: pip_quickstart, openai_server_demo, hub_catalog, parity_demo
+[X] Build wheel/sdist; publish to PyPI (manylinux2014 + sdist); pip install verified
+[X] verify_gate; commit LICENSE/sdist fix; push; update PR #3
+# verify_gate: OK — 619 Rust / 1206 pytest; PyPI 0.2.0 wheel+sdist live
+

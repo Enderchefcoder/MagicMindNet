@@ -58,6 +58,26 @@ from magicmindnet._native import (
     quantize_diffusion_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
+from magicmindnet.chat import format_chat_messages, format_tools_prompt, parse_tool_calls
+from magicmindnet.eval import (
+    BenchmarkRunner,
+    EvalHarness,
+    Metric,
+    SuiteReport,
+    TaskResult,
+    get_task,
+    list_suites,
+    list_tasks,
+    run_suite,
+)
+from magicmindnet.hub import (
+    HubModel,
+    ModelCard,
+    from_pretrained,
+    inspect_source,
+    list_hub_families,
+    resolve_source,
+)
 from magicmindnet.interop import (
     detect_arrays_format,
     gguf_info,
@@ -92,6 +112,7 @@ from magicmindnet.interop import (
     save_tf_checkpoint,
     save_zarr,
 )
+from magicmindnet.serve import OpenAIServer
 from magicmindnet.unigram_io import load_unigram_sidecar
 from magicmindnet.vision import (
     VISION_PATCH_DIM,
@@ -141,8 +162,27 @@ __all__ = [
     "export_classifier_model",
     "export_diffusion",
     "export_diffusion_model",
+    "format_chat_messages",
+    "format_tools_prompt",
+    "parse_tool_calls",
     "gguf_info",
     "Gpt2BpeEncoder",
+    "HubModel",
+    "from_pretrained",
+    "inspect_source",
+    "list_hub_families",
+    "resolve_source",
+    "ModelCard",
+    "BenchmarkRunner",
+    "EvalHarness",
+    "Metric",
+    "SuiteReport",
+    "TaskResult",
+    "get_task",
+    "list_suites",
+    "list_tasks",
+    "run_suite",
+
     "import_classifier",
     "import_classifier_model",
     "import_diffusion",
@@ -176,6 +216,7 @@ __all__ = [
     "merge_classifier",
     "merge_diffusion",
     "merge_diffusion_model",
+    "OpenAIServer",
     "quantize",
     "quantize_classifier",
     "quantize_classifier_model",
@@ -204,4 +245,4 @@ __all__ = [
     "vision_rgb_patch_from_text",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

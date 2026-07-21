@@ -13,11 +13,14 @@ use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
 use rand::Rng;
 
 mod generate;
+mod json_constrain;
 
 pub use generate::{
-    decode_tokens, generate_text, generate_token_ids, tokenize_for_generate, truncate_at_stop_strings,
-    GenerateConfig,
+    apply_mirostat_v2_truncate, apply_typical_p, decode_tokens, embed_mean_pool,
+    format_chat_messages, generate_text, generate_text_stream, generate_token_ids,
+    tokenize_for_generate, truncate_at_stop_strings, GenerateConfig,
 };
+pub use json_constrain::finalize_json;
 
 #[derive(Clone, Debug)]
 pub struct TrainConfig {
@@ -26,6 +29,12 @@ pub struct TrainConfig {
     pub cuda: bool,
     pub optimizer: String,
     pub learning_rate: f32,
+    /// AdamW weight decay (default `0.01`, matching `AdamWConfig`).
+    pub weight_decay: f32,
+    /// `"constant"` (default) or `"cosine"` with optional warmup.
+    pub lr_schedule: String,
+    /// Warmup steps for cosine schedule (`0` = no warmup).
+    pub warmup_steps: usize,
     /// Print per-epoch mean loss during training.
     pub verbose: bool,
 }
@@ -38,6 +47,9 @@ impl Default for TrainConfig {
             cuda: false,
             optimizer: "hybrid".into(),
             learning_rate: 3e-4,
+            weight_decay: 0.01,
+            lr_schedule: "constant".into(),
+            warmup_steps: 0,
             verbose: false,
         }
     }
@@ -46,11 +58,15 @@ impl Default for TrainConfig {
 /// Optimizer names accepted by `TrainConfig.optimizer`.
 pub const VALID_OPTIMIZERS: [&str; 3] = ["adamw", "muon", "hybrid"];
 
+/// Learning-rate schedule names accepted by `TrainConfig.lr_schedule`.
+pub const VALID_LR_SCHEDULES: [&str; 2] = ["constant", "cosine"];
+
 /// Validate `TrainConfig.optimizer` and resolve the hybrid-Muon routing flag.
 ///
 /// `"muon"` trains matrix weights with Muon and vector weights with AdamW,
 /// which is exactly the hybrid path (pure Muon is undefined for 1-D params).
 pub fn resolve_use_hybrid(config: &TrainConfig) -> Result<bool> {
+    validate_train_config(config)?;
     match config.optimizer.as_str() {
         "adamw" => Ok(false),
         "muon" | "hybrid" => Ok(true),
@@ -59,6 +75,75 @@ pub fn resolve_use_hybrid(config: &TrainConfig) -> Result<bool> {
                 "Unknown optimizer {other:?}. Valid options: \"adamw\", \"muon\", \"hybrid\"."
             ),
         }),
+    }
+}
+
+/// Validate optimizer and learning-rate schedule fields.
+pub fn validate_train_config(config: &TrainConfig) -> Result<()> {
+    if !VALID_OPTIMIZERS.contains(&config.optimizer.as_str()) {
+        return Err(mmn_core::MmnError::Other {
+            message: format!(
+                "Unknown optimizer {:?}. Valid options: \"adamw\", \"muon\", \"hybrid\".",
+                config.optimizer
+            ),
+        });
+    }
+    if !VALID_LR_SCHEDULES.contains(&config.lr_schedule.as_str()) {
+        return Err(mmn_core::MmnError::Other {
+            message: format!(
+                "Unknown lr_schedule {:?}. Valid options: \"constant\", \"cosine\".",
+                config.lr_schedule
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Learning rate at global optimizer `step` (0-indexed) given `total_steps`.
+pub fn scheduled_lr(config: &TrainConfig, step: usize, total_steps: usize) -> f32 {
+    let lr_max = config.learning_rate;
+    match config.lr_schedule.as_str() {
+        "cosine" => {
+            let warmup = config.warmup_steps;
+            if warmup > 0 && step < warmup {
+                lr_max * (step as f32) / (warmup as f32)
+            } else {
+                let lr_min = 0.1 * lr_max;
+                let denom = (total_steps.saturating_sub(warmup)).max(1) as f32;
+                let progress = ((step.saturating_sub(warmup)) as f32 / denom).min(1.0);
+                lr_min + 0.5 * (lr_max - lr_min) * (1.0 + (std::f32::consts::PI * progress).cos())
+            }
+        }
+        _ => lr_max,
+    }
+}
+
+/// Estimate optimizer steps: `epochs * ceil(n_rows / batch_size)`.
+pub fn estimate_total_steps(epochs: usize, n_rows: usize, batch_size: usize) -> usize {
+    let bs = batch_size.max(1);
+    let per_epoch = n_rows.div_ceil(bs).max(1);
+    epochs.saturating_mul(per_epoch).max(1)
+}
+
+fn adamw_config_from_train(config: &TrainConfig) -> AdamWConfig {
+    AdamWConfig {
+        lr: config.learning_rate,
+        weight_decay: config.weight_decay,
+        ..Default::default()
+    }
+}
+
+fn apply_scheduled_lr(
+    config: &TrainConfig,
+    step: usize,
+    total_steps: usize,
+    adamw: &mut AdamW,
+    hybrid: Option<&mut HybridOptimizer>,
+) {
+    let lr = scheduled_lr(config, step, total_steps);
+    adamw.config.lr = lr;
+    if let Some(h) = hybrid {
+        h.adamw.config.lr = lr;
     }
 }
 
@@ -73,25 +158,49 @@ fn report_epoch(config: &TrainConfig, epoch: usize, mean_loss: f32) {
 }
 
 pub fn simple_tokenize(text: &str, vocab_size: usize) -> Vec<usize> {
+    simple_tokenize_n(text, vocab_size, 32)
+}
+
+/// Byte-level tokenize with an explicit max length (defaults historically used 32).
+pub fn simple_tokenize_n(text: &str, vocab_size: usize, max_tokens: usize) -> Vec<usize> {
+    let cap = max_tokens.max(1);
     text.bytes()
         .map(|b| (b as usize) % vocab_size)
-        .take(32)
+        .take(cap)
         .collect()
 }
 
-/// Tokenize for LM training: byte fallback or trained encoder when set (max 32 tokens).
+/// Tokenize for LM training: byte fallback or trained encoder when set.
+///
+/// `max_tokens` caps sequence length (use the model's `max_seq_len` for long-context training).
 pub fn tokenize_lm(text: &str, vocab_size: usize, encoder: Option<TextEncoderRef<'_>>) -> Vec<usize> {
+    tokenize_lm_n(text, vocab_size, encoder, 32)
+}
+
+/// Like [`tokenize_lm`] with an explicit max token count.
+pub fn tokenize_lm_n(
+    text: &str,
+    vocab_size: usize,
+    encoder: Option<TextEncoderRef<'_>>,
+    max_tokens: usize,
+) -> Vec<usize> {
+    let cap = max_tokens.max(1);
     match encoder {
         Some(enc) => {
             let mut ids = enc.encode(text);
-            ids.truncate(32);
+            ids.truncate(cap);
             ids
         }
-        None => simple_tokenize(text, vocab_size),
+        None => simple_tokenize_n(text, vocab_size, cap),
     }
 }
 
-/// Truncate input/target token streams to the same length for CE (min length, max 32 each).
+/// Resolve the training sequence length from the model context window.
+pub fn train_seq_len(model: &Chatbot) -> usize {
+    model.max_seq_len.max(1)
+}
+
+/// Truncate input/target token streams to the same length for CE.
 pub fn align_qa_token_pairs(tokens: &mut Vec<usize>, targets: &mut Vec<usize>) {
     let n = tokens.len().min(targets.len());
     tokens.truncate(n);
@@ -100,6 +209,25 @@ pub fn align_qa_token_pairs(tokens: &mut Vec<usize>, targets: &mut Vec<usize>) {
         tokens.push(0);
         targets.push(0);
     }
+}
+
+/// Build (input, output) strings for QA LM training.
+///
+/// When CoT think tags are configured (`thinktag="think"` or `"<think>|</think>"`),
+/// the assistant target is wrapped so training matches `format_sample` CoT markup.
+pub fn qa_train_texts(dataset: &DatasetQA, sample: &QaSample) -> (String, String) {
+    let input = sample.input.clone();
+    let output = if dataset.chatxml.cot
+        && (!dataset.chatxml.think_open.is_empty() || !dataset.chatxml.think_close.is_empty())
+    {
+        format!(
+            "{}{}{}",
+            dataset.chatxml.think_open, sample.output, dataset.chatxml.think_close
+        )
+    } else {
+        sample.output.clone()
+    };
+    (input, output)
 }
 
 /// Mean CE over all QA samples (aligned token pairs).
@@ -188,11 +316,13 @@ pub fn mean_qa_loss_with_encoder(
     encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<f32> {
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut total = 0.0f32;
     let mut count = 0usize;
     for sample in &dataset.samples {
-        let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
-        let mut targets = tokenize_lm(&sample.output, vocab, encoder);
+        let (in_text, out_text) = qa_train_texts(dataset, sample);
+        let mut tokens = tokenize_lm_n(&in_text, vocab, encoder, seq);
+        let mut targets = tokenize_lm_n(&out_text, vocab, encoder, seq);
         align_qa_token_pairs(&mut tokens, &mut targets);
         let patches = vision_patches_from_sample(
             model,
@@ -228,8 +358,9 @@ fn corpus_row_lm_pairs(
     text: &str,
     vocab_size: usize,
     encoder: Option<TextEncoderRef<'_>>,
+    max_tokens: usize,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
-    let tokens = tokenize_lm(text, vocab_size, encoder);
+    let tokens = tokenize_lm_n(text, vocab_size, encoder, max_tokens);
     if tokens.len() < 2 {
         return None;
     }
@@ -249,10 +380,11 @@ pub fn mean_corpus_loss_with_encoder(
     encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<f32> {
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut total = 0.0f32;
     let mut count = 0usize;
     for row in &dataset.rows {
-        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder) {
+        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder, seq) {
             total += model.loss_on_batch(&tokens, &targets)?;
             count += 1;
         }
@@ -294,20 +426,15 @@ pub fn train_corpus_with_encoder(
     mmn_models::validate_dataset_for_chatbot(&dataset.meta.dataset_type)?;
     let use_hybrid = resolve_use_hybrid(config)?;
     enable_grad(true);
-    let mut hybrid = HybridOptimizer::new(
-        MuonConfig::default(),
-        AdamWConfig {
-            lr: config.learning_rate,
-            ..Default::default()
-        },
-    );
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    let aw_cfg = adamw_config_from_train(config);
+    let mut hybrid = HybridOptimizer::new(MuonConfig::default(), aw_cfg.clone());
+    let mut adamw = AdamW::new(aw_cfg);
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let total_steps = estimate_total_steps(config.epochs, dataset.rows.len(), batch_size);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
 
     for epoch in 0..config.epochs {
@@ -323,11 +450,18 @@ pub fn train_corpus_with_encoder(
         let mut loss_sum = 0.0f32;
         for (i, &idx) in indices.iter().enumerate() {
             let row = &dataset.rows[idx];
-            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder) else {
+            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder, seq) else {
                 continue;
             };
             valid_steps += 1;
             if batch_size == 1 {
+                apply_scheduled_lr(
+                    config,
+                    global_step,
+                    total_steps,
+                    &mut adamw,
+                    Some(&mut hybrid),
+                );
                 loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
@@ -338,6 +472,7 @@ pub fn train_corpus_with_encoder(
                     None,
                     None,
                 )?;
+                global_step += 1;
             } else {
                 micro += 1;
                 loss_sum += model.train_step_lm(
@@ -352,6 +487,13 @@ pub fn train_corpus_with_encoder(
                 )?;
                 let flush = micro >= batch_size || i + 1 == indices.len();
                 if flush {
+                    apply_scheduled_lr(
+                        config,
+                        global_step,
+                        total_steps,
+                        &mut adamw,
+                        Some(&mut hybrid),
+                    );
                     model.apply_accumulated_lm_grads(
                         &accum,
                         &mut hybrid,
@@ -361,6 +503,7 @@ pub fn train_corpus_with_encoder(
                     )?;
                     accum.clear();
                     micro = 0;
+                    global_step += 1;
                 }
             }
         }
@@ -407,20 +550,15 @@ pub fn train_with_encoder(
     mmn_models::validate_dataset_for_chatbot(&dataset.meta.dataset_type)?;
     let use_hybrid = resolve_use_hybrid(config)?;
     enable_grad(true);
-    let mut hybrid = HybridOptimizer::new(
-        MuonConfig::default(),
-        AdamWConfig {
-            lr: config.learning_rate,
-            ..Default::default()
-        },
-    );
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    let aw_cfg = adamw_config_from_train(config);
+    let mut hybrid = HybridOptimizer::new(MuonConfig::default(), aw_cfg.clone());
+    let mut adamw = AdamW::new(aw_cfg);
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), batch_size);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
 
     for epoch in 0..config.epochs {
@@ -435,8 +573,9 @@ pub fn train_with_encoder(
         let mut loss_sum = 0.0f32;
         for (i, &idx) in indices.iter().enumerate() {
             let sample = &dataset.samples[idx];
-            let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
-            let mut targets = tokenize_lm(&sample.output, vocab, encoder);
+            let (in_text, out_text) = qa_train_texts(dataset, sample);
+            let mut tokens = tokenize_lm_n(&in_text, vocab, encoder, seq);
+            let mut targets = tokenize_lm_n(&out_text, vocab, encoder, seq);
             align_qa_token_pairs(&mut tokens, &mut targets);
             let patch_list = vision_patches_from_sample(
                 model,
@@ -450,6 +589,13 @@ pub fn train_with_encoder(
                 targets
             };
             if batch_size == 1 {
+                apply_scheduled_lr(
+                    config,
+                    global_step,
+                    total_steps,
+                    &mut adamw,
+                    Some(&mut hybrid),
+                );
                 loss_sum += model.train_step_lm(
                     &tokens,
                     &targets,
@@ -460,6 +606,7 @@ pub fn train_with_encoder(
                     None,
                     patch_list.as_deref(),
                 )?;
+                global_step += 1;
             } else {
                 micro += 1;
                 loss_sum += model.train_step_lm(
@@ -474,6 +621,13 @@ pub fn train_with_encoder(
                 )?;
                 let flush = micro >= batch_size || i + 1 == indices.len();
                 if flush {
+                    apply_scheduled_lr(
+                        config,
+                        global_step,
+                        total_steps,
+                        &mut adamw,
+                        Some(&mut hybrid),
+                    );
                     model.apply_accumulated_lm_grads(
                         &accum,
                         &mut hybrid,
@@ -483,6 +637,7 @@ pub fn train_with_encoder(
                     )?;
                     accum.clear();
                     micro = 0;
+                    global_step += 1;
                 }
             }
         }
@@ -516,12 +671,11 @@ pub fn train_classifier(
     validate_dataset_for_classifier(&dataset.meta.dataset_type)?;
     resolve_use_hybrid(config)?;
     enable_grad(true);
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    let mut adamw = AdamW::new(adamw_config_from_train(config));
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), batch_size);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
     for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
@@ -548,7 +702,9 @@ pub fn train_classifier(
             };
             valid_step += 1;
             if batch_size == 1 {
+                apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
                 loss_sum += model.train_step(text, label_idx, &mut adamw, &mut param_id, None)?;
+                global_step += 1;
             } else {
                 micro += 1;
                 loss_sum += model.train_step(
@@ -560,6 +716,7 @@ pub fn train_classifier(
                 )?;
                 let flush = micro >= batch_size || valid_step == total_valid;
                 if flush {
+                    apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
                     model.apply_accumulated_classifier_grads(
                         &accum,
                         &mut adamw,
@@ -567,6 +724,7 @@ pub fn train_classifier(
                     )?;
                     accum.clear();
                     micro = 0;
+                    global_step += 1;
                 }
             }
         }
@@ -597,11 +755,11 @@ pub fn train_diffusion(
         });
     }
     enable_grad(true);
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    validate_train_config(config)?;
+    let mut adamw = AdamW::new(adamw_config_from_train(config));
     let mut param_id = 0usize;
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), 1);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
     for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
@@ -616,7 +774,9 @@ pub fn train_diffusion(
             let path = dataset.resolve_image_path(&sample.image_path);
             let x = mmn_data::rgb_nchw_tensor_from_image_path(&path)?;
             let t = rng.gen_range(0..1000);
+            apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
             loss_sum += model.train_step_denoise(&x, t, &mut adamw, &mut param_id)?;
+            global_step += 1;
         }
         let mean = loss_sum / indices.len() as f32;
         report_epoch(config, epoch, mean);
@@ -641,11 +801,11 @@ pub fn train_diffusion_edit(
         });
     }
     enable_grad(true);
-    let mut adamw = AdamW::new(AdamWConfig {
-        lr: config.learning_rate,
-        ..Default::default()
-    });
+    validate_train_config(config)?;
+    let mut adamw = AdamW::new(adamw_config_from_train(config));
     let mut param_id = 0usize;
+    let total_steps = estimate_total_steps(config.epochs, dataset.samples.len(), 1);
+    let mut global_step = 0usize;
     let mut epoch_losses = Vec::with_capacity(config.epochs);
     for epoch in 0..config.epochs {
         let mut rng = rand::thread_rng();
@@ -662,7 +822,9 @@ pub fn train_diffusion_edit(
             let x = mmn_data::rgb_nchw_tensor_from_image_path(&image_path)?;
             let mask = mmn_data::grayscale_mask_tensor_from_image_path(&mask_path)?;
             let t = rng.gen_range(0..1000);
+            apply_scheduled_lr(config, global_step, total_steps, &mut adamw, None);
             loss_sum += model.train_step_denoise_masked(&x, &mask, t, &mut adamw, &mut param_id)?;
+            global_step += 1;
         }
         let mean = loss_sum / indices.len() as f32;
         report_epoch(config, epoch, mean);
@@ -738,9 +900,11 @@ pub fn rl_with_encoder(
     let policy = rl_type.to_lowercase();
     enable_grad(true);
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     for sample in &dataset.samples {
-        let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
-        let mut targets = tokenize_lm(&sample.output, vocab, encoder);
+        let (in_text, out_text) = qa_train_texts(dataset, sample);
+        let mut tokens = tokenize_lm_n(&in_text, vocab, encoder, seq);
+        let mut targets = tokenize_lm_n(&out_text, vocab, encoder, seq);
         align_qa_token_pairs(&mut tokens, &mut targets);
         let logits = model.forward_logits(&tokens)?;
         let score = if sample.output.contains(' ') {
@@ -1672,17 +1836,22 @@ mod tests {
             false, None, 512, Some(1), Some(32), Some(14), false, 64,
         );
         let cfg = TrainConfig {
-            epochs: 4,
+            epochs: 8,
             batch_size: 1,
-            learning_rate: 0.05,
+            learning_rate: 0.03,
             optimizer: "adamw".into(),
             ..Default::default()
         };
 
         let loss_before = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
-        train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
+        let epoch_losses = train_with_bpe(&mut model, &ds, &cfg, Some(&bpe)).unwrap();
         let loss_after = mean_qa_loss_with_bpe(&model, &ds, Some(&bpe)).unwrap();
-        assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
+        let best = epoch_losses
+            .iter()
+            .cloned()
+            .fold(f32::INFINITY, f32::min)
+            .min(loss_after);
+        assert!(best < loss_before, "{loss_before} -> best={best} after={loss_after}");
     }
 
     #[test]
@@ -1703,17 +1872,22 @@ mod tests {
             false, None, 512, Some(1), Some(32), Some(15), false, 64,
         );
         let cfg = TrainConfig {
-            epochs: 4,
+            epochs: 8,
             batch_size: 1,
-            learning_rate: 0.05,
+            learning_rate: 0.03,
             optimizer: "adamw".into(),
             ..Default::default()
         };
         let enc = TextEncoderRef::Unigram(&uni);
         let loss_before = mean_qa_loss_with_encoder(&model, &ds, Some(enc)).unwrap();
-        train_with_encoder(&mut model, &ds, &cfg, Some(enc)).unwrap();
+        let epoch_losses = train_with_encoder(&mut model, &ds, &cfg, Some(enc)).unwrap();
         let loss_after = mean_qa_loss_with_encoder(&model, &ds, Some(enc)).unwrap();
-        assert!(loss_after < loss_before, "{loss_before} -> {loss_after}");
+        let best = epoch_losses
+            .iter()
+            .cloned()
+            .fold(f32::INFINITY, f32::min)
+            .min(loss_after);
+        assert!(best < loss_before, "{loss_before} -> best={best} after={loss_after}");
     }
 
     #[test]

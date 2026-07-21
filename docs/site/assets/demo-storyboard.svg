@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-label="MagicMindNet train and generate demo storyboard">
+  <rect width="960" height="540" fill="#14201c"/>
+  <text x="48" y="72" fill="#f7f4ef" font-family="Georgia, serif" font-size="36">Train ’ Save ’ Serve ’ Chat</text>
+  <text x="48" y="112" fill="#1a9a82" font-family="Segoe UI, sans-serif" font-size="18">MagicMindNet 0.2 · local OpenAI-compatible server</text>
+  <g font-family="Consolas, monospace" font-size="15" fill="#e8efe9">
+    <rect x="48" y="150" width="400" height="150" rx="4" fill="#1c2c26" stroke="#0d6b5c"/>
+    <text x="68" y="185">pip install magicmindnet</text>
+    <text x="68" y="215">bot.train(data, epochs=5)</text>
+    <text x="68" y="245">bot.save("bot.mmn")</text>
+    <text x="68" y="275">mmn-serve --model bot.mmn</text>
+    <rect x="480" y="150" width="432" height="150" rx="4" fill="#1c2c26" stroke="#c4a574"/>
+    <text x="500" y="185" fill="#c4a574">POST /v1/chat/completions</text>
+    <text x="500" y="225">{"role":"user","content":"hi"}</text>
+    <text x="500" y="265">’ "hello there!"</text>
+  </g>
+  <g fill="none" stroke="#1a9a82" stroke-width="2">
+    <path d="M48 380 H900"/>
+    <path d="M160 360 V400"/>
+    <path d="M360 360 V400"/>
+    <path d="M560 360 V400"/>
+    <path d="M760 360 V400"/>
+  </g>
+  <g fill="#f7f4ef" font-family="Segoe UI, sans-serif" font-size="14" text-anchor="middle">
+    <text x="160" y="430">DatasetQA</text>
+    <text x="360" y="430">Chatbot</text>
+    <text x="560" y="430">Checkpoint</text>
+    <text x="760" y="430">OpenAI API</text>
+  </g>
+  <text x="48" y="500" fill="rgba(247,244,239,0.55)" font-family="Segoe UI, sans-serif" font-size="13">Animated placeholder  open examples/openai_server_demo.py for a live run</text>
+</svg>

@@ -1,6 +1,12 @@
 # MagicMindNet
 
-**MagicMindNet** is a beginner-friendly Python AI library (`import magicmindnet as ai`) backed by a **from-scratch Rust** core. Train real transformer chatbots, text classifiers, and toy diffusion models on your own machine — no PyTorch, no Hugging Face, no GPU required — and read every line of the stack that made it happen.
+**MagicMindNet** (`pip install magicmindnet`) is a beginner-friendly Python AI library — `import magicmindnet as ai` — backed by a **from-scratch Rust** core. Train transformer chatbots, classifiers, and toy diffusion models locally; load Hub / GGUF checkpoints; serve an OpenAI-compatible API.
+
+```bash
+pip install magicmindnet
+# optional: Hugging Face / ModelScope / Diffusers backends
+pip install "magicmindnet[hub]"
+```
 
 ```python
 import magicmindnet as ai
@@ -15,11 +21,17 @@ print(bot.chat("hi"))
 
 bot.save("my_bot.mmn")
 bot = ai.load("my_bot.mmn")               # loads any MagicMindNet checkpoint
+
+# Universal hub: HF / ModelScope / Ollama / local
+model = ai.from_pretrained("./my_bot.mmn")
+print(model.generate("hi", max_new_tokens=8))
 ```
 
-Under the hood: custom tensors and autograd, AdamW + Muon hybrid optimizers, KV-cache generation with modern sampling (top-p/top-k/min-p, penalties), BPE/unigram tokenizers, RoPE/learned/sinusoidal position encodings, GQA attention, vision-prefix multimodal input, RL + SPIN loops, strict checkpoint IO (export / import / merge / quantize), and HF-safetensors interchange.
+CLI after install: `mmn-eval smoke` · `mmn-serve --model my_bot.mmn`
 
-**New to the library? Start with [docs/getting_started.md](docs/getting_started.md)** and `python examples/hello_ai.py`.
+Under the hood: custom tensors and autograd, AdamW + Muon hybrid optimizers, KV-cache generation with modern sampling (top-p/top-k/min-p, penalties, Mirostat, typical_p), BPE/unigram tokenizers, RoPE/learned/sinusoidal PE, GQA, vision-prefix multimodal, RL + SPIN, strict checkpoint IO, and global format interop (GGUF / PyTorch / NumPy / TF / ONNX / …).
+
+**Docs:** [getting started](docs/getting_started.md) · [**docs site** (charts & benchmarks)](docs/site/index.html) · [hub](docs/hub.md) · [feature parity](docs/feature_parity.md) · [PyPI](https://pypi.org/project/magicmindnet/)
 
 ---
 
@@ -43,19 +55,22 @@ Under the hood: custom tensors and autograd, AdamW + Muon hybrid optimizers, KV-
 
 ## Quick start
 
-**Requires:** Python 3.12+, [Rust](https://rustup.rs/), optional CUDA toolkit for GPU matmul.
+**Requires:** Python 3.12+ (wheels on PyPI). Building from source also needs [Rust](https://rustup.rs/).
+
+```bash
+pip install magicmindnet
+python -c "import magicmindnet as ai; print(ai.__version__)"
+python examples/pip_quickstart.py   # if you cloned the repo
+mmn-eval smoke
+```
+
+**From source / contributors** (editable + full gate):
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 maturin develop --release
 python examples/hello_ai.py
-pytest -q
-```
-
-**Full merge gate** (Rust tests, maturin, pytest, ruff, example smoke):
-
-```bash
 bash scripts/verify_gate.sh        # Windows: .\scripts\verify_gate.ps1
 ```
 
@@ -76,6 +91,8 @@ bot = ai.Chatbot(vocab_size=512, n_layer=2, d_model=64, use_learned_pos_embed=Tr
 ```
 
 See [docs/position_encoding_coverage.md](docs/position_encoding_coverage.md), `examples/learned_pos_embed_roundtrip.py`, and `examples/rope_roundtrip.py`.
+
+Feature parity (llama.cpp sampling, Ollama stream/embed, ChatML, cosine LR): see [docs/feature_parity.md](docs/feature_parity.md).
 
 Classification:
 
@@ -159,8 +176,18 @@ Known gaps: see [docs/limitations.md](docs/limitations.md) (external HF model im
 
 ## Installation & development
 
+### PyPI (recommended)
+
 ```bash
-# Editable Python + dev tools
+pip install magicmindnet
+pip install "magicmindnet[hub]"   # transformers / diffusers / modelscope
+```
+
+Package metadata: version **0.2.0**, console scripts `mmn-serve` and `mmn-eval`, typed stubs (`py.typed`).
+
+### Editable / from source
+
+```bash
 pip install -e ".[dev]"
 maturin develop --release -m crates/mmn-py/Cargo.toml
 
@@ -179,6 +206,8 @@ Windows:
 ```
 
 Pre-commit (optional): `.pre-commit-config.yaml` runs ruff on Python sources.
+
+Product docs with charts: open [docs/site/index.html](docs/site/index.html) in a browser.
 
 ---
 
@@ -288,6 +317,7 @@ Format details: [docs/checkpoints.md](docs/checkpoints.md).
 | `examples/classification_benchmark.py` | Classifier benchmark |
 | `examples/classification.py` | Train classifier end-to-end |
 | `examples/eval_mean_loss.py` | Mean QA / classification loss |
+| `examples/eval_harness.py` | Unified eval suites (`smoke` / `all` / …) |
 | `examples/checkpoint_roundtrip.py` | Chatbot export → import |
 | `examples/learned_pos_embed_roundtrip.py` | Learned `pos_embed` export → import + loss parity |
 | `examples/rope_roundtrip.py` | RoPE chatbot export → import + loss parity |
@@ -359,8 +389,12 @@ MagicMindNet/
 
 | Doc | Contents |
 |-----|----------|
+| [docs/site/index.html](docs/site/index.html) | **Product docs site** — install, charts, hub, parity |
 | [docs/getting_started.md](docs/getting_started.md) | **Beginner tutorial** — install to first trained model |
 | [docs/API.md](docs/API.md) | Public Python surface |
+| [docs/feature_parity.md](docs/feature_parity.md) | PyTorch / llama.cpp / Ollama parity matrix |
+| [docs/hub.md](docs/hub.md) | Universal `from_pretrained` routing |
+| [docs/benchmarks.md](docs/benchmarks.md) | Eval harness suites |
 | [docs/training.md](docs/training.md) | Losses, optimizers, batching |
 | [docs/training_coverage.md](docs/training_coverage.md) | **Training regression matrix** |
 | [docs/vision_coverage.md](docs/vision_coverage.md) | Vision-flag chatbot IO/train path |

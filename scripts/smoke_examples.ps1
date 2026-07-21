@@ -7,6 +7,18 @@ $PY = & "$PSScriptRoot\venv_python.ps1"
 Write-Host "== examples/hello_ai =="
 & $PY examples/hello_ai.py
 
+Write-Host "== examples/pip_quickstart =="
+& $PY examples/pip_quickstart.py
+
+Write-Host "== examples/parity_demo =="
+& $PY examples/parity_demo.py
+
+Write-Host "== examples/hub_catalog =="
+& $PY examples/hub_catalog.py
+
+Write-Host "== examples/openai_server_demo =="
+& $PY examples/openai_server_demo.py
+
 Write-Host "== examples/quickstart =="
 & $PY examples/quickstart.py
 
@@ -153,5 +165,8 @@ Write-Host "== examples/diffusion_merge_demo =="
 
 Write-Host "== examples/vision_chatbot =="
 & $PY examples/vision_chatbot.py
+
+Write-Host "== examples/eval_harness smoke =="
+& $PY examples/eval_harness.py smoke
 
 Write-Host "Examples smoke: OK"

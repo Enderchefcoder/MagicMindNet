@@ -5,7 +5,7 @@ pub use autoset::{autoset, is_valid_autoset_budget, ModelShape, VALID_AUTOSET_BU
 pub use chatbot::{
     targets_with_vision_prefix, validate_dataset_for_chatbot, validate_dataset_for_classifier,
     validate_dataset_for_diffusion, vision_patch_from_text, vision_rgb_patch_from_image_path,
-    vision_rgb_patches_from_image_path, vision_rgb_patch_from_text, Chatbot, ChatbotKvCache,
-    Classifier, Diffusion, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA, VISION_PATCH_DIM,
-    VISION_RGB_CHANNELS, VISION_RGB_DIM, VISION_RGB_SPATIAL,
+    vision_rgb_patches_from_image_path, vision_rgb_patch_from_text, Chatbot, ChatbotArchExtras,
+    ChatbotKvCache, Classifier, Diffusion, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA,
+    VISION_PATCH_DIM, VISION_RGB_CHANNELS, VISION_RGB_DIM, VISION_RGB_SPATIAL,
 };
