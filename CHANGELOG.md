@@ -2,6 +2,18 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (unified eval harness / benchmarking suite)
+- `magicmindnet.eval`: `EvalHarness` / `BenchmarkRunner`, `Metric`, `TaskResult`,
+  `SuiteReport`, `list_tasks` / `list_suites` / `get_task` / `run_suite`
+- Suites: `smoke`, `lm`, `cls`, `diffusion`, `io`, `hub`, `glint`, `generate`,
+  `rl`, `train`, `all` — 35+ tasks covering QA/corpus CE, PE/RoPE/BPE/Unigram,
+  GQA/`head_dim`, Glint, vision flag, classifier accuracy, diffusion denoise/edit,
+  hub synthetics (causal/cls/rerank/diffusion/seq2seq), IO timing (safetensors/HF/
+  GGUF/Q8/npz/pt), arrays roundtrip, RL/SPIN, merge/quantize
+- CLI: `python -m magicmindnet.eval` + `examples/eval_harness.py`
+- Docs: rewritten [benchmarks.md](docs/benchmarks.md), [eval_coverage.md](docs/eval_coverage.md)
+- Tests: `tests/test_eval_harness_py.py`; smoke wires `eval_harness.py smoke`
+
 ### Added (hub wave-2 — callable families + offline coverage)
 - HubModel: `capabilities()`, `score_pairs` / `rerank`, `embed`, diffusion/TTS/ASR/embedding/zero-shot/fill-mask/QA/vlm routing
 - Diffusers `generate` → pipeline images/frames; native Diffusion `generate` → `sample_rgb_patch`

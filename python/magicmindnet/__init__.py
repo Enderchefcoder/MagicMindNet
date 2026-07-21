@@ -58,6 +58,17 @@ from magicmindnet._native import (
     quantize_diffusion_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
+from magicmindnet.eval import (
+    BenchmarkRunner,
+    EvalHarness,
+    Metric,
+    SuiteReport,
+    TaskResult,
+    get_task,
+    list_suites,
+    list_tasks,
+    run_suite,
+)
 from magicmindnet.hub import (
     HubModel,
     ModelCard,
@@ -157,6 +168,16 @@ __all__ = [
     "list_hub_families",
     "resolve_source",
     "ModelCard",
+    "BenchmarkRunner",
+    "EvalHarness",
+    "Metric",
+    "SuiteReport",
+    "TaskResult",
+    "get_task",
+    "list_suites",
+    "list_tasks",
+    "run_suite",
+
     "import_classifier",
     "import_classifier_model",
     "import_diffusion",

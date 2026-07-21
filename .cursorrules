@@ -379,3 +379,18 @@ Net: ~1050+ LOC in wave-2 commit alone; continue from LoopLoRA next.
 [X] Rust + pytest synthetic; Qwen3-0.6B-Q8_0.gguf hands-on load+generate
 [X] Fix classic MHA ensure_gqa_meta n_heads=1 regression
 
+## Task: Full eval harness / benchmarking suite
+
+Goal: `magicmindnet.eval` on-par with every feature surface (+ more): unified
+runner, suites, JSON reports, CLI, coverage matrix; supersedes scattered
+example-only benches as the canonical API while keeping examples as thin demos.
+
+[X] Core: Metric / TaskResult / SuiteReport / EvalHarness / registry
+[X] Tasks: LM (qa/corpus/PE/RoPE/BPE/GQA), Glint, classifier, diffusion,
+    generate latency, IO formats, hub synthetics, RL/SPIN, merge/quantize
+[X] Extra: head_dim, unigram, vision flag, gguf-q8, arrays, diffusion-edit train
+[X] Suites: smoke, lm, cls, diffusion, io, hub, glint, generate, rl, train, all
+[X] CLI: `python -m magicmindnet.eval` + `examples/eval_harness.py`
+[X] Docs: benchmarks.md rewrite, eval_coverage.md, testing/API/README wiring
+[ ] Tests + smoke + verify_gate + push
+

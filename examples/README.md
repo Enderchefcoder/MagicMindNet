@@ -31,6 +31,7 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 | [diffusion_quantize_roundtrip.py](diffusion_quantize_roundtrip.py) | int8 quantize + export/import sample parity |
 | [vision_chatbot.py](vision_chatbot.py) | Vision-flag chatbot train + export roundtrip |
 | [eval_mean_loss.py](eval_mean_loss.py) | `qa`, `cls`, `corpus`, `diffusion`, or `diffusion-edit` (add `--train`, `--learned-pe`, `--rope`, `--bpe`) |
+| [eval_harness.py](eval_harness.py) | Unified eval suites (`smoke`/`lm`/`cls`/`io`/`all`…) + JSON reports |
 
 ## Quick commands
 
@@ -38,6 +39,7 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 python examples/hello_ai.py
 python examples/quickstart.py
 python examples/benchmark_train.py
+python examples/eval_harness.py smoke
 python examples/rl_spin.py
 python examples/eval_mean_loss.py qa
 python examples/classification.py

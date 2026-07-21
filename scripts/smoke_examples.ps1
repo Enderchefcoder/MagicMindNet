@@ -154,4 +154,7 @@ Write-Host "== examples/diffusion_merge_demo =="
 Write-Host "== examples/vision_chatbot =="
 & $PY examples/vision_chatbot.py
 
+Write-Host "== examples/eval_harness smoke =="
+& $PY examples/eval_harness.py smoke
+
 Write-Host "Examples smoke: OK"

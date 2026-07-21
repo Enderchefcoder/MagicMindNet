@@ -159,6 +159,22 @@ model.rerank("query", docs, top_k=5)
 model.embed(["sentence one", "sentence two"])  # embedding family
 ```
 
+### Eval harness — `ai.run_suite` / `EvalHarness`
+
+Unified offline benchmarks across LM / classifier / diffusion / hub / IO / RL:
+
+```python
+report = ai.run_suite("smoke")
+print("\n".join(report.summary_lines()))
+
+harness = ai.EvalHarness(seed=1)
+report = harness.run(tasks=["lm_glint_train", "io_roundtrip_gguf"])
+report.write_json("report.json")
+```
+
+CLI: `python -m magicmindnet.eval smoke` (or `all`, `lm`, `cls`, `io`, …).
+Docs: [benchmarks.md](benchmarks.md), [eval_coverage.md](eval_coverage.md).
+
 ### Chatbot
 
 ```python
@@ -474,6 +490,7 @@ All subclass `Exception` with `message`, `fix`, and `explanation` fields where a
 | Train benchmark | `python examples/benchmark_train.py` (optional `--learned-pe`) |
 | RL + SPIN | `python examples/rl_spin.py` |
 | Mean loss | `python examples/eval_mean_loss.py qa`, `cls`, or `corpus` (optional `--train`, `--learned-pe`) |
+| Eval harness | `python examples/eval_harness.py smoke` (or `all`; see [benchmarks.md](benchmarks.md)) |
 | Classification | `python examples/classification.py` |
 | Roundtrips | `python examples/checkpoint_roundtrip.py` |
 | Learned PE roundtrip | `python examples/learned_pos_embed_roundtrip.py` |

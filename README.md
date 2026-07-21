@@ -292,6 +292,7 @@ Format details: [docs/checkpoints.md](docs/checkpoints.md).
 | `examples/classification_benchmark.py` | Classifier benchmark |
 | `examples/classification.py` | Train classifier end-to-end |
 | `examples/eval_mean_loss.py` | Mean QA / classification loss |
+| `examples/eval_harness.py` | Unified eval suites (`smoke` / `all` / …) |
 | `examples/checkpoint_roundtrip.py` | Chatbot export → import |
 | `examples/learned_pos_embed_roundtrip.py` | Learned `pos_embed` export → import + loss parity |
 | `examples/rope_roundtrip.py` | RoPE chatbot export → import + loss parity |

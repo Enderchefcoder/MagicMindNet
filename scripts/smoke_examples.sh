@@ -106,6 +106,9 @@ echo "== examples/diffusion_benchmark edit =="
 echo "== examples/vision_chatbot =="
 "$PY" examples/vision_chatbot.py
 
+echo "== examples/eval_harness smoke =="
+"$PY" examples/eval_harness.py smoke
+
 echo "== examples/hub_local_roundtrip =="
 "$PY" examples/hub_local_roundtrip.py
 
