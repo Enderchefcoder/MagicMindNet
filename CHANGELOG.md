@@ -2,6 +2,16 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (hub wave-2 — callable families + offline coverage)
+- HubModel: `capabilities()`, `score_pairs` / `rerank`, `embed`, diffusion/TTS/ASR/embedding/zero-shot/fill-mask/QA/vlm routing
+- Diffusers `generate` → pipeline images/frames; native Diffusion `generate` → `sample_rgb_patch`
+- Ollama `/api/chat` (+ system / messages); clearer GGUF-fail errors
+- `DatasetQA.as_pairs()`; CoT empty `thinktag` defaults to `<think>…</think>` when `cot=True`
+- `list_hub_families()`, `ModelCard.from_dict`, ModelScope URL parse
+- `pip install -e ".[hub]"` optional deps; detect Diffusers dirs + nested checkpoints
+- Examples: `hub_local_roundtrip.py`, `glint_tiny.py`; docs: `hub_coverage.md`
+- Tests: `tests/test_hub_wave2_py.py` (+ smoke hub local)
+
 ### Fixed (classic MHA HF/npz/pt head_dim roundtrip)
 - `ensure_gqa_meta` no longer guesses `n_heads=1` for square Q/K when head counts are
   absent (that broke HF/npz/pt loss roundtrips after optional `head_dim`)

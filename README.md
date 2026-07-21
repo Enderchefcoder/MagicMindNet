@@ -15,11 +15,15 @@ print(bot.chat("hi"))
 
 bot.save("my_bot.mmn")
 bot = ai.load("my_bot.mmn")               # loads any MagicMindNet checkpoint
+
+# Universal hub: HF / ModelScope / Ollama / local (optional: pip install -e ".[hub]")
+model = ai.from_pretrained("./my_bot.mmn")
+print(model.generate("hi", max_new_tokens=8))
 ```
 
 Under the hood: custom tensors and autograd, AdamW + Muon hybrid optimizers, KV-cache generation with modern sampling (top-p/top-k/min-p, penalties), BPE/unigram tokenizers, RoPE/learned/sinusoidal position encodings, GQA attention, vision-prefix multimodal input, RL + SPIN loops, strict checkpoint IO (export / import / merge / quantize), and HF-safetensors interchange.
 
-**New to the library? Start with [docs/getting_started.md](docs/getting_started.md)** and `python examples/hello_ai.py`.
+**New to the library? Start with [docs/getting_started.md](docs/getting_started.md)** and `python examples/hello_ai.py`. Hub loading: [docs/hub.md](docs/hub.md).
 
 ---
 

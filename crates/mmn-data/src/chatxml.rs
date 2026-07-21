@@ -29,6 +29,9 @@ impl ChatXmlConfig {
         } else if !thinktag.is_empty() {
             // Bare tag name → <tag>…</tag> so CoT training is one-liner friendly.
             (format!("<{thinktag}>"), format!("</{thinktag}>"))
+        } else if cot {
+            // cot=True with empty thinktag → default <think>…</think> wrappers.
+            ("<think>".into(), "</think>".into())
         } else {
             ("".into(), "".into())
         };
@@ -78,6 +81,22 @@ mod tests {
         let c = ChatXmlConfig::from_thinktag("|", true);
         assert_eq!(c.think_open, "");
         assert_eq!(c.think_close, "");
+    }
+
+    #[test]
+    fn cot_true_empty_thinktag_defaults_to_think() {
+        let c = ChatXmlConfig::from_thinktag("", true);
+        assert_eq!(c.think_open, "<think>");
+        assert_eq!(c.think_close, "</think>");
+        assert!(c.cot);
+    }
+
+    #[test]
+    fn cot_false_empty_thinktag_stays_empty() {
+        let c = ChatXmlConfig::from_thinktag("", false);
+        assert_eq!(c.think_open, "");
+        assert_eq!(c.think_close, "");
+        assert!(!c.cot);
     }
 
     #[test]

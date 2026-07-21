@@ -350,15 +350,37 @@ Private train+infer scripts — DO NOT COMMIT; final answer only.
 [X] Wave H — private scripts in final answer (not committed)
 
 
-## Task: Universal hub from_pretrained (HF/Ollama/ModelScope)
+## Task: Hub overhaul wave 2 (130+ items — work as long as possible)
 
-[X] Probe listed models (reranker, NLLB, SD, Wan, Kokoro, emotion, MLX, GGUF, Qwen)
-[X] Implement magicmindnet.hub.from_pretrained + HubModel
-[X] Route by pipeline/arch/files (not per-repo); GGUF→native when possible
-[X] finetune/train/generate/predict unified API + as_pairs/as_texts
-[X] Hands-on script scripts/hub_hands_on.py + docs/hub.md
-[X] Offline pytest + network marker; fix classic-MHA HF head_dim guess
-[X] verify_gate + push PR (14/14 hands-on OK; gate OK)
+Goal: make every advertised hub family actually generate/predict/finetune; offline CI;
+docs/examples/stubs; detect polish; Glint/final_norm/embeddings routes.
+
+See /tmp/hub_wave_todos.txt mirrored below. Mark [X] as done.
+
+### Wave A — make hub callable
+[ ] A01 diffusion foreign generate(pipe)
+[ ] A02 diffusion native generate→sample_rgb_patch
+[ ] A03 diffusion HubModel.finetune DatasetImageGen
+[ ] A04 video generate path or clear NotImplemented
+[ ] A05 TTS pipeline load (not CausalLM)
+[ ] A06 ASR pipeline load
+[ ] A07 TTS generate/predict
+[ ] A08 ASR predict transcription
+[ ] A09 reranker score_pairs
+[ ] A10 reranker.rerank top_k
+[ ] A11 Ollama /api/chat
+[ ] A12 Ollama system prompt
+[ ] A13 ModelScope URL parse
+[ ] A14 ModelScope download=False inspect
+[ ] A15 GGUF native-fail clear error
+[ ] A16 download=False clear error
+[ ] A17 synthetic_diffusion
+[ ] A18 synthetic_reranker
+[ ] A19 synthetic_seq2seq
+[ ] A20 HubModel.capabilities()
+
+### Wave B–H
+(full 130-item list in progress; implement continuously)
 
 ## Task: Optional head_dim for Qwen-style GGUF/HF
 

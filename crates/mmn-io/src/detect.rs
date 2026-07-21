@@ -112,7 +112,9 @@ fn detect_zip_kind(bytes: &[u8]) -> Result<CheckpointKind, MmnError> {
         return Ok(CheckpointKind::ChatbotNpz);
     }
     Err(MmnError::Other {
-        message: "zip archive is neither a torch checkpoint (data.pkl/constants.pkl) nor an npz archive (.npy entries)"
+        message: "zip archive is neither a torch checkpoint (data.pkl/constants.pkl) nor an npz archive (.npy entries). \
+                  Tip: Hugging Face Diffusers dirs use model_index.json (not a single zip); \
+                  safetensors weights are usually standalone files; ONNX is a flatbuffer — use ai.load_onnx / ai.load_arrays."
             .into(),
     })
 }
@@ -210,6 +212,40 @@ pub fn detect_checkpoint_kind_bytes(path: &str, bytes: &[u8]) -> Result<Checkpoi
 /// HF safetensors (chatbot and classifier), plus GGUF / GGML / torch / npz /
 /// sharded HF.
 pub fn detect_checkpoint_kind(path: &str) -> Result<CheckpointKind, MmnError> {
+    let p = Path::new(path);
+    if p.is_dir() {
+        if p.join("model_index.json").is_file() {
+            return Ok(CheckpointKind::Diffusion);
+        }
+        // Prefer a single MagicMindNet / GGUF file inside a snapshot-style folder.
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(rd) = fs::read_dir(p) {
+            for ent in rd.flatten() {
+                let fp = ent.path();
+                let name = fp.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name.ends_with(".mmn")
+                    || name.ends_with(".gguf")
+                    || name.ends_with(".safetensors")
+                    || name.ends_with(".bin")
+                    || name.ends_with(".pt")
+                    || name.ends_with(".npz")
+                {
+                    candidates.push(fp);
+                }
+            }
+        }
+        candidates.sort();
+        if let Some(first) = candidates.first() {
+            return detect_checkpoint_kind(first.to_str().unwrap_or(path));
+        }
+        return Err(MmnError::Other {
+            message: format!(
+                "directory {path} has no model_index.json or recognized checkpoint file \
+                 (.mmn/.gguf/.safetensors/.bin/.pt/.npz). \
+                 Tip: use ai.from_pretrained() for Hugging Face / Diffusers layouts."
+            ),
+        });
+    }
     let bytes = fs::read(path).map_err(|e| MmnError::Other {
         message: format!("cannot read checkpoint {path}: {e}"),
     })?;
@@ -324,6 +360,37 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         let err = detect_checkpoint_kind(path.to_str().unwrap()).unwrap_err();
         assert!(err.message().contains("neither a torch checkpoint"));
+        assert!(err.message().contains("Diffusers") || err.message().contains("safetensors"));
+    }
+
+    #[test]
+    fn detects_diffusers_directory_via_model_index() {
+        let dir = tmp_path("diffusers_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("model_index.json"),
+            r#"{"_class_name":"StableDiffusionPipeline"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            detect_checkpoint_kind(dir.to_str().unwrap()).unwrap(),
+            CheckpointKind::Diffusion
+        );
+    }
+
+    #[test]
+    fn detects_mmn_inside_directory() {
+        let model = Chatbot::new_with_seed(false, None, 64, Some(1), Some(16), Some(2));
+        let dir = tmp_path("snapshot_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let nested = dir.join("bot.mmn");
+        export_safetensors(&model, nested.to_str().unwrap(), None).unwrap();
+        assert_eq!(
+            detect_checkpoint_kind(dir.to_str().unwrap()).unwrap(),
+            CheckpointKind::Chatbot
+        );
     }
 
     #[test]

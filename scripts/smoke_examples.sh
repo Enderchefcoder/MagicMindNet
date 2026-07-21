@@ -106,4 +106,13 @@ echo "== examples/diffusion_benchmark edit =="
 echo "== examples/vision_chatbot =="
 "$PY" examples/vision_chatbot.py
 
+echo "== examples/hub_local_roundtrip =="
+"$PY" examples/hub_local_roundtrip.py
+
+echo "== examples/glint_tiny =="
+"$PY" examples/glint_tiny.py
+
+echo "== scripts/hub_hands_on local =="
+"$PY" scripts/hub_hands_on.py --only local
+
 echo "Examples smoke: OK"

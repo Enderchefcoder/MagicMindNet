@@ -148,7 +148,16 @@ model = ai.from_pretrained("Qwen/Qwen3-0.6B-GGUF", filename="Qwen3-0.6B-Q8_0.ggu
 
 Returns a native `Chatbot`/`Classifier`/`Diffusion` when weights adapt, otherwise a
 `HubModel` with the same methods: `generate`, `chat`, `predict`, `predict_label`,
-`finetune`, `train`, `save`, `to_native()`. Full routing table: [hub.md](hub.md).
+`score_pairs`, `rerank`, `embed`, `capabilities`, `finetune`, `train`, `save`,
+`to_native()`. Helpers: `inspect_source`, `resolve_source`, `list_hub_families`,
+`ModelCard`. Full routing table: [hub.md](hub.md); coverage: [hub_coverage.md](hub_coverage.md).
+
+```python
+print(model.capabilities())
+model.score_pairs("query", ["doc a", "doc b"])
+model.rerank("query", docs, top_k=5)
+model.embed(["sentence one", "sentence two"])  # embedding family
+```
 
 ### Chatbot
 
@@ -159,6 +168,7 @@ bot = ai.Chatbot(
     d_model=128,
     n_heads=4,                 # optional; default 4 when not using autoset
     n_kv_heads=2,              # optional grouped-query attention (default = n_heads)
+    head_dim=None,             # optional; Qwen-style when n_heads*head_dim != d_model
     ffn_dim=None,              # optional FFN width (default 4 * d_model)
     vision=False,
     autoset=None,              # "sub-1M"|"sub-10M"|"sub-50M"|"sub-100M"|"sub-1B"|"sub-10B"
@@ -194,7 +204,7 @@ bot = ai.Chatbot(
 `use_learned_pos_embed=True` and `use_rope=True` raise `ValueError` at
 construction time.
 
-**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `tie_embeddings`, `norm`, `ffn`, `loop_embed`
+**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `head_dim`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `tie_embeddings`, `norm`, `ffn`, `loop_embed`
 **Core methods:**
 
 - `train(dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None) -> list[float]` — accepts `DatasetQA` or `DatasetCorpus`; keyword overrides win over `config`; returns per-epoch mean losses

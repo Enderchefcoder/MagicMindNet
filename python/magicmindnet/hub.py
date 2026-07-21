@@ -33,6 +33,7 @@ __all__ = [
     "ModelCard",
     "from_pretrained",
     "inspect_source",
+    "list_hub_families",
     "resolve_source",
 ]
 
@@ -66,6 +67,41 @@ class ModelCard:
             "backend": self.backend,
             "notes": list(self.notes),
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ModelCard:
+        return cls(
+            family=str(data.get("family") or "unknown"),
+            pipeline_tag=data.get("pipeline_tag"),
+            architectures=list(data.get("architectures") or []),
+            files=list(data.get("files") or []),
+            source=data.get("source"),
+            local_path=data.get("local_path"),
+            backend=str(data.get("backend") or "native"),
+            notes=list(data.get("notes") or []),
+        )
+
+
+def list_hub_families() -> list[str]:
+    """Known HubModel family names (routing targets)."""
+    return [
+        "causal-lm",
+        "classifier",
+        "reranker",
+        "seq2seq",
+        "diffusion",
+        "video",
+        "tts",
+        "asr",
+        "embedding",
+        "zero-shot",
+        "fill-mask",
+        "question-answering",
+        "vlm",
+        "gguf",
+        "arrays",
+        "unknown",
+    ]
 
 
 _CAUSAL_ARCH = re.compile(
@@ -175,6 +211,54 @@ def inspect_source(meta: dict[str, Any]) -> ModelCard:
             backend="transformers",
             notes=notes or ["speech model — foreign backend"],
         )
+    if pipeline in {
+        "feature-extraction",
+        "sentence-similarity",
+    } or "Embedding" in arch_blob:
+        return ModelCard(
+            family="embedding",
+            pipeline_tag=pipeline or "feature-extraction",
+            architectures=list(arches),
+            files=files,
+            backend="transformers",
+            notes=notes or ["embedding / sentence-transformers style"],
+        )
+    if pipeline == "zero-shot-classification":
+        return ModelCard(
+            family="zero-shot",
+            pipeline_tag=pipeline,
+            architectures=list(arches),
+            files=files,
+            backend="transformers",
+            notes=notes,
+        )
+    if pipeline == "fill-mask":
+        return ModelCard(
+            family="fill-mask",
+            pipeline_tag=pipeline,
+            architectures=list(arches),
+            files=files,
+            backend="transformers",
+            notes=notes,
+        )
+    if pipeline == "question-answering":
+        return ModelCard(
+            family="question-answering",
+            pipeline_tag=pipeline,
+            architectures=list(arches),
+            files=files,
+            backend="transformers",
+            notes=notes,
+        )
+    if pipeline in {"image-text-to-text", "any-to-any", "image-to-text"}:
+        return ModelCard(
+            family="vlm",
+            pipeline_tag=pipeline,
+            architectures=list(arches),
+            files=files,
+            backend="transformers",
+            notes=notes or ["vision-language model — foreign backend"],
+        )
     if pipeline in {"text-to-image", "image-to-image", "image-to-video", "text-to-video"}:
         fam = "video" if "video" in (pipeline or "") else "diffusion"
         return ModelCard(
@@ -240,6 +324,14 @@ class ResolvedSource:
 
 def _parse_spec(source: str) -> tuple[str, str]:
     s = source.strip()
+    # ModelScope web URLs (with optional www / models/ path).
+    ms_url = re.match(
+        r"^https?://(?:www\.)?modelscope\.(?:cn|com)/(?:models/)?(.+?)(?:/summary)?/?$",
+        s,
+        re.I,
+    )
+    if ms_url:
+        return "modelscope", ms_url.group(1).strip("/")
     for prefix, kind in (
         ("hf://", "hf"),
         ("huggingface://", "hf"),
@@ -522,6 +614,27 @@ def resolve_source(
 # ---------------------------------------------------------------------------
 
 
+def _score_from_pipeline_out(out: Any) -> float:
+    """Best-effort relevance score from classifier / reranker pipeline output."""
+    while isinstance(out, (list, tuple)) and len(out) == 1:
+        out = out[0]
+    if isinstance(out, (int, float)):
+        return float(out)
+    if isinstance(out, dict):
+        if "score" in out:
+            return float(out["score"])
+        # logit dict label→score
+        vals = [float(v) for v in out.values() if isinstance(v, (int, float))]
+        return max(vals) if vals else 0.0
+    if isinstance(out, (list, tuple)) and out:
+        best = 0.0
+        for item in out:
+            if isinstance(item, dict) and "score" in item:
+                best = max(best, float(item["score"]))
+        return best
+    return 0.0
+
+
 class HubModel:
     """Runnable wrapper around a native or foreign model."""
 
@@ -577,13 +690,103 @@ class HubModel:
         card = ModelCard(family="causal-lm", pipeline_tag="text-generation")
         return cls(family="causal-lm", card=card, native=bot, source="synthetic")
 
+    @classmethod
+    def synthetic_diffusion(cls) -> HubModel:
+        diff = ai.Diffusion()
+        card = ModelCard(family="diffusion", pipeline_tag="text-to-image", backend="native")
+        return cls(family="diffusion", card=card, native=diff, source="synthetic")
+
+    @classmethod
+    def synthetic_reranker(cls) -> HubModel:
+        """Offline reranker stub: scores by simple lexical overlap (not neural)."""
+
+        class _LexRerank:
+            def score(self, query: str, doc: str) -> float:
+                q = set(query.lower().split())
+                d = set(doc.lower().split())
+                if not q:
+                    return 0.0
+                return float(len(q & d) / len(q))
+
+            def __call__(self, text: str, **kwargs: Any) -> list[dict[str, Any]]:
+                # Single-string pipeline shape for predict().
+                return [{"label": "LABEL_0", "score": float(len(text))}]
+
+        card = ModelCard(family="reranker", pipeline_tag="text-classification")
+        return cls(
+            family="reranker",
+            card=card,
+            foreign=_LexRerank(),
+            source="synthetic",
+        )
+
+    @classmethod
+    def synthetic_seq2seq(cls) -> HubModel:
+        bot = ai.Chatbot(vocab_size=128, n_layer=1, d_model=32, seed=0, max_seq_len=64)
+        card = ModelCard(family="seq2seq", pipeline_tag="translation", backend="native")
+        return cls(family="seq2seq", card=card, native=bot, source="synthetic")
+
+    def capabilities(self) -> dict[str, bool]:
+        """What this HubModel can do without probing the backend."""
+        has_native = self.native is not None
+        has_foreign = self.foreign is not None
+        ollama = self.card.backend == "ollama"
+        gen = False
+        if has_native and (
+            hasattr(self.native, "generate")
+            or hasattr(self.native, "chat")
+            or hasattr(self.native, "sample_rgb_patch")
+        ):
+            gen = True
+        if has_foreign or ollama:
+            gen = True
+        if self.family == "video" and not has_foreign:
+            gen = False
+        if self.family == "gguf" and not has_native and not has_foreign:
+            gen = False
+        pred = has_native and (
+            hasattr(self.native, "predict") or hasattr(self.native, "predict_label")
+        )
+        if has_foreign or self.family in {"classifier", "reranker", "asr", "embedding"}:
+            pred = pred or has_foreign
+        ft = has_native and hasattr(self.native, "train")
+        if has_foreign and self.family in {
+            "classifier",
+            "reranker",
+            "causal-lm",
+            "seq-cls",
+            "text-classification",
+        }:
+            ft = True
+        return {
+            "generate": gen,
+            "predict": bool(pred),
+            "finetune": bool(ft),
+            "chat": gen or ollama,
+            "native": has_native,
+            "foreign": has_foreign,
+        }
+
     # --- inference ---
 
-    def generate(self, prompt: str, **kwargs: Any) -> str:
+    def generate(self, prompt: str, **kwargs: Any) -> Any:
+        if self.family == "video" and self.foreign is None:
+            raise RuntimeError(
+                "video generate requires a loaded Diffusers/Wan pipeline "
+                "(multi-GB weights). Route-only HubModel shells cannot sample frames."
+            )
+        if self.family == "gguf" and self.native is None and self.foreign is None:
+            raise RuntimeError(
+                "GGUF native load failed and no foreign backend is available. "
+                f"notes={self.card.notes}"
+            )
         if self.native is not None and hasattr(self.native, "generate"):
             return self.native.generate(prompt, **kwargs)
         if self.native is not None and hasattr(self.native, "chat"):
             return self.native.chat(prompt, **kwargs)
+        if self.native is not None and hasattr(self.native, "sample_rgb_patch"):
+            steps = int(kwargs.get("steps", kwargs.get("num_inference_steps", 1)))
+            return self.native.sample_rgb_patch(steps=steps)
         if self.foreign is not None:
             return self._foreign_generate(prompt, **kwargs)
         if self.card.backend == "ollama":
@@ -591,9 +794,11 @@ class HubModel:
         raise RuntimeError(f"generate() not available for family={self.family}")
 
     def chat(self, prompt: str, **kwargs: Any) -> str:
+        if self.card.backend == "ollama":
+            return self._ollama_chat(prompt, **kwargs)
         if self.native is not None and hasattr(self.native, "chat"):
             return self.native.chat(prompt, **kwargs)
-        return self.generate(prompt, **kwargs)
+        return str(self.generate(prompt, **kwargs))
 
     def predict(self, text: str, **kwargs: Any) -> Any:
         if self.native is not None and hasattr(self.native, "predict"):
@@ -603,6 +808,59 @@ class HubModel:
         if self.foreign is not None:
             return self._foreign_predict(text, **kwargs)
         raise RuntimeError(f"predict() not available for family={self.family}")
+
+    def score_pairs(self, query: str, documents: Sequence[str], **kwargs: Any) -> list[float]:
+        """Score (query, document) pairs for rerankers / cross-encoders."""
+        docs = [str(d) for d in documents]
+        foreign = self.foreign
+        if foreign is not None and hasattr(foreign, "score"):
+            return [float(foreign.score(query, d)) for d in docs]
+        if foreign is not None and callable(foreign):
+            scores: list[float] = []
+            for doc in docs:
+                out = foreign({"text": query, "text_pair": doc}, **kwargs)
+                # Also try tuple / string pair conventions.
+                if out is None:
+                    out = foreign(f"query: {query} document: {doc}", **kwargs)
+                scores.append(_score_from_pipeline_out(out))
+            return scores
+        if self.native is not None and hasattr(self.native, "predict"):
+            # Native classifier fallback: score label confidence on concatenated pair.
+            scores = []
+            for doc in docs:
+                out = self.native.predict(f"{query} [SEP] {doc}")
+                scores.append(_score_from_pipeline_out(out))
+            return scores
+        raise RuntimeError(f"score_pairs() not available for family={self.family}")
+
+    def rerank(
+        self, query: str, documents: Sequence[str], *, top_k: int | None = None, **kwargs: Any
+    ) -> list[tuple[str, float]]:
+        docs = list(documents)
+        scores = self.score_pairs(query, docs, **kwargs)
+        ranked = sorted(zip(docs, scores, strict=True), key=lambda x: x[1], reverse=True)
+        if top_k is not None:
+            ranked = ranked[: max(0, int(top_k))]
+        return ranked
+
+    def embed(self, texts: str | Sequence[str], **kwargs: Any) -> Any:
+        """Embedding / feature-extraction models."""
+        batch = [texts] if isinstance(texts, str) else list(texts)
+        foreign = self.foreign
+        if foreign is not None and callable(foreign):
+            return foreign(batch, **kwargs)
+        if self.tokenizer is not None and hasattr(foreign, "forward"):
+            import torch
+
+            enc = self.tokenizer(
+                batch, padding=True, truncation=True, return_tensors="pt"
+            )
+            with torch.no_grad():
+                out = foreign(**enc)
+            if hasattr(out, "last_hidden_state"):
+                return out.last_hidden_state.mean(dim=1).cpu().tolist()
+            return out
+        raise RuntimeError(f"embed() not available for family={self.family}")
 
     def predict_label(self, text: str) -> str:
         out = self.predict(text)
@@ -655,7 +913,12 @@ class HubModel:
             )
         if self.foreign is not None:
             return self._foreign_finetune(
-                dataset, epochs=epochs, learning_rate=lr, batch_size=batch_size, **kwargs
+                dataset,
+                epochs=epochs,
+                learning_rate=lr,
+                batch_size=batch_size,
+                verbose=verbose,
+                **kwargs,
             )
         raise RuntimeError(
             f"finetune() not available for family={self.family} backend={self.card.backend}"
@@ -682,25 +945,56 @@ class HubModel:
 
     # --- foreign backends ---
 
-    def _foreign_generate(self, prompt: str, **kwargs: Any) -> str:
+    def _foreign_generate(self, prompt: str, **kwargs: Any) -> Any:
         max_new = int(kwargs.get("max_new_tokens", 32))
         foreign = self.foreign
+        # Diffusers text-to-image / inpaint / video pipelines.
+        if self.family in {"diffusion", "video"} or (
+            hasattr(foreign, "__class__")
+            and "Pipeline" in foreign.__class__.__name__
+            and self.family != "classifier"
+        ):
+            call_kwargs = dict(kwargs)
+            call_kwargs.pop("max_new_tokens", None)
+            call_kwargs.pop("temperature", None)
+            if "num_inference_steps" not in call_kwargs and "steps" in call_kwargs:
+                call_kwargs["num_inference_steps"] = call_kwargs.pop("steps")
+            try:
+                out = foreign(prompt, **call_kwargs)
+            except TypeError:
+                out = foreign(prompt)
+            if hasattr(out, "images"):
+                imgs = out.images
+                return imgs[0] if imgs else out
+            if hasattr(out, "frames"):
+                return out.frames
+            if isinstance(out, dict) and "images" in out:
+                imgs = out["images"]
+                return imgs[0] if imgs else out
+            return out
         # transformers text-generation pipeline or model+tokenizer
         if callable(foreign) and foreign.__class__.__name__.endswith("Pipeline"):
-            out = foreign(
-                prompt,
-                max_new_tokens=max_new,
-                do_sample=kwargs.get("temperature", 0) > 0,
-            )
+            pipe_kwargs: dict[str, Any] = {}
+            # TTS / ASR / text2text pipelines take different kwargs.
+            name = foreign.__class__.__name__.lower()
+            if "textgeneration" in name.replace("_", "") or "text2text" in name:
+                pipe_kwargs["max_new_tokens"] = max_new
+                pipe_kwargs["do_sample"] = kwargs.get("temperature", 0) > 0
+            try:
+                out = foreign(prompt, **pipe_kwargs)
+            except TypeError:
+                out = foreign(prompt)
             if isinstance(out, list) and out:
                 item = out[0]
                 if isinstance(item, dict):
                     return str(
                         item.get("generated_text")
                         or item.get("translation_text")
+                        or item.get("text")
+                        or item.get("audio")
                         or item
                     )
-            return str(out)
+            return out if not isinstance(out, str) else out
         if self.tokenizer is not None and hasattr(foreign, "generate"):
             import torch
 
@@ -712,6 +1006,11 @@ class HubModel:
                 self.tokenizer.src_lang = src_lang
             toks = self.tokenizer(prompt, **tok_kwargs)
             gen_kwargs: dict[str, Any] = {"max_new_tokens": max_new}
+            # Avoid transformers warning when both max_length and max_new_tokens set.
+            if hasattr(foreign, "generation_config") and getattr(
+                foreign.generation_config, "max_length", None
+            ):
+                foreign.generation_config.max_length = None
             if tgt_lang and hasattr(self.tokenizer, "lang_code_to_id"):
                 lang_id = self.tokenizer.lang_code_to_id.get(tgt_lang)
                 if lang_id is not None:
@@ -734,6 +1033,7 @@ class HubModel:
         epochs: int,
         learning_rate: float,
         batch_size: int,
+        verbose: bool = False,
         **kwargs: Any,
     ) -> list[float]:
         """Minimal transformers Trainer finetune for seq-cls / causal LM."""
@@ -789,6 +1089,18 @@ class HubModel:
                 else:
                     texts.append(str(item))
 
+        if hasattr(dataset, "as_texts"):
+            texts = list(dataset.as_texts())
+        # DatasetQA.as_pairs → causal LM prompt+completion rows.
+        if (
+            not texts
+            and pairs
+            and self.family
+            in {"causal-lm", "seq2seq", "gguf", "chatbot", "llm"}
+        ):
+            for inp, out in pairs:
+                texts.append(f"{inp}\n{out}")
+            pairs = []
         if pairs and self.family in {
             "classifier",
             "reranker",
@@ -858,7 +1170,8 @@ class HubModel:
             num_train_epochs=epochs,
             per_device_train_batch_size=batch_size,
             learning_rate=learning_rate,
-            logging_steps=max(1, len(rows) // max(batch_size, 1)),
+            logging_steps=1 if verbose else max(1, len(rows) // max(batch_size, 1)),
+            disable_tqdm=not verbose,
             report_to=[],
             save_strategy="no",
             remove_unused_columns=False,
@@ -876,8 +1189,11 @@ class HubModel:
 
     def _ollama_generate(self, prompt: str, **kwargs: Any) -> str:
         base = (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+        model_name = (self.source or self.card.source or "").removeprefix("ollama://").removeprefix(
+            "ollama:"
+        )
         payload = {
-            "model": self.source or self.card.source,
+            "model": model_name,
             "prompt": prompt,
             "stream": False,
             "options": {
@@ -885,6 +1201,8 @@ class HubModel:
                 "num_predict": int(kwargs.get("max_new_tokens", 64)),
             },
         }
+        if kwargs.get("system"):
+            payload["system"] = str(kwargs["system"])
         req = urllib.request.Request(
             f"{base}/api/generate",
             data=json.dumps(payload).encode(),
@@ -894,6 +1212,40 @@ class HubModel:
         with urllib.request.urlopen(req, timeout=600) as resp:
             data = json.loads(resp.read().decode())
         return str(data.get("response", ""))
+
+    def _ollama_chat(self, prompt: str, **kwargs: Any) -> str:
+        base = (os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+        model_name = (self.source or self.card.source or "").removeprefix("ollama://").removeprefix(
+            "ollama:"
+        )
+        messages: list[dict[str, str]] = []
+        if kwargs.get("system"):
+            messages.append({"role": "system", "content": str(kwargs["system"])})
+        if kwargs.get("messages"):
+            messages.extend(list(kwargs["messages"]))
+        else:
+            messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": float(kwargs.get("temperature", 0.7)),
+                "num_predict": int(kwargs.get("max_new_tokens", 64)),
+            },
+        }
+        req = urllib.request.Request(
+            f"{base}/api/chat",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            data = json.loads(resp.read().decode())
+        msg = data.get("message") or {}
+        if isinstance(msg, dict) and "content" in msg:
+            return str(msg["content"])
+        return str(data.get("response", msg))
 
     def __repr__(self) -> str:
         return (
@@ -929,7 +1281,9 @@ def _load_transformers_model(
     local_or_id: str, card: ModelCard
 ) -> tuple[Any, Any, list[str] | None]:
     from transformers import (
+        AutoModel,
         AutoModelForCausalLM,
+        AutoModelForQuestionAnswering,
         AutoModelForSeq2SeqLM,
         AutoModelForSequenceClassification,
         AutoTokenizer,
@@ -954,9 +1308,51 @@ def _load_transformers_model(
         return pipe, tokenizer, labels
     if card.family == "seq2seq":
         model = AutoModelForSeq2SeqLM.from_pretrained(local_or_id, trust_remote_code=True)
-        # transformers>=5 dropped the generic "translation" pipeline task; keep model+tok.
         return model, tokenizer, None
-    # causal LM default
+    if card.family == "tts":
+        try:
+            pipe = pipeline("text-to-speech", model=local_or_id)
+            return pipe, getattr(pipe, "tokenizer", tokenizer), None
+        except Exception:
+            # Kokoro and friends may need trust_remote_code / custom code.
+            pipe = pipeline(
+                "text-to-speech", model=local_or_id, trust_remote_code=True
+            )
+            return pipe, getattr(pipe, "tokenizer", tokenizer), None
+    if card.family == "asr":
+        pipe = pipeline(
+            "automatic-speech-recognition",
+            model=local_or_id,
+            trust_remote_code=True,
+        )
+        return pipe, getattr(pipe, "tokenizer", tokenizer), None
+    if card.family == "embedding":
+        model = AutoModel.from_pretrained(local_or_id, trust_remote_code=True)
+        pipe = pipeline(
+            "feature-extraction",
+            model=model,
+            tokenizer=tokenizer,
+        )
+        return pipe, tokenizer, None
+    if card.family == "zero-shot":
+        pipe = pipeline(
+            "zero-shot-classification",
+            model=local_or_id,
+            trust_remote_code=True,
+        )
+        return pipe, getattr(pipe, "tokenizer", tokenizer), None
+    if card.family == "fill-mask":
+        pipe = pipeline("fill-mask", model=local_or_id, trust_remote_code=True)
+        return pipe, getattr(pipe, "tokenizer", tokenizer), None
+    if card.family == "question-answering":
+        model = AutoModelForQuestionAnswering.from_pretrained(
+            local_or_id, trust_remote_code=True
+        )
+        pipe = pipeline(
+            "question-answering", model=model, tokenizer=tokenizer
+        )
+        return pipe, tokenizer, None
+    # causal LM / vlm default
     model = AutoModelForCausalLM.from_pretrained(
         local_or_id, trust_remote_code=True, torch_dtype="auto"
     )
@@ -1048,11 +1444,10 @@ def from_pretrained(
     target = str(local)
     # If we downloaded a single file (GGUF), prefer its parent for transformers.
     if local.is_file() and local.suffix.lower() == ".gguf":
-        # Already tried native; surface a clear HubModel shell.
-        return HubModel(
-            family="gguf",
-            card=card,
-            source=resolved.spec,
+        raise RuntimeError(
+            f"GGUF native Chatbot load failed for {local}. "
+            f"notes={card.notes}. Ensure the file is a supported GGUF "
+            "(Llama/Qwen-style) or pass prefer_native=False with a foreign backend."
         )
 
     if card.backend == "diffusers" or card.family in {"diffusion", "video"}:
@@ -1078,6 +1473,11 @@ def from_pretrained(
         "seq-cls",
         "tts",
         "asr",
+        "embedding",
+        "zero-shot",
+        "fill-mask",
+        "question-answering",
+        "vlm",
         "unknown",
         "arrays",
     }:

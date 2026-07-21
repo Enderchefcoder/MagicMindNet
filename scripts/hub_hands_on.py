@@ -333,11 +333,19 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--only", default="", help="comma-separated case keys")
     p.add_argument(
+        "--list",
+        action="store_true",
+        help="print available case keys and exit",
+    )
+    p.add_argument(
         "--in-process",
         action="store_true",
         help="run cases in this process (used by subprocess driver)",
     )
     args = p.parse_args()
+    if args.list:
+        print("\n".join(CASES))
+        return
     keys = [k.strip() for k in args.only.split(",") if k.strip()] or list(CASES)
 
     # Child process path: one case, write RESULTS to MMN_HUB_HANDS_ON_OUT.

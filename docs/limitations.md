@@ -11,8 +11,8 @@ MagicMindNet is a from-scratch training stack. The following gaps are intentiona
 - **Glint-style knobs** (defaults preserve classic Chatbot): `n_loops` (reuse the block stack with shared weights), `norm="rms"` (RMSNorm), `ffn="swiglu"` (gate×up SiLU), `tie_embeddings`, `loop_embed` (per-loop additive embedding). LoopLoRA QKV adapters remain on the roadmap.
 - LoopLoRA / private FineWeb demos are out of scope for the native Chatbot; use `ai.from_pretrained` + foreign backends for arbitrary Hub architectures (see [hub.md](hub.md)).
 - Autoset presets: `sub-1M` / `sub-10M` / `sub-50M` / `sub-100M` / `sub-1B` / `sub-10B` for easy parameter sizing.
-- CoT: `DatasetQA(cot=True, thinktag="think")` wraps assistant targets with `<think>…</think>` during **Train**/loss (matches `format_sample`).
-- `TrainClassifier` updates backbone + head with CE; byte features are not a production text encoder.
+- CoT: `DatasetQA(cot=True)` with empty `thinktag` defaults to `<think>…</think>` wrappers;
+  pass `thinktag="reason"` or `thinktag="a|b"` for custom open/close tags.- `TrainClassifier` updates backbone + head with CE; byte features are not a production text encoder.
 - RL/SPIN use heuristic rewards, not environment rollouts.
 - `TrainConfig.batch_size` on `Train()` and `TrainClassifier()` accumulates gradients over that many micro-batches (QA rows, corpus rows, or labeled classification rows) before one optimizer step (`batch_size=1` applies each step immediately).
 - `Train()` accepts `DatasetQA` (aligned input→output) or `DatasetCorpus` (next-token LM on each row).

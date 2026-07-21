@@ -132,6 +132,15 @@ impl PyDatasetQA {
         "qa".into()
     }
 
+    /// Return ``[(input, output), ...]`` for hub finetune / custom loops.
+    fn as_pairs(&self) -> Vec<(String, String)> {
+        self.inner
+            .samples
+            .iter()
+            .map(|s| (s.input.clone(), s.output.clone()))
+            .collect()
+    }
+
     fn format_sample(&self, index: usize) -> PyResult<String> {
         let s = self
             .inner

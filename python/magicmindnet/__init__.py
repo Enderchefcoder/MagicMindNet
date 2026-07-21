@@ -58,7 +58,14 @@ from magicmindnet._native import (
     quantize_diffusion_model,
 )
 from magicmindnet.bpe_io import load_bpe_sidecar
-from magicmindnet.hub import HubModel, ModelCard, from_pretrained, inspect_source, resolve_source
+from magicmindnet.hub import (
+    HubModel,
+    ModelCard,
+    from_pretrained,
+    inspect_source,
+    list_hub_families,
+    resolve_source,
+)
 from magicmindnet.interop import (
     detect_arrays_format,
     gguf_info,
@@ -147,6 +154,7 @@ __all__ = [
     "HubModel",
     "from_pretrained",
     "inspect_source",
+    "list_hub_families",
     "resolve_source",
     "ModelCard",
     "import_classifier",

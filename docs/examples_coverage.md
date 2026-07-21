@@ -25,6 +25,9 @@ Runnable scripts under `examples/` and how they are regression-tested.
 | [diffusion_quantize_roundtrip.py](../examples/diffusion_quantize_roundtrip.py) | int8 quantize + export/import sample parity | yes | yes |
 | [diffusion_merge_demo.py](../examples/diffusion_merge_demo.py) | `merge_diffusion` sample smoke | yes | yes |
 | [vision_chatbot.py](../examples/vision_chatbot.py) | Vision-flag train + export | yes | yes |
+| [hub_local_roundtrip.py](../examples/hub_local_roundtrip.py) | `ai.from_pretrained` local Chatbot generate/finetune/save | yes | via hub wave2 |
+| [glint_tiny.py](../examples/glint_tiny.py) | Glint-style RMSNorm/SwiGLU/`n_loops`/tie train smoke | yes | via glint tests |
+| [hub_hands_on.py](../scripts/hub_hands_on.py) (`--only local`) | Offline hub matrix smoke | yes | yes (`test_hands_on_local_subprocess`) |
 
 ## Running
 
