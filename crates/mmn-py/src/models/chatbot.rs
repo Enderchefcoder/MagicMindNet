@@ -78,6 +78,8 @@ fn build_generate_config(
     vision_patches: Option<Vec<Vec<f32>>>,
     stop_token_ids: Option<Vec<usize>>,
     stop_strings: Option<Vec<String>>,
+    json_mode: bool,
+    grammar: Option<String>,
 ) -> mmn_train::GenerateConfig {
     let mut cfg = mmn_train::GenerateConfig {
         max_new_tokens,
@@ -96,6 +98,8 @@ fn build_generate_config(
         vision_patches,
         stop_token_ids: stop_token_ids.unwrap_or_default(),
         stop_strings: stop_strings.unwrap_or_default(),
+        json_mode,
+        grammar,
         ..Default::default()
     };
     // Keep Mirostat mu consistent with tau when using defaults.
@@ -614,7 +618,9 @@ impl PyChatbot {
         image_patch=None,
         image_patches=None,
         stop_token_ids=None,
-        stop_strings=None
+        stop_strings=None,
+        json_mode=false,
+        grammar=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn generate(
@@ -639,6 +645,8 @@ impl PyChatbot {
         image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
+        json_mode: bool,
+        grammar: Option<String>,
     ) -> PyResult<String> {
         let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
         let vision_patches =
@@ -660,6 +668,8 @@ impl PyChatbot {
             vision_patches,
             stop_token_ids,
             stop_strings,
+            json_mode,
+            grammar,
         );
         mmn_train::generate_text(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
@@ -686,7 +696,9 @@ impl PyChatbot {
         image_patch=None,
         image_patches=None,
         stop_token_ids=None,
-        stop_strings=None
+        stop_strings=None,
+        json_mode=false,
+        grammar=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn generate_stream(
@@ -711,6 +723,8 @@ impl PyChatbot {
         image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
+        json_mode: bool,
+        grammar: Option<String>,
     ) -> PyResult<Vec<String>> {
         let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
         let vision_patches =
@@ -732,6 +746,8 @@ impl PyChatbot {
             vision_patches,
             stop_token_ids,
             stop_strings,
+            json_mode,
+            grammar,
         );
         mmn_train::generate_text_stream(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
@@ -758,7 +774,9 @@ impl PyChatbot {
         image_patch=None,
         image_patches=None,
         stop_token_ids=None,
-        stop_strings=None
+        stop_strings=None,
+        json_mode=false,
+        grammar=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn generate_tokens(
@@ -783,6 +801,8 @@ impl PyChatbot {
         image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
+        json_mode: bool,
+        grammar: Option<String>,
     ) -> PyResult<Vec<usize>> {
         let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
         let vision_patches =
@@ -804,6 +824,8 @@ impl PyChatbot {
             vision_patches,
             stop_token_ids,
             stop_strings,
+            json_mode,
+            grammar,
         );
         mmn_train::generate_token_ids(&self.inner, prompt, enc, &cfg).map_err(mmn_err_to_py)
     }
@@ -858,7 +880,9 @@ impl PyChatbot {
         bpe_encoder=None,
         unigram_encoder=None,
         stop_token_ids=None,
-        stop_strings=None
+        stop_strings=None,
+        json_mode=false,
+        grammar=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn chat_messages(
@@ -881,6 +905,8 @@ impl PyChatbot {
         unigram_encoder: Option<&PyUnigramEncoder>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
+        json_mode: bool,
+        grammar: Option<String>,
     ) -> PyResult<String> {
         let list = messages.downcast::<pyo3::types::PyList>()?;
         let mut pairs: Vec<(String, String)> = Vec::with_capacity(list.len());
@@ -915,6 +941,8 @@ impl PyChatbot {
             None,
             stop_token_ids,
             stop_strings,
+            json_mode,
+            grammar,
         );
         mmn_train::generate_text(&self.inner, &prompt, enc, &cfg).map_err(mmn_err_to_py)
     }

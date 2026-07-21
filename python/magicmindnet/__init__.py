@@ -112,6 +112,7 @@ from magicmindnet.interop import (
     save_tf_checkpoint,
     save_zarr,
 )
+from magicmindnet.serve import OpenAIServer
 from magicmindnet.unigram_io import load_unigram_sidecar
 from magicmindnet.vision import (
     VISION_PATCH_DIM,
@@ -213,6 +214,7 @@ __all__ = [
     "merge_classifier",
     "merge_diffusion",
     "merge_diffusion_model",
+    "OpenAIServer",
     "quantize",
     "quantize_classifier",
     "quantize_classifier_model",

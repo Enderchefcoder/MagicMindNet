@@ -13,12 +13,14 @@ use mmn_optim::{AdamW, AdamWConfig, HybridOptimizer, MuonConfig};
 use rand::Rng;
 
 mod generate;
+mod json_constrain;
 
 pub use generate::{
     apply_mirostat_v2_truncate, apply_typical_p, decode_tokens, embed_mean_pool,
     format_chat_messages, generate_text, generate_text_stream, generate_token_ids,
     tokenize_for_generate, truncate_at_stop_strings, GenerateConfig,
 };
+pub use json_constrain::finalize_json;
 
 #[derive(Clone, Debug)]
 pub struct TrainConfig {

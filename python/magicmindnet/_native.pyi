@@ -339,6 +339,8 @@ class Chatbot:
         image_patches: list[list[float]] | None = None,
         stop_token_ids: list[int] | None = None,
         stop_strings: list[str] | None = None,
+        json_mode: bool = False,
+        grammar: str | None = None,
     ) -> str: ...
     def generate_stream(
         self,
@@ -363,6 +365,8 @@ class Chatbot:
         image_patches: list[list[float]] | None = None,
         stop_token_ids: list[int] | None = None,
         stop_strings: list[str] | None = None,
+        json_mode: bool = False,
+        grammar: str | None = None,
     ) -> list[str]: ...
     def generate_tokens(
         self,
@@ -387,6 +391,8 @@ class Chatbot:
         image_patches: list[list[float]] | None = None,
         stop_token_ids: list[int] | None = None,
         stop_strings: list[str] | None = None,
+        json_mode: bool = False,
+        grammar: str | None = None,
     ) -> list[int]: ...
     def embed(
         self,
@@ -416,6 +422,8 @@ class Chatbot:
         unigram_encoder: UnigramEncoder | None = None,
         stop_token_ids: list[int] | None = None,
         stop_strings: list[str] | None = None,
+        json_mode: bool = False,
+        grammar: str | None = None,
     ) -> str: ...
 
 def format_chat_messages(

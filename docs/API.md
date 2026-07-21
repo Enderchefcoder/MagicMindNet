@@ -234,12 +234,14 @@ construction time.
 
 - `compute_loss(input_str, target_str, bpe_encoder=None, ...) -> float` — same tokenization as `Train`
 - `compute_mean_loss(dataset_qa | dataset_corpus, bpe_encoder=None) -> float`
-- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, typical_p=0.0, mirostat=0, mirostat_tau=5.0, mirostat_eta=0.1, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=True, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None) -> str`
+- `generate(prompt, max_new_tokens=32, temperature=0.0, top_k=0, top_p=0.0, min_p=0.0, typical_p=0.0, mirostat=0, mirostat_tau=5.0, mirostat_eta=0.1, repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0, use_kv_cache=True, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None, json_mode=False, grammar=None) -> str`
 - `generate_stream(...)` — same kwargs; returns `list[str]` pieces (join equals `generate` for greedy)
 - `generate_tokens(...)` — same sampling kwargs; returns new token ids only
+- `json_mode=True` / `grammar="json"` — constrained JSON decoding (+ `finalize_json` repair); `grammar="digit"` — ASCII digits only (byte vocab)
 - `embed(texts, bpe_encoder=None, unigram_encoder=None)` — mean-pool hidden → `list[float]` or `list[list[float]]`
 - `chat_messages(messages, **generate_kwargs) -> str` — ChatML format + generate
 - `ai.format_chat_messages(messages, add_generation_prompt=True) -> str` — ChatML helper
+- `ai.OpenAIServer(model_path, host="127.0.0.1", port=8000)` — local OpenAI-compatible HTTP (`/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/health`); CLI `python -m magicmindnet.serve --model path.mmn`
 - `stop_token_ids` / `stop_strings` optional on both (generation halts early)
 
 See [feature_parity.md](feature_parity.md) for the PyTorch / llama.cpp / Ollama matrix.

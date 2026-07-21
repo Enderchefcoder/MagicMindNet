@@ -41,6 +41,10 @@ pub struct GenerateConfig {
     pub use_kv_cache: bool,
     /// Optional vision prefix patches for `Chatbot(vision=True)` (prefill only).
     pub vision_patches: Option<Vec<Vec<f32>>>,
+    /// Constrain decoding to a minimal JSON object/array subset.
+    pub json_mode: bool,
+    /// Optional grammar name: `"digit"` | `"json"` (`"json"` aliases `json_mode`).
+    pub grammar: Option<String>,
 }
 
 impl Default for GenerateConfig {
@@ -63,6 +67,8 @@ impl Default for GenerateConfig {
             stop_strings: Vec::new(),
             use_kv_cache: true,
             vision_patches: None,
+            json_mode: false,
+            grammar: None,
         }
     }
 }
@@ -393,6 +399,36 @@ fn last_token_scores(
     Ok(scores)
 }
 
+fn wants_json(config: &GenerateConfig) -> bool {
+    config.json_mode || config.grammar.as_deref() == Some("json")
+}
+
+fn apply_grammar_mask(scores: &mut [f32], generated: &str, config: &GenerateConfig) {
+    if config.grammar.as_deref() == Some("digit") {
+        crate::json_constrain::apply_digit_mask(scores);
+        return;
+    }
+    if wants_json(config) {
+        crate::json_constrain::apply_json_mask(scores, generated);
+    }
+}
+
+fn scores_with_constraints(
+    logits: &mmn_core::Tensor,
+    vocab: usize,
+    tokens: &[usize],
+    prompt_len: usize,
+    encoder: Option<TextEncoderRef<'_>>,
+    config: &GenerateConfig,
+) -> Result<Vec<f32>> {
+    let mut scores = last_token_scores(logits, vocab, tokens, config)?;
+    if config.grammar.is_some() || config.json_mode {
+        let generated = decode_tokens(&tokens[prompt_len..], encoder);
+        apply_grammar_mask(&mut scores, &generated, config);
+    }
+    Ok(scores)
+}
+
 fn context_window(tokens: &[usize], max_ctx: usize) -> &[usize] {
     let start = tokens.len().saturating_sub(max_ctx);
     &tokens[start..]
@@ -477,7 +513,7 @@ fn generate_token_ids_with_kv_cache(
         patches,
         &mut cache,
     )?;
-    let mut scores = last_token_scores(&logits, vocab, tokens, config)?;
+    let mut scores = scores_with_constraints(&logits, vocab, tokens, prompt_len, encoder, config)?;
 
     for _ in 0..config.max_new_tokens {
         let next = pick_next_token(&mut scores, config, &mut mirostat_mu, &mut rng);
@@ -485,6 +521,13 @@ fn generate_token_ids_with_kv_cache(
             break;
         }
         tokens.push(next);
+
+        if wants_json(config) {
+            let new_text = decode_tokens(&tokens[prompt_len..], encoder);
+            if crate::json_constrain::json_is_complete(&new_text) {
+                break;
+            }
+        }
 
         if !config.stop_strings.is_empty() {
             let new_text = decode_tokens(&tokens[prompt_len..], encoder);
@@ -506,7 +549,7 @@ fn generate_token_ids_with_kv_cache(
         }
 
         logits = forward_logits_after_append(model, tokens, &mut cache, max_ctx)?;
-        scores = last_token_scores(&logits, vocab, tokens, config)?;
+        scores = scores_with_constraints(&logits, vocab, tokens, prompt_len, encoder, config)?;
     }
 
     Ok(tokens[prompt_len..].to_vec())
@@ -547,13 +590,21 @@ pub fn generate_token_ids(
         } else {
             model.forward_logits(ctx)?
         };
-        let mut scores = last_token_scores(&logits, vocab, &tokens, config)?;
+        let mut scores =
+            scores_with_constraints(&logits, vocab, &tokens, prompt_len, encoder, config)?;
         let next = pick_next_token(&mut scores, config, &mut mirostat_mu, &mut rng);
 
         if config.stop_token_ids.contains(&next) {
             break;
         }
         tokens.push(next);
+
+        if wants_json(config) {
+            let new_text = decode_tokens(&tokens[prompt_len..], encoder);
+            if crate::json_constrain::json_is_complete(&new_text) {
+                break;
+            }
+        }
 
         if !config.stop_strings.is_empty() {
             let new_text = decode_tokens(&tokens[prompt_len..], encoder);
@@ -586,7 +637,12 @@ pub fn generate_text(
     config: &GenerateConfig,
 ) -> Result<String> {
     let ids = generate_token_ids(model, prompt, encoder, config)?;
-    Ok(decode_tokens(&ids, encoder))
+    let text = decode_tokens(&ids, encoder);
+    if wants_json(config) {
+        Ok(crate::json_constrain::finalize_json(&text))
+    } else {
+        Ok(text)
+    }
 }
 
 /// Like `generate_text`, but returns one decoded piece per newly sampled token.
@@ -975,5 +1031,34 @@ mod tests {
         assert!(text.contains("<|im_start|>system"));
         assert!(text.contains("Hi"));
         assert!(text.ends_with("<|im_start|>assistant\n"));
+    }
+
+    #[test]
+    fn json_mode_generate_is_parseable_shape() {
+        let model = Chatbot::new_with_seed(false, None, 256, Some(1), Some(32), Some(11));
+        let cfg = GenerateConfig {
+            max_new_tokens: 24,
+            temperature: 0.8,
+            json_mode: true,
+            ..Default::default()
+        };
+        let out = generate_text(&model, r#"Return JSON: {"ok": true}"#, None, &cfg).unwrap();
+        let text = out.trim();
+        assert!(text.starts_with('{') || text.starts_with('['), "{text}");
+        assert!(text.ends_with('}') || text.ends_with(']'), "{text}");
+    }
+
+    #[test]
+    fn digit_grammar_only_emits_digits() {
+        let model = Chatbot::new_with_seed(false, None, 256, Some(1), Some(16), Some(2));
+        let cfg = GenerateConfig {
+            max_new_tokens: 6,
+            temperature: 0.9,
+            grammar: Some("digit".into()),
+            ..Default::default()
+        };
+        let out = generate_text(&model, "n=", None, &cfg).unwrap();
+        assert!(!out.is_empty());
+        assert!(out.chars().all(|c| c.is_ascii_digit()), "{out}");
     }
 }

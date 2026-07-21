@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -224,6 +225,37 @@ def gen_typical_p_smoke(*, seed: int = 1, work_dir: Path | None = None) -> TaskR
         ok=isinstance(a, str) and isinstance(b, str),
         elapsed_ms=ms,
         metrics=[Metric("generate_ms", ms, unit="ms", higher_is_better=False)],
+    )
+
+
+@register(
+    "json_mode_smoke",
+    suites=("smoke", "generate"),
+    description="generate with json_mode yields object/array-shaped text",
+)
+def json_mode_smoke(*, seed: int = 11, work_dir: Path | None = None) -> TaskResult:
+    del work_dir
+    bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, seed=seed)
+    t0 = time.perf_counter()
+    out = bot.generate(
+        'Return JSON: {"ok": true}',
+        max_new_tokens=24,
+        temperature=0.8,
+        json_mode=True,
+    )
+    ms = (time.perf_counter() - t0) * 1000
+    text = out.strip() if isinstance(out, str) else ""
+    ok = False
+    try:
+        ok = (text.startswith("{") or text.startswith("[")) and json.loads(text) is not None
+    except Exception:
+        ok = False
+    return TaskResult(
+        name="json_mode_smoke",
+        ok=ok,
+        elapsed_ms=ms,
+        metrics=[Metric("generate_ms", ms, unit="ms", higher_is_better=False)],
+        meta={"preview": text[:64]},
     )
 
 

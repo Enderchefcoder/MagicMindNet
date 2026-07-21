@@ -1,7 +1,7 @@
 # Feature parity matrix
 
 MagicMindNet aims for practical parity with common surfaces from **PyTorch**,
-**llama.cpp**, and **Ollama**. This matrix tracks Wave 1 (done) and later waves
+**llama.cpp**, and **Ollama**. This matrix tracks Wave 1–2 (done) and later waves
 (planned).
 
 | Feature | PyTorch | llama.cpp | Ollama | MagicMindNet |
@@ -16,8 +16,9 @@ MagicMindNet aims for practical parity with common surfaces from **PyTorch**,
 | top_k / top_p / min_p | yes | yes | yes | done (pre-Wave 1) |
 | KV-cache generate | — | yes | yes | done (pre-Wave 1) |
 | GGUF load | — | native | yes | done (interop) |
-| Grammar / JSON schema | Outlines / etc. | grammars | format | **planned Wave 2** |
-| Tool / function calling | OpenAI tools | — | tools | **planned Wave 2** |
+| Grammar / JSON mode | Outlines / etc. | grammars | format | **Wave 2** `json_mode=` / `grammar=` |
+| OpenAI-compatible HTTP | — | llama-server | Ollama API | **Wave 2** `OpenAIServer` |
+| Tool / function calling | OpenAI tools | — | tools | **planned Wave 3** |
 | Speculative decoding | — | draft models | — | **planned Wave 3** |
 | Continuous batching server | vLLM | llama-server | Ollama | **planned Wave 3** |
 
@@ -51,5 +52,26 @@ cfg = ai.TrainConfig(
 )
 ```
 
-Tests: `tests/test_feature_parity_py.py`. Eval tasks: `gen_typical_p_smoke`,
-`stream_generate`, `embed_mean_pool`.
+## Wave 2 API sketch
+
+```python
+import magicmindnet as ai
+from magicmindnet.serve import OpenAIServer
+
+bot = ai.Chatbot(vocab_size=256, n_layer=1, d_model=32, seed=11)
+
+# Constrained decoding (llama.cpp / Ollama-style)
+js = bot.generate('Return JSON: {"ok": true}', max_new_tokens=24, json_mode=True)
+digits = bot.generate("n=", max_new_tokens=6, grammar="digit")
+
+# Local OpenAI-compatible server
+bot.save("tiny.mmn")
+server = OpenAIServer(model_path="tiny.mmn", host="127.0.0.1", port=0)
+base = server.start()  # e.g. http://127.0.0.1:54321
+# POST {base}/v1/chat/completions , /v1/embeddings ; GET /v1/models , /health
+server.stop()
+```
+
+Tests: `tests/test_feature_parity_py.py`, `tests/test_feature_parity_wave2_py.py`.
+Eval tasks: `gen_typical_p_smoke`, `stream_generate`, `embed_mean_pool`,
+`json_mode_smoke` (optional).

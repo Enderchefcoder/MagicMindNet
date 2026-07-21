@@ -2,6 +2,15 @@
 
 ## 0.1.0 — 2026-07-21
 
+### Added (feature parity Wave 2)
+- JSON constrained decoding: `json_mode=True` and `grammar="json"` / `grammar="digit"`
+  on `generate` / `generate_tokens` / `generate_stream` (mask + `finalize_json` repair)
+- OpenAI-compatible local server: `ai.OpenAIServer` / `magicmindnet.serve`
+  (`/v1/chat/completions`, `/v1/embeddings`, `/v1/models`, `/health`); CLI
+  `python -m magicmindnet.serve --model path.mmn`
+- Docs: Wave 2 rows in [docs/feature_parity.md](docs/feature_parity.md)
+- Tests: `tests/test_feature_parity_wave2_py.py`
+
 ### Added (feature parity Wave 1)
 - llama.cpp sampling: `typical_p`, Mirostat v2 (`mirostat` / `mirostat_tau` / `mirostat_eta`)
 - Ollama-style `Chatbot.generate_stream` (token chunks) and `Chatbot.embed` (mean-pool hidden)
