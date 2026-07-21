@@ -429,8 +429,6 @@ docs site (HTML/CSS/charts), hub/examples polish, README as one install story.
 [X] README pip-first (`pip install magicmindnet`); hub catalog example
 [X] Extra examples: pip_quickstart, openai_server_demo, hub_catalog, parity_demo
 [X] Build wheel/sdist; publish to PyPI (manylinux2014 + sdist); pip install verified
-[ ] verify_gate; commit LICENSE/sdist fix; push; update PR #3
-Lesson: never write PyPI tokens into repo files; use MATURIN_PYPI_TOKEN / TWINE_PASSWORD.
-Lesson: PyPI rejects sdists that declare `License-File: LICENSE` without embedding LICENSE
-  — add `[tool.maturin] include = [{ path = "LICENSE", format = ["sdist", "wheel"] }]`.
+[X] verify_gate; commit LICENSE/sdist fix; push; update PR #3
+# verify_gate: OK — 619 Rust / 1206 pytest; PyPI 0.2.0 wheel+sdist live
 
