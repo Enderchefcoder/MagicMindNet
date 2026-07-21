@@ -231,35 +231,48 @@ fn ensure_gqa_meta(
         }
     }
 
-    if meta.get("num_attention_heads").is_some() && meta.get("num_key_value_heads").is_some() {
+    if meta_has_attention_heads(meta) && meta_has_kv_heads(meta) {
+        return Ok(());
+    }
+
+    // Classic square MHA (Q/K both [d_model, d_model]) without head counts in meta:
+    // do NOT guess — largest-head_dim search would pick n_heads=1 and break MMN
+    // roundtrips that omit n_heads. Leave Chatbot defaults (n_heads=4).
+    if q_dim == d_model && kv_dim == d_model && !meta_has_attention_heads(meta) {
         return Ok(());
     }
 
     let head_dim = meta
         .get("head_dim")
         .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .or_else(|| {
-            if q_dim == d_model && d_model > 0 {
-                // Classic square Q: guess from d_model.
-                None
-            } else {
-                None
-            }
-        });
+        .map(|v| v as usize);
 
     let Some((_, n_heads, n_kv_heads)) =
         gqa_dims_from_meta_or_guess(meta, d_model, q_dim, kv_dim, head_dim)
     else {
         return Ok(());
     };
-    if meta.get("num_attention_heads").is_none() {
+    if !meta_has_attention_heads(meta) {
         meta["num_attention_heads"] = serde_json::json!(n_heads);
     }
-    if meta.get("num_key_value_heads").is_none() {
+    if !meta_has_kv_heads(meta) {
         meta["num_key_value_heads"] = serde_json::json!(n_kv_heads);
     }
     Ok(())
+}
+
+fn meta_has_attention_heads(meta: &serde_json::Value) -> bool {
+    meta.get("num_attention_heads")
+        .or_else(|| meta.get("n_heads"))
+        .and_then(|v| v.as_u64())
+        .is_some()
+}
+
+fn meta_has_kv_heads(meta: &serde_json::Value) -> bool {
+    meta.get("num_key_value_heads")
+        .or_else(|| meta.get("n_kv_heads"))
+        .and_then(|v| v.as_u64())
+        .is_some()
 }
 
 fn gqa_dims_from_meta_or_guess(
@@ -453,5 +466,24 @@ mod tests {
         // d_model=8, q_dim=16 (=2*8), kv_dim=8
         let (hd, nh, nkv) = gqa_dims_from_meta_or_guess(&meta, 8, 16, 8, Some(8)).unwrap();
         assert_eq!((hd, nh, nkv), (8, 2, 1));
+    }
+
+    #[test]
+    fn ensure_gqa_meta_skips_classic_square_mha_without_heads() {
+        let d_model = 16usize;
+        let mut tensors = HashMap::new();
+        tensors.insert(
+            "blocks.0.attn.q".into(),
+            Tensor::from_array(ndarray::Array2::<f32>::zeros((d_model, d_model)).into_dyn(), true),
+        );
+        tensors.insert(
+            "blocks.0.attn.k".into(),
+            Tensor::from_array(ndarray::Array2::<f32>::zeros((d_model, d_model)).into_dyn(), true),
+        );
+        let mut meta = serde_json::json!({});
+        ensure_gqa_meta(&tensors, &mut meta).unwrap();
+        assert!(meta.get("num_attention_heads").is_none());
+        assert!(meta.get("num_key_value_heads").is_none());
+        assert!(meta.get("head_dim").is_none());
     }
 }

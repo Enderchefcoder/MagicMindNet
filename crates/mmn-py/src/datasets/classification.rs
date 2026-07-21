@@ -90,6 +90,11 @@ impl PyDatasetClassification {
         self.inner.unique_labels()
     }
 
+    /// Return ``[(text, label), ...]`` for training / hub finetune loops.
+    fn as_pairs(&self) -> Vec<(String, String)> {
+        self.inner.samples.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "DatasetClassification(rows={}, labels={:?}, type='classification')",

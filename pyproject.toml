@@ -49,3 +49,6 @@ features = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["python"]
+markers = [
+    "network: tests that download models from Hugging Face / ModelScope / Ollama",
+]

@@ -135,6 +135,21 @@ edit.mask_path_at(0)
 
 ## Models
 
+### Universal hub — `ai.from_pretrained`
+
+```python
+model = ai.from_pretrained("org/name")                 # Hugging Face
+model = ai.from_pretrained("hf://org/name")
+model = ai.from_pretrained("ms://org/name")            # ModelScope
+model = ai.from_pretrained("ollama://llama3.2:1b")
+model = ai.from_pretrained("./checkpoint.mmn")
+model = ai.from_pretrained("Qwen/Qwen3-0.6B-GGUF", filename="Qwen3-0.6B-Q8_0.gguf")
+```
+
+Returns a native `Chatbot`/`Classifier`/`Diffusion` when weights adapt, otherwise a
+`HubModel` with the same methods: `generate`, `chat`, `predict`, `predict_label`,
+`finetune`, `train`, `save`, `to_native()`. Full routing table: [hub.md](hub.md).
+
 ### Chatbot
 
 ```python

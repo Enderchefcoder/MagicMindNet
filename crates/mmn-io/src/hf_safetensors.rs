@@ -49,11 +49,12 @@ pub(crate) fn chatbot_meta_json(
         meta["use_rope"] = serde_json::json!(true);
         meta["rope_theta"] = serde_json::json!(model.rope_theta);
     }
-    if model.shape.n_kv_heads != model.shape.n_heads {
-        meta["n_kv_heads"] = serde_json::json!(model.shape.n_kv_heads);
-        meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
-        meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
-    }
+    // Always emit head counts so classic MHA roundtrips do not rely on GQA guessing
+    // (which otherwise prefers n_heads=1 for square Q/K).
+    meta["n_heads"] = serde_json::json!(model.shape.n_heads);
+    meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
+    meta["n_kv_heads"] = serde_json::json!(model.shape.n_kv_heads);
+    meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
     if let Some(hd) = model.shape.head_dim {
         if hd != model.shape.d_model / model.shape.n_heads {
             meta["head_dim"] = serde_json::json!(hd);
@@ -489,6 +490,13 @@ mod tests {
         assert_eq!(
             model.embed.weight.data[[0, 0]],
             loaded.embed.weight.data[[0, 0]]
+        );
+        assert_eq!(loaded.shape.n_heads, model.shape.n_heads);
+        assert_eq!(loaded.shape.n_kv_heads, model.shape.n_kv_heads);
+        assert_eq!(loaded.shape.head_dim, model.shape.head_dim);
+        assert_eq!(
+            loaded.shape.head_dim.unwrap_or(loaded.shape.d_model / loaded.shape.n_heads),
+            model.shape.d_model / model.shape.n_heads
         );
     }
 

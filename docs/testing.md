@@ -33,6 +33,7 @@ Regression matrices live under `docs/*_coverage.md`. Extend the relevant doc whe
 |-----|--------|
 | [checkpoint_coverage.md](checkpoint_coverage.md) | Chatbot/classifier IO contract (100% tensor keys) |
 | [interop.md](interop.md) | Global formats: GGUF, PyTorch `.pt`, NumPy `.npy`/`.npz`, universal `ai.load` |
+| [hub.md](hub.md) | `ai.from_pretrained` — HF / ModelScope / Ollama / local |
 | [training_coverage.md](training_coverage.md) | `Train`, `TrainClassifier`, RL/SPIN, mean loss |
 | [dataset_coverage.md](dataset_coverage.md) | QA, corpus, classification, image loaders |
 | [examples_coverage.md](examples_coverage.md) | Runnable `examples/` × smoke × pytest |

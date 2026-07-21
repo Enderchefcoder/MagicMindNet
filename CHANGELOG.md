@@ -2,6 +2,11 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Fixed (classic MHA HF/npz/pt head_dim roundtrip)
+- `ensure_gqa_meta` no longer guesses `n_heads=1` for square Q/K when head counts are
+  absent (that broke HF/npz/pt loss roundtrips after optional `head_dim`)
+- HF safetensors export always writes `n_heads` / `n_kv_heads` (and HF aliases)
+
 ### Added (optional head_dim for Qwen-style GQA)
 - `MultiHeadAttention` / `TransformerBlock` / `Chatbot` accept optional `head_dim`
   independent of `d_model // n_heads` (Qwen3: d_model=1024, n_heads=16, head_dim=128
@@ -12,6 +17,13 @@
 - Python: `Chatbot(head_dim=…)` + `bot.head_dim` getter; hub `from_pretrained`
   marks native GGUF loads with `card.backend="native"`
 - Tests: Rust MHA/block forward + synthetic Qwen GGUF; `tests/test_head_dim_py.py`
+
+### Added (universal hub `ai.from_pretrained`)
+- `ai.from_pretrained(source)` loads Hugging Face / ModelScope / Ollama / local models into a native Chatbot/Classifier/Diffusion when possible, otherwise a `HubModel` with `generate` / `predict` / `finetune` / `train` / `save`
+- Routing by pipeline tag + architecture + file layout (GGUF, causal LM, seq-cls/reranker, seq2seq, diffusers/video, TTS) — not per-repo special cases
+- `DatasetClassification.as_pairs()` / `DatasetCorpus.as_texts()` for hub finetune loops
+- Optional `head_dim` for Qwen-style GQA (`n_heads * head_dim != d_model`) — native `Qwen/Qwen3-0.6B-GGUF` import
+- Docs: [docs/hub.md](docs/hub.md); hands-on: `scripts/hub_hands_on.py`; tests: `tests/test_hub_from_pretrained_py.py`
 
 ### Added (Glint-style Chatbot architecture knobs)
 - `Chatbot(n_loops=…, norm="rms"|"layer", ffn="swiglu"|"gelu", tie_embeddings=…, loop_embed=…, ffn_dim=…)` — recreate a tiny Glint-like LM in a few lines; defaults preserve classic Chatbot behavior

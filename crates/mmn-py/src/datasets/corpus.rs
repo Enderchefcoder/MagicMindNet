@@ -108,6 +108,11 @@ impl PyDatasetCorpus {
         }
     }
 
+    /// Return corpus texts for training / hub finetune loops.
+    fn as_texts(&self) -> Vec<String> {
+        self.inner.rows.iter().map(|r| r.text.clone()).collect()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "DatasetCorpus(rows={}, format={:?}, type='corpus')",

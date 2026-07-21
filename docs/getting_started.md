@@ -100,6 +100,22 @@ print(clf.predict("sunny warm bright"))         # -> {"nice": 0.93, "gloomy": 0.
 
 Classifier checkpoints save and load the same way: `clf.save("clf.mmn")`, `ai.load("clf.mmn")`.
 
+### Load any Hugging Face / ModelScope / Ollama model
+
+```python
+bot = ai.from_pretrained("Qwen/Qwen3-0.6B-GGUF", filename="Qwen3-0.6B-Q8_0.gguf")
+print(bot.generate("Hello", max_new_tokens=32))
+
+clf = ai.from_pretrained("j-hartmann/emotion-english-distilroberta-base")
+print(clf.predict_label("I love this!"))
+clf.finetune(ai.DatasetClassification(data=[
+    {"text": "great day", "label": "joy"},
+    {"text": "so mad", "label": "anger"},
+]), epochs=1)
+```
+
+Also: `hf://…`, `ms://…`, `ollama://…`, Diffusers repos, TTS, video. See [hub.md](hub.md).
+
 ## 5. Tuning training
 
 Every training call accepts the same options, either as keywords or a reusable `TrainConfig`:

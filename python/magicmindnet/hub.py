@@ -17,16 +17,16 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence, Union
+from typing import Any
 
 import magicmindnet as ai
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 __all__ = [
     "HubModel",
@@ -47,11 +47,11 @@ class ModelCard:
     """Lightweight description of a resolved model source."""
 
     family: str
-    pipeline_tag: Optional[str] = None
+    pipeline_tag: str | None = None
     architectures: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
-    source: Optional[str] = None
-    local_path: Optional[str] = None
+    source: str | None = None
+    local_path: str | None = None
     backend: str = "native"  # native | transformers | diffusers | ollama | arrays
     notes: list[str] = field(default_factory=list)
 
@@ -96,8 +96,8 @@ def inspect_source(meta: dict[str, Any]) -> ModelCard:
         or meta.get("model_type")
     )
 
-    lower_files = " ".join(files).lower()
     notes: list[str] = []
+    lower_files = " ".join(files).lower()
 
     # File-layout first (most reliable for GGUF / diffusers / MLX).
     if any(f.lower().endswith(".gguf") for f in files) or "gguf" in (pipeline or ""):
@@ -109,9 +109,18 @@ def inspect_source(meta: dict[str, Any]) -> ModelCard:
             backend="native",
             notes=["GGUF → native Chatbot via ai.load"],
         )
-    if "model_index.json" in files or class_name and "Pipeline" in str(class_name):
+    if (
+        "model_index.json" in files
+        or (class_name and "Pipeline" in str(class_name))
+        or "unet/" in lower_files
+        or "vae/" in lower_files
+    ):
         family = "diffusion"
-        if pipeline in {"text-to-video", "image-to-video"} or "Wan" in str(class_name):
+        if (
+            pipeline in {"text-to-video", "image-to-video"}
+            or "Wan" in str(class_name)
+            or "t2v" in lower_files
+        ):
             family = "video"
         elif pipeline == "text-to-speech" or "TTS" in str(class_name):
             family = "tts"
@@ -222,10 +231,10 @@ def inspect_source(meta: dict[str, Any]) -> ModelCard:
 class ResolvedSource:
     kind: str  # local | hf | modelscope | ollama
     spec: str
-    local_path: Optional[Path] = None
-    repo_id: Optional[str] = None
-    filename: Optional[str] = None
-    revision: Optional[str] = None
+    local_path: Path | None = None
+    repo_id: str | None = None
+    filename: str | None = None
+    revision: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
 
 
@@ -252,13 +261,13 @@ def _parse_spec(source: str) -> tuple[str, str]:
     return "local", s
 
 
-def _hf_list_files(repo_id: str, revision: Optional[str] = None) -> list[str]:
+def _hf_list_files(repo_id: str, revision: str | None = None) -> list[str]:
     from huggingface_hub import list_repo_files
 
     return list(list_repo_files(repo_id, revision=revision))
 
 
-def _hf_model_info(repo_id: str, revision: Optional[str] = None) -> dict[str, Any]:
+def _hf_model_info(repo_id: str, revision: str | None = None) -> dict[str, Any]:
     from huggingface_hub import hf_hub_download, model_info
 
     info = model_info(repo_id, revision=revision)
@@ -288,10 +297,10 @@ def _hf_model_info(repo_id: str, revision: Optional[str] = None) -> dict[str, An
 def _snapshot_hf(
     repo_id: str,
     *,
-    revision: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    filename: Optional[str] = None,
-    allow_patterns: Optional[Sequence[str]] = None,
+    revision: str | None = None,
+    cache_dir: str | None = None,
+    filename: str | None = None,
+    allow_patterns: Sequence[str] | None = None,
 ) -> Path:
     from huggingface_hub import hf_hub_download, snapshot_download
 
@@ -314,8 +323,8 @@ def _snapshot_hf(
 def _snapshot_modelscope(
     repo_id: str,
     *,
-    revision: Optional[str] = None,
-    cache_dir: Optional[str] = None,
+    revision: str | None = None,
+    cache_dir: str | None = None,
 ) -> Path:
     try:
         from modelscope.hub.snapshot_download import snapshot_download as ms_download
@@ -332,7 +341,7 @@ def _snapshot_modelscope(
     return Path(ms_download(**kwargs))
 
 
-def _ollama_pull(model: str, host: Optional[str] = None) -> dict[str, Any]:
+def _ollama_pull(model: str, host: str | None = None) -> dict[str, Any]:
     """Pull an Ollama model via the local HTTP API (or raise a clear error)."""
     base = (host or os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip(
         "/"
@@ -356,11 +365,11 @@ def _ollama_pull(model: str, host: Optional[str] = None) -> dict[str, Any]:
 def resolve_source(
     source: PathLike,
     *,
-    revision: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    filename: Optional[str] = None,
+    revision: str | None = None,
+    cache_dir: str | None = None,
+    filename: str | None = None,
     download: bool = True,
-    allow_patterns: Optional[Sequence[str]] = None,
+    allow_patterns: Sequence[str] | None = None,
 ) -> ResolvedSource:
     """Resolve a hub id / URL / local path into a local directory or file."""
     kind, spec = _parse_spec(str(source))
@@ -426,7 +435,7 @@ def resolve_source(
 
     # Hugging Face Hub
     meta = _hf_model_info(spec, revision=revision)
-    local: Optional[Path] = None
+    local: Path | None = None
     if download:
         # Smart allow_patterns: avoid multi-GB downloads when a single file is enough.
         patterns = allow_patterns
@@ -524,8 +533,8 @@ class HubModel:
         native: Any = None,
         foreign: Any = None,
         tokenizer: Any = None,
-        source: Optional[str] = None,
-        labels: Optional[Sequence[str]] = None,
+        source: str | None = None,
+        labels: Sequence[str] | None = None,
     ) -> None:
         self.family = family
         self.card = card
@@ -547,7 +556,7 @@ class HubModel:
     # --- factories for offline tests ---
 
     @classmethod
-    def synthetic_classifier(cls, labels: Sequence[str]) -> "HubModel":
+    def synthetic_classifier(cls, labels: Sequence[str]) -> HubModel:
         labels = list(labels)
         clf = ai.Classifier.with_labels(labels, 64, seed=0)
         card = ModelCard(family="classifier", pipeline_tag="text-classification")
@@ -556,7 +565,7 @@ class HubModel:
     @classmethod
     def synthetic_causal_lm(
         cls, vocab_size: int = 256, max_seq_len: int = 64
-    ) -> "HubModel":
+    ) -> HubModel:
         bot = ai.Chatbot(
             vocab_size=vocab_size,
             n_layer=1,
@@ -677,7 +686,7 @@ class HubModel:
         max_new = int(kwargs.get("max_new_tokens", 32))
         foreign = self.foreign
         # transformers text-generation pipeline or model+tokenizer
-        if hasattr(foreign, "__call__") and foreign.__class__.__name__.endswith("Pipeline"):
+        if callable(foreign) and foreign.__class__.__name__.endswith("Pipeline"):
             out = foreign(
                 prompt,
                 max_new_tokens=max_new,
@@ -714,7 +723,7 @@ class HubModel:
 
     def _foreign_predict(self, text: str, **kwargs: Any) -> Any:
         foreign = self.foreign
-        if hasattr(foreign, "__call__"):
+        if callable(foreign):
             return foreign(text, **kwargs)
         raise RuntimeError("foreign predict backend not recognized")
 
@@ -788,7 +797,7 @@ class HubModel:
         }:
             label2id: dict[str, int] = {}
             if self.labels:
-                label2id = {str(l): i for i, l in enumerate(self.labels)}
+                label2id = {str(lab): i for i, lab in enumerate(self.labels)}
             elif hasattr(model, "config"):
                 raw = getattr(model.config, "label2id", None) or {}
                 label2id = {str(k): int(v) for k, v in raw.items()}
@@ -918,7 +927,7 @@ def _try_native_load(path: Path) -> Any:
 
 def _load_transformers_model(
     local_or_id: str, card: ModelCard
-) -> tuple[Any, Any, Optional[list[str]]]:
+) -> tuple[Any, Any, list[str] | None]:
     from transformers import (
         AutoModelForCausalLM,
         AutoModelForSeq2SeqLM,
@@ -928,7 +937,7 @@ def _load_transformers_model(
     )
 
     tokenizer = AutoTokenizer.from_pretrained(local_or_id, trust_remote_code=True)
-    labels: Optional[list[str]] = None
+    labels: list[str] | None = None
     if card.family in {"classifier", "reranker", "seq-cls"}:
         model = AutoModelForSequenceClassification.from_pretrained(
             local_or_id, trust_remote_code=True
@@ -974,15 +983,15 @@ def _load_diffusers_pipeline(local_or_id: str, card: ModelCard) -> Any:
 def from_pretrained(
     source: PathLike,
     *,
-    revision: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    filename: Optional[str] = None,
+    revision: str | None = None,
+    cache_dir: str | None = None,
+    filename: str | None = None,
     download: bool = True,
     trust_remote_code: bool = True,
     prefer_native: bool = True,
-    allow_patterns: Optional[Sequence[str]] = None,
+    allow_patterns: Sequence[str] | None = None,
     **kwargs: Any,
-) -> Union[HubModel, Any]:
+) -> HubModel | Any:
     """Load any model from Hugging Face Hub, ModelScope, Ollama, or a local path.
 
     Returns a native MagicMindNet model when possible, otherwise a :class:`HubModel`
