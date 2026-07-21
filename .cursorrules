@@ -418,12 +418,12 @@ and PyTorch training knobs. Full ecosystem parity is multi-wave; this wave
 ships the biggest user-facing holes with tests + `docs/feature_parity.md`.
 
 Wave 1 (this session):
-[ ] Mirostat v2 + typical_p sampling (llama.cpp)
-[ ] generate_stream token chunks (Ollama streaming)
-[ ] Chatbot.embed / embed_texts mean-pool (Ollama embeddings)
-[ ] TrainConfig weight_decay + lr_schedule cosine + warmup_steps (PyTorch)
-[ ] format_chat_messages helper (OpenAI/Ollama messages)
-[ ] docs/feature_parity.md matrix + eval tasks + verify_gate
+[X] Mirostat v2 + typical_p sampling (llama.cpp)
+[X] generate_stream token chunks (Ollama streaming)
+[X] Chatbot.embed / embed_texts mean-pool (Ollama embeddings)
+[X] TrainConfig weight_decay + lr_schedule cosine + warmup_steps (PyTorch)
+[X] format_chat_messages helper (OpenAI/Ollama messages)
+[X] docs/feature_parity.md matrix + eval tasks + verify_gate
 
 Later waves (documented, not blocking): grammar/GBNF, OpenAI HTTP server,
 dropout, flash-attn, speculative decoding, Modelfile, tool-calling JSON schema.
