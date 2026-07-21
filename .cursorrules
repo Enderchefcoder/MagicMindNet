@@ -358,7 +358,7 @@ Private train+infer scripts — DO NOT COMMIT; final answer only.
 [X] finetune/train/generate/predict unified API + as_pairs/as_texts
 [X] Hands-on script scripts/hub_hands_on.py + docs/hub.md
 [X] Offline pytest + network marker; fix classic-MHA HF head_dim guess
-[ ] verify_gate + push PR
+[X] verify_gate + push PR (14/14 hands-on OK; gate OK)
 
 ## Task: Optional head_dim for Qwen-style GGUF/HF
 
