@@ -883,6 +883,9 @@ pub struct MultiHeadAttention {
     pub d_model: usize,
     pub n_heads: usize,
     pub n_kv_heads: usize,
+    /// Per-head channel width. Defaults to `d_model / n_heads`; Qwen-style models
+    /// may set a larger value so `q_proj` is `[n_heads * head_dim, d_model]`.
+    pub head_dim: usize,
     pub causal: bool,
     /// When set, apply rotary position embedding to Q/K after projection.
     pub rope_theta: Option<f32>,
@@ -892,8 +895,15 @@ pub struct MultiHeadAttention {
     pub out_proj: Linear,
 }
 
-fn gqa_kv_dim(d_model: usize, n_heads: usize, n_kv_heads: usize) -> usize {
-    n_kv_heads * (d_model / n_heads)
+fn gqa_kv_dim(n_kv_heads: usize, head_dim: usize) -> usize {
+    n_kv_heads * head_dim
+}
+
+fn resolve_head_dim(d_model: usize, n_heads: usize, head_dim: Option<usize>) -> usize {
+    head_dim.unwrap_or_else(|| {
+        assert_eq!(d_model % n_heads, 0);
+        d_model / n_heads
+    })
 }
 
 impl MultiHeadAttention {
@@ -932,19 +942,42 @@ impl MultiHeadAttention {
         rope_theta: Option<f32>,
         rng: &mut impl Rng,
     ) -> Self {
-        assert_eq!(d_model % n_heads, 0);
+        Self::new_rng_causal_rope_gqa_head_dim(
+            d_model,
+            n_heads,
+            n_kv_heads,
+            None,
+            causal,
+            rope_theta,
+            rng,
+        )
+    }
+
+    pub fn new_rng_causal_rope_gqa_head_dim(
+        d_model: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        head_dim: Option<usize>,
+        causal: bool,
+        rope_theta: Option<f32>,
+        rng: &mut impl Rng,
+    ) -> Self {
         assert!(n_heads >= n_kv_heads && n_heads.is_multiple_of(n_kv_heads));
-        let kv_dim = gqa_kv_dim(d_model, n_heads, n_kv_heads);
+        let head_dim = resolve_head_dim(d_model, n_heads, head_dim);
+        assert!(head_dim > 0);
+        let q_dim = n_heads * head_dim;
+        let kv_dim = gqa_kv_dim(n_kv_heads, head_dim);
         Self {
             d_model,
             n_heads,
             n_kv_heads,
+            head_dim,
             causal,
             rope_theta,
-            q_proj: Linear::new_rng(d_model, d_model, rng),
+            q_proj: Linear::new_rng(d_model, q_dim, rng),
             k_proj: Linear::new_rng(d_model, kv_dim, rng),
             v_proj: Linear::new_rng(d_model, kv_dim, rng),
-            out_proj: Linear::new_rng(d_model, d_model, rng),
+            out_proj: Linear::new_rng(q_dim, d_model, rng),
         }
     }
 
@@ -1551,6 +1584,31 @@ impl TransformerBlock {
         use_swiglu: bool,
         rng: &mut impl Rng,
     ) -> Self {
+        Self::new_rng_rope_gqa_arch_head_dim(
+            d_model,
+            n_heads,
+            n_kv_heads,
+            None,
+            ffn_dim,
+            rope_theta,
+            use_rms,
+            use_swiglu,
+            rng,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_rng_rope_gqa_arch_head_dim(
+        d_model: usize,
+        n_heads: usize,
+        n_kv_heads: usize,
+        head_dim: Option<usize>,
+        ffn_dim: usize,
+        rope_theta: Option<f32>,
+        use_rms: bool,
+        use_swiglu: bool,
+        rng: &mut impl Rng,
+    ) -> Self {
         let mut ln1 = LayerNorm::new(d_model);
         let mut ln2 = LayerNorm::new(d_model);
         ln1.use_rms = use_rms;
@@ -1561,10 +1619,11 @@ impl TransformerBlock {
             None
         };
         Self {
-            attn: MultiHeadAttention::new_rng_causal_rope_gqa(
+            attn: MultiHeadAttention::new_rng_causal_rope_gqa_head_dim(
                 d_model,
                 n_heads,
                 n_kv_heads,
+                head_dim,
                 true,
                 rope_theta,
                 rng,
@@ -2602,5 +2661,58 @@ mod conv2d_tests {
         assert_ne!(h.data[[2, 0]], h2.data[[2, 0]]);
         assert_eq!(h.data[[0, 0]], h2.data[[0, 0]]);
         assert_eq!(h.data[[1, 0]], h2.data[[1, 0]]);
+    }
+
+    /// Qwen-style: head_dim independent of d_model/n_heads (e.g. 1024/16=64 vs head_dim=128).
+    #[test]
+    fn mha_custom_head_dim_forward_shapes() {
+        let d_model = 8usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 8usize; // != d_model/n_heads (=4)
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let mut rng = rng_from_seed(Some(42));
+        let attn = MultiHeadAttention::new_rng_causal_rope_gqa_head_dim(
+            d_model,
+            n_heads,
+            n_kv_heads,
+            Some(head_dim),
+            false,
+            None,
+            &mut rng,
+        );
+        assert_eq!(attn.head_dim, head_dim);
+        assert_eq!(attn.q_proj.weight.data.shape(), &[q_dim, d_model]);
+        assert_eq!(attn.k_proj.weight.data.shape(), &[kv_dim, d_model]);
+        assert_eq!(attn.v_proj.weight.data.shape(), &[kv_dim, d_model]);
+        assert_eq!(attn.out_proj.weight.data.shape(), &[d_model, q_dim]);
+        let x = Tensor::randn_rng(&mut rng, &[3, d_model], false);
+        let y = attn.forward(&x).unwrap();
+        assert_eq!(y.shape, vec![3, d_model]);
+    }
+
+    #[test]
+    fn block_custom_head_dim_forward() {
+        let d_model = 8usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 8usize;
+        let mut rng = rng_from_seed(Some(43));
+        let block = TransformerBlock::new_rng_rope_gqa_arch_head_dim(
+            d_model,
+            n_heads,
+            n_kv_heads,
+            Some(head_dim),
+            16,
+            None,
+            false,
+            false,
+            &mut rng,
+        );
+        let x = Tensor::randn_rng(&mut rng, &[2, d_model], false);
+        let y = block.forward(&x).unwrap();
+        assert_eq!(y.shape, vec![2, d_model]);
+        assert_eq!(block.attn.head_dim, head_dim);
     }
 }

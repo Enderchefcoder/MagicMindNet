@@ -188,6 +188,7 @@ class Chatbot:
         rope_theta: float = 10000.0,
         n_heads: int | None = None,
         n_kv_heads: int | None = None,
+        head_dim: int | None = None,
         ffn_dim: int | None = None,
         n_loops: int = 1,
         tie_embeddings: bool = False,
@@ -235,6 +236,8 @@ class Chatbot:
     def n_heads(self) -> int: ...
     @property
     def n_kv_heads(self) -> int: ...
+    @property
+    def head_dim(self) -> int: ...
     @property
     def ffn_dim(self) -> int: ...
     @property

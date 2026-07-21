@@ -2,6 +2,17 @@
 
 ## 0.1.0 — 2026-07-06
 
+### Added (optional head_dim for Qwen-style GQA)
+- `MultiHeadAttention` / `TransformerBlock` / `Chatbot` accept optional `head_dim`
+  independent of `d_model // n_heads` (Qwen3: d_model=1024, n_heads=16, head_dim=128
+  → q_proj `[2048, 1024]`)
+- GGUF import reads `{arch}.attention.key_length` / `value_length` (or infers from
+  `attn_q` shape); HF/safetensors import infers the same; shape validation uses
+  `q_dim = n_heads * head_dim`
+- Python: `Chatbot(head_dim=…)` + `bot.head_dim` getter; hub `from_pretrained`
+  marks native GGUF loads with `card.backend="native"`
+- Tests: Rust MHA/block forward + synthetic Qwen GGUF; `tests/test_head_dim_py.py`
+
 ### Added (Glint-style Chatbot architecture knobs)
 - `Chatbot(n_loops=…, norm="rms"|"layer", ffn="swiglu"|"gelu", tie_embeddings=…, loop_embed=…, ffn_dim=…)` — recreate a tiny Glint-like LM in a few lines; defaults preserve classic Chatbot behavior
 - Native **RMSNorm**, **SiLU/SwiGLU** FFN (`blocks.N.ffn_gate` + `ffn_kind` meta), **weight tying**, **loop embeddings**, and **shared-weight block looping** with accumulated train grads

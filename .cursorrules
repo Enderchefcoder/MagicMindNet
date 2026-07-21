@@ -345,3 +345,14 @@ Private train+infer scripts — DO NOT COMMIT; final answer only.
 [X] Wave G — docs + verify_gate
 [X] Wave H — private scripts in final answer (not committed)
 
+
+## Task: Universal hub from_pretrained (HF/Ollama/ModelScope)
+
+[ ] Probe listed models (done in session)
+[ ] Implement magicmindnet.hub.from_pretrained + HubModel
+[ ] Route: causal-lm/GGUF→Chatbot, seq-cls→Classifier/Hub, diffusion→Hub, else Hub
+[ ] finetune/train/generate/predict unified API
+[ ] Hands-on tests on listed models (download what fits)
+[ ] CI fixtures + optional network tests
+[ ] verify_gate + push PR
+

@@ -449,6 +449,7 @@ impl Chatbot {
             ffn_dim,
             n_heads,
             n_kv_heads,
+            None,
             seed,
             use_learned_pos_embed,
             max_seq_len,
@@ -468,6 +469,7 @@ impl Chatbot {
         ffn_dim: Option<usize>,
         n_heads: Option<usize>,
         n_kv_heads: Option<usize>,
+        head_dim: Option<usize>,
         seed: Option<u64>,
         use_learned_pos_embed: bool,
         max_seq_len: usize,
@@ -481,7 +483,11 @@ impl Chatbot {
         let n_loops = extras.n_loops.max(1);
         let mut rng = mmn_nn::rng_from_seed(seed);
         let shape = if let Some(b) = autoset_budget {
-            autoset(b, vocab_size)
+            let mut s = autoset(b, vocab_size);
+            if head_dim.is_some() {
+                s.head_dim = head_dim;
+            }
+            s
         } else {
             let dm = d_model.unwrap_or(128);
             let nh = n_heads.unwrap_or(4);
@@ -491,6 +497,7 @@ impl Chatbot {
                 d_model: dm,
                 n_heads: nh,
                 n_kv_heads: nkv,
+                head_dim,
                 ffn_dim: ffn_dim.unwrap_or(dm * 4),
                 vocab_size,
                 estimated_params: 0,
@@ -499,10 +506,11 @@ impl Chatbot {
         let mut blocks = Vec::new();
         let rope = if use_rope { Some(rope_theta) } else { None };
         for _ in 0..shape.n_layer {
-            blocks.push(TransformerBlock::new_rng_rope_gqa_arch(
+            blocks.push(TransformerBlock::new_rng_rope_gqa_arch_head_dim(
                 shape.d_model,
                 shape.n_heads,
                 shape.n_kv_heads,
+                shape.head_dim,
                 shape.ffn_dim,
                 rope,
                 extras.use_rms_norm,
@@ -614,6 +622,7 @@ impl Chatbot {
                 self.shape.vocab_size,
                 self.shape.n_heads,
                 self.shape.n_kv_heads,
+                self.shape.head_dim,
             )
         };
         let mut total = base;
@@ -1863,6 +1872,7 @@ mod chatbot_tests {
             Some(32),
             Some(4),
             Some(4),
+            None,
             Some(0),
             false,
             64,
@@ -1882,6 +1892,7 @@ mod chatbot_tests {
             Some(32),
             Some(4),
             Some(4),
+            None,
             Some(0),
             false,
             64,
@@ -1932,6 +1943,7 @@ mod chatbot_tests {
             Some(32),
             Some(4),
             Some(4),
+            None,
             Some(1),
             false,
             32,
@@ -1948,6 +1960,7 @@ mod chatbot_tests {
             Some(32),
             Some(4),
             Some(4),
+            None,
             Some(1),
             false,
             32,

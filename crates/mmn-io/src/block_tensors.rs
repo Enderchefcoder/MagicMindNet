@@ -40,7 +40,8 @@ pub(crate) fn export_block_tensors(model: &Chatbot, map: &mut TensorMap) {
 pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &TensorMap) -> Result<(), MmnError> {
     let d_model = model.shape.d_model;
     let ffn_dim = model.shape.ffn_dim;
-    let kv_dim = model.shape.n_kv_heads * (d_model / model.shape.n_heads);
+    let q_dim = model.shape.q_dim();
+    let kv_dim = model.shape.kv_dim();
     for (i, block) in model.blocks.iter_mut().enumerate() {
         let p = format!("blocks.{i}");
         let prefix = p.clone();
@@ -67,7 +68,7 @@ pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &TensorMap) -> 
         }
         expect_tensor_shape(
             &block.attn.q_proj.weight,
-            &[d_model, d_model],
+            &[q_dim, d_model],
             &format!("{prefix}.attn.q"),
         )?;
         expect_tensor_shape(
@@ -82,7 +83,7 @@ pub(crate) fn import_block_tensors(model: &mut Chatbot, tensors: &TensorMap) -> 
         )?;
         expect_tensor_shape(
             &block.attn.out_proj.weight,
-            &[d_model, d_model],
+            &[d_model, q_dim],
             &format!("{prefix}.attn.out"),
         )?;
         expect_tensor_shape(

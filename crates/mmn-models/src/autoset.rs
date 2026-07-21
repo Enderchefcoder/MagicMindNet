@@ -7,9 +7,30 @@ pub struct ModelShape {
     pub n_heads: usize,
     /// Key/value head count for grouped-query attention (`n_kv_heads == n_heads` for standard MHA).
     pub n_kv_heads: usize,
+    /// Per-head width. `None` means `d_model / n_heads` (classic layout).
+    /// Set when Q/K projections use a wider head (e.g. Qwen3: d_model=1024, n_heads=16, head_dim=128).
+    pub head_dim: Option<usize>,
     pub ffn_dim: usize,
     pub vocab_size: usize,
     pub estimated_params: usize,
+}
+
+impl ModelShape {
+    /// Effective per-head channel count.
+    pub fn effective_head_dim(&self) -> usize {
+        self.head_dim
+            .unwrap_or_else(|| self.d_model.checked_div(self.n_heads).unwrap_or(self.d_model))
+    }
+
+    /// Query projection output width (`n_heads * head_dim`).
+    pub fn q_dim(&self) -> usize {
+        self.n_heads * self.effective_head_dim()
+    }
+
+    /// Key/value projection output width (`n_kv_heads * head_dim`).
+    pub fn kv_dim(&self) -> usize {
+        self.n_kv_heads * self.effective_head_dim()
+    }
 }
 
 /// Autoset presets accepted by `Chatbot(autoset=...)`.
@@ -55,6 +76,7 @@ fn solve_shape(param_budget: usize, vocab_size: usize) -> ModelShape {
         d_model: 64,
         n_heads: 1,
         n_kv_heads: 1,
+        head_dim: None,
         ffn_dim: 256,
         vocab_size,
         estimated_params: 0,
@@ -80,13 +102,15 @@ fn solve_shape(param_budget: usize, vocab_size: usize) -> ModelShape {
         let n_heads = (d_model / 64).max(1);
         let ffn_dim = d_model * 4;
         for &n_layer in layer_grid {
-            let params = estimate_params(n_layer, d_model, ffn_dim, vocab_size, n_heads, n_heads);
+            let params =
+                estimate_params(n_layer, d_model, ffn_dim, vocab_size, n_heads, n_heads, None);
             if params <= param_budget && params >= best.estimated_params {
                 best = ModelShape {
                     n_layer,
                     d_model,
                     n_heads,
                     n_kv_heads: n_heads,
+                    head_dim: None,
                     ffn_dim,
                     vocab_size,
                     estimated_params: params,
@@ -100,9 +124,10 @@ fn solve_shape(param_budget: usize, vocab_size: usize) -> ModelShape {
             d_model: 32,
             n_heads: 1,
             n_kv_heads: 1,
+            head_dim: None,
             ffn_dim: 128,
             vocab_size,
-            estimated_params: estimate_params(1, 32, 128, vocab_size, 1, 1),
+            estimated_params: estimate_params(1, 32, 128, vocab_size, 1, 1, None),
         };
     }
     best
@@ -115,11 +140,14 @@ pub fn estimate_params(
     vocab_size: usize,
     n_heads: usize,
     n_kv_heads: usize,
+    head_dim: Option<usize>,
 ) -> usize {
-    let head_dim = d_model.checked_div(n_heads).unwrap_or(d_model);
+    let head_dim = head_dim.unwrap_or_else(|| d_model.checked_div(n_heads).unwrap_or(d_model));
+    let q_dim = n_heads * head_dim;
     let kv_dim = n_kv_heads * head_dim;
     let embed = vocab_size * d_model;
-    let attn = 2 * d_model * d_model + 2 * kv_dim * d_model;
+    // q + k + v + out
+    let attn = d_model * q_dim + 2 * d_model * kv_dim + q_dim * d_model;
     let per_layer = attn + 2 * d_model * ffn_dim + 4 * d_model;
     embed * 2 + per_layer * n_layer
 }
@@ -150,5 +178,12 @@ mod tests {
             assert!(s.n_layer >= 1);
             assert!(s.d_model >= 16);
         }
+    }
+
+    #[test]
+    fn estimate_params_custom_head_dim_differs() {
+        let classic = estimate_params(1, 16, 64, 32, 4, 2, None);
+        let wide = estimate_params(1, 16, 64, 32, 4, 2, Some(8));
+        assert!(wide > classic);
     }
 }

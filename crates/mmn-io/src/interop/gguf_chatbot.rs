@@ -137,6 +137,30 @@ fn gguf_meta_to_mmn(file: &GgufFile, tensors: &HashMap<String, Tensor>) -> serde
     if let Some(n_kv) = meta_u64(file, &format!("{arch}.attention.head_count_kv")) {
         meta["num_key_value_heads"] = serde_json::json!(n_kv);
     }
+    // Qwen / modern GGUF: head_dim may differ from d_model / n_heads.
+    if let Some(key_len) = meta_u64(file, &format!("{arch}.attention.key_length")) {
+        meta["head_dim"] = serde_json::json!(key_len);
+    } else if let Some(val_len) = meta_u64(file, &format!("{arch}.attention.value_length")) {
+        meta["head_dim"] = serde_json::json!(val_len);
+    } else if let (Some(n_heads), Some(q)) = (
+        meta.get("num_attention_heads")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize),
+        tensors.get("blocks.0.attn.q"),
+    ) {
+        let shape = q.data.shape();
+        if shape.len() == 2 && n_heads > 0 && shape[0].is_multiple_of(n_heads) {
+            let inferred = shape[0] / n_heads;
+            let d_model = meta
+                .get("d_model")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(shape[1]);
+            if inferred != d_model / n_heads {
+                meta["head_dim"] = serde_json::json!(inferred);
+            }
+        }
+    }
     let rope_base = file
         .metadata
         .get(&format!("{arch}.rope.freq_base"))
@@ -274,6 +298,14 @@ fn chatbot_gguf_metadata(model: &Chatbot) -> Vec<(String, GgufValue)> {
         (
             "mmn.attention.head_count_kv".to_string(),
             GgufValue::U32(model.shape.n_kv_heads as u32),
+        ),
+        (
+            "mmn.attention.key_length".to_string(),
+            GgufValue::U32(model.shape.effective_head_dim() as u32),
+        ),
+        (
+            "mmn.attention.value_length".to_string(),
+            GgufValue::U32(model.shape.effective_head_dim() as u32),
         ),
         (
             "mmn.vocab_size".to_string(),
@@ -586,5 +618,94 @@ mod tests {
         assert_eq!(loaded.shape.n_kv_heads, model.shape.n_kv_heads);
         assert_eq!(loaded.shape.ffn_dim, model.shape.ffn_dim);
         let _ = fs::remove_file(&path);
+    }
+
+    /// Synthetic Qwen-style GGUF: d_model=8, n_heads=2, head_dim=8 → q [16, 8].
+    #[test]
+    fn import_gguf_custom_head_dim_from_key_length() {
+        let d_model = 8usize;
+        let n_heads = 2usize;
+        let n_kv_heads = 1usize;
+        let head_dim = 8usize;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv_heads * head_dim;
+        let vocab = 32usize;
+        let ffn_dim = 16usize;
+
+        let storages: Vec<(String, Vec<usize>, Vec<f32>)> = [
+            ("token_embd.weight", vec![vocab, d_model], 0.01),
+            ("output.weight", vec![vocab, d_model], 0.02),
+            ("blk.0.attn_q.weight", vec![q_dim, d_model], 0.03),
+            ("blk.0.attn_k.weight", vec![kv_dim, d_model], 0.04),
+            ("blk.0.attn_v.weight", vec![kv_dim, d_model], 0.05),
+            ("blk.0.attn_output.weight", vec![d_model, q_dim], 0.06),
+            ("blk.0.ffn_up.weight", vec![ffn_dim, d_model], 0.07),
+            ("blk.0.ffn_down.weight", vec![d_model, ffn_dim], 0.08),
+            ("blk.0.attn_norm.weight", vec![d_model], 1.0),
+            ("blk.0.ffn_norm.weight", vec![d_model], 1.0),
+        ]
+        .into_iter()
+        .map(|(name, shape, fill)| {
+            let n: usize = shape.iter().product();
+            (name.to_string(), shape, vec![fill; n])
+        })
+        .collect();
+        let tensors: Vec<GgufWriteTensor<'_>> = storages
+            .iter()
+            .map(|(name, shape, data)| GgufWriteTensor {
+                name: name.clone(),
+                shape: shape.clone(),
+                values: data.as_slice(),
+                ggml_type: GgmlType::F32,
+            })
+            .collect();
+
+        let meta = vec![
+            (
+                "general.architecture".to_string(),
+                GgufValue::String("qwen3".into()),
+            ),
+            (
+                "qwen3.embedding_length".to_string(),
+                GgufValue::U32(d_model as u32),
+            ),
+            ("qwen3.block_count".to_string(), GgufValue::U32(1)),
+            (
+                "qwen3.feed_forward_length".to_string(),
+                GgufValue::U32(ffn_dim as u32),
+            ),
+            (
+                "qwen3.attention.head_count".to_string(),
+                GgufValue::U32(n_heads as u32),
+            ),
+            (
+                "qwen3.attention.head_count_kv".to_string(),
+                GgufValue::U32(n_kv_heads as u32),
+            ),
+            (
+                "qwen3.attention.key_length".to_string(),
+                GgufValue::U32(head_dim as u32),
+            ),
+            (
+                "qwen3.attention.value_length".to_string(),
+                GgufValue::U32(head_dim as u32),
+            ),
+            ("qwen3.rope.freq_base".to_string(), GgufValue::F32(10_000.0)),
+        ];
+        let bytes = write_gguf(&meta, &tensors).unwrap();
+        let loaded = import_gguf_bytes(&bytes).unwrap();
+        assert_eq!(loaded.shape.d_model, d_model);
+        assert_eq!(loaded.shape.n_heads, n_heads);
+        assert_eq!(loaded.shape.n_kv_heads, n_kv_heads);
+        assert_eq!(loaded.shape.head_dim, Some(head_dim));
+        assert_eq!(loaded.blocks[0].attn.head_dim, head_dim);
+        assert_eq!(
+            loaded.blocks[0].attn.q_proj.weight.data.shape(),
+            &[q_dim, d_model]
+        );
+        assert_eq!(
+            loaded.blocks[0].attn.out_proj.weight.data.shape(),
+            &[d_model, q_dim]
+        );
     }
 }

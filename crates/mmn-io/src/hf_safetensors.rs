@@ -54,6 +54,11 @@ pub(crate) fn chatbot_meta_json(
         meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
         meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
     }
+    if let Some(hd) = model.shape.head_dim {
+        if hd != model.shape.d_model / model.shape.n_heads {
+            meta["head_dim"] = serde_json::json!(hd);
+        }
+    }
     if let Some(bpe_path) = tokenizer_sidecars.bpe {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
     }
@@ -215,6 +220,26 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
         .unwrap_or(n_heads);
+    let head_dim = meta
+        .get("head_dim")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .or_else(|| {
+            // Infer from Q projection when wider than d_model.
+            tensors.get("blocks.0.attn.q").and_then(|q| {
+                let shape = q.data.shape();
+                if shape.len() == 2 && n_heads > 0 && shape[0].is_multiple_of(n_heads) {
+                    let inferred = shape[0] / n_heads;
+                    if inferred != d_model / n_heads {
+                        Some(inferred)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+        });
     let vision = meta["vision"].as_bool().unwrap_or(false);
     let init_seed = meta["seed"].as_u64();
     let use_learned_pos_embed = meta["use_learned_pos_embed"].as_bool().unwrap_or(false);
@@ -228,7 +253,7 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
 
     fill_missing_block_layernorm_defaults(&mut tensors, n_layer, d_model);
     let json_tensors = tensors_to_entry_map(&tensors);
-    let mut model = Chatbot::new_with_position_and_ffn(
+    let mut model = Chatbot::new_with_arch(
         vision,
         None,
         vocab_size,
@@ -237,11 +262,13 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         Some(ffn_dim),
         Some(n_heads),
         Some(n_kv_heads),
+        head_dim,
         init_seed,
         use_learned_pos_embed,
         max_seq_len,
         use_rope,
         rope_theta,
+        mmn_models::ChatbotArchExtras::default(),
     );
     model.embed.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "embed")?)?;
     model.lm_head.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "lm_head")?)?;

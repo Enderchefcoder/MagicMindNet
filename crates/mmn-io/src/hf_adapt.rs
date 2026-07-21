@@ -191,14 +191,11 @@ fn infer_ffn_dim_meta(tensors: &HashMap<String, Tensor>, meta: &mut serde_json::
     }
 }
 
-/// Record grouped-query head counts in meta from checkpoint tensor shapes (no KV expansion).
+/// Record grouped-query head counts / head_dim in meta from checkpoint tensor shapes.
 fn ensure_gqa_meta(
     tensors: &HashMap<String, Tensor>,
     meta: &mut serde_json::Value,
 ) -> Result<(), MmnError> {
-    if meta.get("num_attention_heads").is_some() && meta.get("num_key_value_heads").is_some() {
-        return Ok(());
-    }
     let q = tensors.get("blocks.0.attn.q");
     let k = tensors.get("blocks.0.attn.k");
     let Some((q, k)) = q.zip(k) else {
@@ -206,18 +203,54 @@ fn ensure_gqa_meta(
     };
     let q_shape: Vec<usize> = q.data.shape().to_vec();
     let k_shape: Vec<usize> = k.data.shape().to_vec();
-    if q_shape.len() != 2 || k_shape.len() != 2 || q_shape[0] != q_shape[1] {
+    if q_shape.len() != 2 || k_shape.len() != 2 {
         return Ok(());
     }
-    let d_model = q_shape[0];
+    // Linear weights are [out, in]: q [n_heads*head_dim, d_model], k [n_kv*head_dim, d_model].
+    let d_model = q_shape[1];
     if k_shape[1] != d_model {
         return Ok(());
     }
+    let q_dim = q_shape[0];
     let kv_dim = k_shape[0];
-    if kv_dim >= d_model {
+
+    // Prefer explicit head_dim from meta / config.
+    if meta.get("head_dim").is_none() {
+        if let Some(n_heads) = meta
+            .get("num_attention_heads")
+            .or_else(|| meta.get("n_heads"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+        {
+            if n_heads > 0 && q_dim.is_multiple_of(n_heads) {
+                let inferred = q_dim / n_heads;
+                if inferred != d_model / n_heads {
+                    meta["head_dim"] = serde_json::json!(inferred);
+                }
+            }
+        }
+    }
+
+    if meta.get("num_attention_heads").is_some() && meta.get("num_key_value_heads").is_some() {
         return Ok(());
     }
-    let Some((_, n_heads, n_kv_heads)) = gqa_dims_from_meta_or_guess(meta, d_model, kv_dim) else {
+
+    let head_dim = meta
+        .get("head_dim")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .or_else(|| {
+            if q_dim == d_model && d_model > 0 {
+                // Classic square Q: guess from d_model.
+                None
+            } else {
+                None
+            }
+        });
+
+    let Some((_, n_heads, n_kv_heads)) =
+        gqa_dims_from_meta_or_guess(meta, d_model, q_dim, kv_dim, head_dim)
+    else {
         return Ok(());
     };
     if meta.get("num_attention_heads").is_none() {
@@ -232,7 +265,9 @@ fn ensure_gqa_meta(
 fn gqa_dims_from_meta_or_guess(
     meta: &serde_json::Value,
     d_model: usize,
+    q_dim: usize,
     kv_dim: usize,
+    head_dim_hint: Option<usize>,
 ) -> Option<(usize, usize, usize)> {
     if let (Some(n_heads), Some(n_kv)) = (
         meta.get("num_attention_heads")
@@ -244,9 +279,21 @@ fn gqa_dims_from_meta_or_guess(
     ) {
         let n_heads = n_heads as usize;
         let n_kv_heads = n_kv as usize;
-        if n_heads > 0 && n_kv_heads > 0 && d_model.is_multiple_of(n_heads) {
-            let head_dim = d_model / n_heads;
-            if kv_dim == n_kv_heads * head_dim {
+        if n_heads > 0 && n_kv_heads > 0 {
+            let head_dim = head_dim_hint
+                .or_else(|| {
+                    meta.get("head_dim")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as usize)
+                })
+                .unwrap_or_else(|| {
+                    if q_dim.is_multiple_of(n_heads) {
+                        q_dim / n_heads
+                    } else {
+                        d_model / n_heads
+                    }
+                });
+            if q_dim == n_heads * head_dim && kv_dim == n_kv_heads * head_dim {
                 return Some((head_dim, n_heads, n_kv_heads));
             }
         }
@@ -257,8 +304,8 @@ fn gqa_dims_from_meta_or_guess(
         .and_then(|v| v.as_u64())
     {
         let n_heads = n_heads as usize;
-        if n_heads > 0 && d_model.is_multiple_of(n_heads) {
-            let head_dim = d_model / n_heads;
+        if n_heads > 0 && q_dim.is_multiple_of(n_heads) {
+            let head_dim = q_dim / n_heads;
             if kv_dim.is_multiple_of(head_dim) {
                 let n_kv_heads = kv_dim / head_dim;
                 if n_heads.is_multiple_of(n_kv_heads) && n_heads >= n_kv_heads {
@@ -267,7 +314,12 @@ fn gqa_dims_from_meta_or_guess(
             }
         }
     }
-    guess_gqa_dims(d_model, kv_dim)
+    // Classic square-Q GQA guess (head_dim = d_model / n_heads).
+    if q_dim == d_model {
+        return guess_gqa_dims(d_model, kv_dim);
+    }
+    // Non-square Q: try divisors of both q_dim and kv_dim.
+    guess_gqa_dims_wide(q_dim, kv_dim)
 }
 
 fn guess_gqa_dims(d_model: usize, kv_dim: usize) -> Option<(usize, usize, usize)> {
@@ -278,10 +330,30 @@ fn guess_gqa_dims(d_model: usize, kv_dim: usize) -> Option<(usize, usize, usize)
         }
         let n_heads = d_model / head_dim;
         let n_kv_heads = kv_dim / head_dim;
-        if n_heads.is_multiple_of(n_kv_heads) && n_heads >= n_kv_heads
-            && best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true) {
-                best = Some((head_dim, n_heads, n_kv_heads));
-            }
+        if n_heads.is_multiple_of(n_kv_heads)
+            && n_heads >= n_kv_heads
+            && best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true)
+        {
+            best = Some((head_dim, n_heads, n_kv_heads));
+        }
+    }
+    best
+}
+
+fn guess_gqa_dims_wide(q_dim: usize, kv_dim: usize) -> Option<(usize, usize, usize)> {
+    let mut best: Option<(usize, usize, usize)> = None;
+    for head_dim in 1..=q_dim.min(kv_dim) {
+        if !q_dim.is_multiple_of(head_dim) || !kv_dim.is_multiple_of(head_dim) {
+            continue;
+        }
+        let n_heads = q_dim / head_dim;
+        let n_kv_heads = kv_dim / head_dim;
+        if n_heads.is_multiple_of(n_kv_heads)
+            && n_heads >= n_kv_heads
+            && best.map(|(hd, _, _)| head_dim > hd).unwrap_or(true)
+        {
+            best = Some((head_dim, n_heads, n_kv_heads));
+        }
     }
     best
 }
@@ -367,7 +439,19 @@ mod tests {
             "num_attention_heads": 8,
             "num_key_value_heads": 2,
         });
-        let (hd, nh, nkv) = gqa_dims_from_meta_or_guess(&meta, 512, 128).unwrap();
+        let (hd, nh, nkv) = gqa_dims_from_meta_or_guess(&meta, 512, 512, 128, None).unwrap();
         assert_eq!((hd, nh, nkv), (64, 8, 2));
+    }
+
+    #[test]
+    fn gqa_dims_custom_head_dim_from_q_width() {
+        let meta = serde_json::json!({
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "head_dim": 8,
+        });
+        // d_model=8, q_dim=16 (=2*8), kv_dim=8
+        let (hd, nh, nkv) = gqa_dims_from_meta_or_guess(&meta, 8, 16, 8, Some(8)).unwrap();
+        assert_eq!((hd, nh, nkv), (8, 2, 1));
     }
 }

@@ -113,6 +113,7 @@ impl PyChatbot {
         rope_theta=10000.0,
         n_heads=None,
         n_kv_heads=None,
+        head_dim=None,
         ffn_dim=None,
         n_loops=1,
         tie_embeddings=false,
@@ -134,6 +135,7 @@ impl PyChatbot {
         rope_theta: f32,
         n_heads: Option<usize>,
         n_kv_heads: Option<usize>,
+        head_dim: Option<usize>,
         ffn_dim: Option<usize>,
         n_loops: usize,
         tie_embeddings: bool,
@@ -191,6 +193,7 @@ impl PyChatbot {
                 ffn_dim,
                 n_heads,
                 n_kv_heads,
+                head_dim,
                 seed,
                 use_learned_pos_embed,
                 max_seq_len,
@@ -408,6 +411,11 @@ impl PyChatbot {
     #[getter]
     fn n_kv_heads(&self) -> usize {
         self.inner.shape.n_kv_heads
+    }
+
+    #[getter]
+    fn head_dim(&self) -> usize {
+        self.inner.shape.effective_head_dim()
     }
 
     #[getter]

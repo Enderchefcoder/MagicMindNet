@@ -45,6 +45,11 @@ pub fn export_safetensors<'a>(
         "n_heads": model.shape.n_heads,
         "vision": model.vision,
     });
+    if let Some(hd) = model.shape.head_dim {
+        if hd != model.shape.d_model / model.shape.n_heads {
+            meta["head_dim"] = serde_json::json!(hd);
+        }
+    }
     if model.n_loops != 1 {
         meta["n_loops"] = serde_json::json!(model.n_loops);
     }
@@ -117,6 +122,11 @@ pub fn export_safetensors<'a>(
         meta["num_attention_heads"] = serde_json::json!(model.shape.n_heads);
         meta["num_key_value_heads"] = serde_json::json!(model.shape.n_kv_heads);
     }
+    if let Some(hd) = model.shape.head_dim {
+        if hd != model.shape.d_model / model.shape.n_heads {
+            meta["head_dim"] = serde_json::json!(hd);
+        }
+    }
     if let Some(bpe_path) = tokenizer_sidecars.bpe {
         meta["bpe_checkpoint"] = serde_json::json!(bpe_path);
     }
@@ -182,6 +192,7 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         .or_else(|| meta.get("num_key_value_heads"))
         .and_then(|v| v.as_u64())
         .map(|v| v as usize);
+    let head_dim = meta.get("head_dim").and_then(|v| v.as_u64()).map(|v| v as usize);
     let ffn_dim = meta["ffn_dim"].as_u64().map(|n| n as usize);
     let extras = arch_extras_from_meta(meta);
     let mut model = Chatbot::new_with_arch(
@@ -193,6 +204,7 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         ffn_dim,
         n_heads,
         n_kv_heads,
+        head_dim,
         init_seed,
         use_learned_pos_embed,
         max_seq_len,
@@ -311,6 +323,7 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         || a.shape.n_layer != b.shape.n_layer
         || a.shape.n_heads != b.shape.n_heads
         || a.shape.n_kv_heads != b.shape.n_kv_heads
+        || a.shape.effective_head_dim() != b.shape.effective_head_dim()
     {
         return Err(MmnError::ModelMismatch {
             message: "Cannot merge models of different sizes".into(),
@@ -359,6 +372,7 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         Some(a.shape.ffn_dim),
         Some(a.shape.n_heads),
         Some(a.shape.n_kv_heads),
+        a.shape.head_dim,
         a.init_seed.or(b.init_seed),
         a.use_learned_pos_embed,
         a.max_seq_len,
@@ -511,6 +525,11 @@ pub fn export_bin(model: &Chatbot, path: &str) -> Result<(), MmnError> {
         "ffn_dim": model.shape.ffn_dim,
         "vision": model.vision,
     });
+    if let Some(hd) = model.shape.head_dim {
+        if hd != model.shape.d_model / model.shape.n_heads {
+            json["head_dim"] = serde_json::json!(hd);
+        }
+    }
     if model.vision {
         json["vision_patch_dim"] = serde_json::json!(mmn_models::VISION_PATCH_DIM);
         json["vision_rgb_dim"] = serde_json::json!(mmn_models::VISION_RGB_DIM);
@@ -580,6 +599,7 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
         .or_else(|| v.get("num_key_value_heads"))
         .and_then(|m| m.as_u64())
         .map(|n| n as usize);
+    let head_dim = v.get("head_dim").and_then(|m| m.as_u64()).map(|n| n as usize);
     let ffn_dim = v["ffn_dim"].as_u64().map(|n| n as usize);
     let vision = v["vision"].as_bool().unwrap_or(false);
     let use_learned_pos_embed = v["use_learned_pos_embed"].as_bool().unwrap_or(false);
@@ -600,6 +620,7 @@ pub fn import_bin(path: &str) -> Result<Chatbot, MmnError> {
         ffn_dim,
         n_heads,
         n_kv_heads,
+        head_dim,
         None,
         use_learned_pos_embed,
         max_seq_len,
@@ -640,6 +661,7 @@ mod tests {
             Some(32),
             Some(4),
             Some(4),
+            None,
             Some(0),
             false,
             64,
