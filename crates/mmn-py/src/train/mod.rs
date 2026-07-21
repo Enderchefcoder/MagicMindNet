@@ -12,7 +12,7 @@ use crate::datasets::{PyDatasetClassification, PyDatasetCorpus, PyDatasetQA};
 use crate::encoder_util::resolve_text_encoder;
 use crate::errors::{mmn_err_to_py, DataMismatchError};
 use crate::models::{PyChatbot, PyClassifier, PyDiffusion};
-use crate::tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
+use crate::tokenizer::{PyBytePairEncoder, PyGpt2BpeEncoder, PyUnigramEncoder};
 use crate::train_config::PyTrainConfig;
 
 /// Flush Python's buffered stdout so Rust-side progress lines appear in order.
@@ -88,15 +88,16 @@ pub(crate) fn train_diffusion_dispatch(
 
 /// Train `model` on `dataset` and return one mean-loss value per epoch.
 #[pyfunction]
-#[pyo3(signature = (model, dataset, config, bpe_encoder=None, unigram_encoder=None))]
+#[pyo3(signature = (model, dataset, config, bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None))]
 pub fn Train(
     model: &mut PyChatbot,
     dataset: &Bound<'_, PyAny>,
     config: &PyTrainConfig,
     bpe_encoder: Option<&PyBytePairEncoder>,
     unigram_encoder: Option<&PyUnigramEncoder>,
+    gpt2_encoder: Option<&PyGpt2BpeEncoder>,
 ) -> PyResult<Vec<f32>> {
-    let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+    let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
     train_chatbot_dispatch(model, dataset, &config.to_train_config(), enc)
 }
 
@@ -121,7 +122,7 @@ pub fn TrainDiffusion(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, dataset, train_config, reward_amount, punishment_amount, rl_type="policy", bpe_encoder=None, unigram_encoder=None))]
+#[pyo3(signature = (model, dataset, train_config, reward_amount, punishment_amount, rl_type="policy", bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn RL(
     model: &mut PyChatbot,
@@ -132,8 +133,9 @@ pub fn RL(
     rl_type: &str,
     bpe_encoder: Option<&PyBytePairEncoder>,
     unigram_encoder: Option<&PyUnigramEncoder>,
+    gpt2_encoder: Option<&PyGpt2BpeEncoder>,
 ) -> PyResult<()> {
-    let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+    let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
     if let Ok(ds) = dataset.downcast::<PyDatasetQA>() {
         rl_with_encoder(
             &mut model.inner,
@@ -153,15 +155,16 @@ pub fn RL(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, selfplay_epochs, dataset, bpe_encoder=None, unigram_encoder=None))]
+#[pyo3(signature = (model, selfplay_epochs, dataset, bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None))]
 pub fn SPIN(
     model: &mut PyChatbot,
     selfplay_epochs: usize,
     dataset: &Bound<'_, PyAny>,
     bpe_encoder: Option<&PyBytePairEncoder>,
     unigram_encoder: Option<&PyUnigramEncoder>,
+    gpt2_encoder: Option<&PyGpt2BpeEncoder>,
 ) -> PyResult<()> {
-    let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+    let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
     if let Ok(ds) = dataset.downcast::<PyDatasetQA>() {
         spin_with_encoder(
             &mut model.inner,

@@ -1,4 +1,4 @@
-use crate::block_tensors::{export_block_tensors, import_block_tensors};
+use crate::block_tensors::{export_block_tensors, export_named_block_list, import_block_tensors, import_named_block_list};
 use crate::checkpoint_util::{
     expect_tensor_shape, optional_tensor_entry, quantize_tensor, require_tensor_entry,
     tensor_from_entry, tensor_to_entry, write_file_create_parents, TensorMap,
@@ -52,6 +52,20 @@ pub fn export_safetensors<'a>(
     }
     if model.n_loops != 1 {
         meta["n_loops"] = serde_json::json!(model.n_loops);
+    }
+    if model.max_loops != model.n_loops {
+        meta["max_loops"] = serde_json::json!(model.max_loops);
+    }
+    if !model.prelude_blocks.is_empty() {
+        meta["prelude_layers"] = serde_json::json!(model.prelude_blocks.len());
+        export_named_block_list(&model.prelude_blocks, "prelude", &mut map);
+    }
+    if !model.coda_blocks.is_empty() {
+        meta["coda_layers"] = serde_json::json!(model.coda_blocks.len());
+        export_named_block_list(&model.coda_blocks, "coda", &mut map);
+    }
+    if let Some(w) = model.attention_window {
+        meta["attention_window"] = serde_json::json!(w);
     }
     if model.tie_embeddings {
         meta["tie_embeddings"] = serde_json::json!(true);
@@ -242,7 +256,7 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
     }
     if let Some(le) = model.loop_embed.as_mut() {
         le.weight = tensor_from_entry(require_tensor_entry(tensors, "loop_embed.weight")?)?;
-        expect_tensor_shape(&le.weight, &[model.n_loops, d_model], "loop_embed.weight")?;
+        expect_tensor_shape(&le.weight, &[model.max_loops, d_model], "loop_embed.weight")?;
     }
     if let Some(fnorm) = model.final_norm.as_mut() {
         fnorm.gamma = tensor_from_entry(require_tensor_entry(tensors, "final_norm.gamma")?)?;
@@ -347,11 +361,43 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         }
     }
     import_block_tensors(&mut model, tensors)?;
+    // Import prelude and coda blocks if present
+    if !model.prelude_blocks.is_empty() {
+        import_named_block_list(
+            &mut model.prelude_blocks,
+            "prelude",
+            tensors,
+            d_model,
+            model.shape.ffn_dim,
+            model.shape.q_dim(),
+            model.shape.kv_dim(),
+            model.norm_kind == "rms",
+        )?;
+        for block in &mut model.prelude_blocks {
+            block.attn.attention_window = model.attention_window;
+        }
+    }
+    if !model.coda_blocks.is_empty() {
+        import_named_block_list(
+            &mut model.coda_blocks,
+            "coda",
+            tensors,
+            d_model,
+            model.shape.ffn_dim,
+            model.shape.q_dim(),
+            model.shape.kv_dim(),
+            model.norm_kind == "rms",
+        )?;
+        for block in &mut model.coda_blocks {
+            block.attn.attention_window = model.attention_window;
+        }
+    }
     Ok(model)
 }
 
 fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
     let n_loops = meta["n_loops"].as_u64().unwrap_or(1) as usize;
+    let max_loops = meta.get("max_loops").and_then(|v| v.as_u64()).map(|v| v as usize);
     let tie_embeddings = meta["tie_embeddings"].as_bool().unwrap_or(false);
     let norm = meta["norm"].as_str().unwrap_or("layer");
     let ffn = meta
@@ -362,6 +408,9 @@ fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
     let loop_embed = meta["loop_embed"].as_bool().unwrap_or(false);
     let final_norm = meta["final_norm"].as_bool().unwrap_or(false);
     let lora_rank = meta["lora_rank"].as_u64().unwrap_or(0) as usize;
+    let prelude_layers = meta.get("prelude_layers").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let coda_layers = meta.get("coda_layers").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let attention_window = meta.get("attention_window").and_then(|v| v.as_u64()).map(|v| v as usize);
     ChatbotArchExtras {
         n_loops: n_loops.max(1),
         tie_embeddings,
@@ -370,6 +419,10 @@ fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
         loop_embed: loop_embed && n_loops > 1,
         final_norm,
         lora_rank,
+        prelude_layers,
+        coda_layers,
+        max_loops,
+        attention_window,
     }
 }
 
@@ -422,6 +475,10 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         loop_embed: a.loop_embed.is_some(),
         final_norm: a.final_norm.is_some(),
         lora_rank: a.loop_lora.as_ref().map(|l| l.rank).unwrap_or(0),
+        prelude_layers: a.prelude_blocks.len(),
+        coda_layers: a.coda_blocks.len(),
+        max_loops: Some(a.max_loops),
+        attention_window: a.attention_window,
     };
     let mut out = Chatbot::new_with_arch(
         a.vision || b.vision,

@@ -206,6 +206,10 @@ class Chatbot:
         loop_embed: bool = False,
         final_norm: bool = False,
         lora_rank: int = 0,
+        coda_layers: int = 0,
+        prelude_layers: int = 0,
+        max_loops: int | None = None,
+        attention_window: int | None = None,
     ) -> None: ...
     @property
     def parameters(self) -> int: ...
@@ -265,6 +269,14 @@ class Chatbot:
     def final_norm(self) -> bool: ...
     @property
     def lora_rank(self) -> int: ...
+    @property
+    def coda_layers(self) -> int: ...
+    @property
+    def prelude_layers(self) -> int: ...
+    @property
+    def max_loops(self) -> int: ...
+    @property
+    def attention_window(self) -> int | None: ...
     def save(
         self,
         path: str,
@@ -287,6 +299,7 @@ class Chatbot:
         verbose: bool | None = None,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
     ) -> list[float]: ...
     def chat(
         self,
@@ -300,6 +313,7 @@ class Chatbot:
         stop_strings: list[str] | None = None,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
     ) -> str: ...
     def compute_loss(
         self,
@@ -307,6 +321,7 @@ class Chatbot:
         target: str,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
         image_patch: list[float] | None = None,
         image_patches: list[list[float]] | None = None,
     ) -> float: ...
@@ -315,6 +330,7 @@ class Chatbot:
         dataset: DatasetQA | DatasetCorpus,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
     ) -> float: ...
     def generate(
         self,
@@ -335,6 +351,7 @@ class Chatbot:
         use_kv_cache: bool = True,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
         image_patch: list[float] | None = None,
         image_patches: list[list[float]] | None = None,
         stop_token_ids: list[int] | None = None,
@@ -361,6 +378,7 @@ class Chatbot:
         use_kv_cache: bool = True,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
         image_patch: list[float] | None = None,
         image_patches: list[list[float]] | None = None,
         stop_token_ids: list[int] | None = None,
@@ -387,6 +405,7 @@ class Chatbot:
         use_kv_cache: bool = True,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
         image_patch: list[float] | None = None,
         image_patches: list[list[float]] | None = None,
         stop_token_ids: list[int] | None = None,
@@ -400,6 +419,7 @@ class Chatbot:
         *,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
     ) -> list[float] | list[list[float]]: ...
     def chat_messages(
         self,
@@ -420,6 +440,7 @@ class Chatbot:
         use_kv_cache: bool = True,
         bpe_encoder: BytePairEncoder | None = None,
         unigram_encoder: UnigramEncoder | None = None,
+        gpt2_encoder: Gpt2BpeEncoder | None = None,
         stop_token_ids: list[int] | None = None,
         stop_strings: list[str] | None = None,
         json_mode: bool = False,
@@ -520,6 +541,7 @@ def Train(
     config: TrainConfig,
     bpe_encoder: BytePairEncoder | None = None,
     unigram_encoder: UnigramEncoder | None = None,
+    gpt2_encoder: Gpt2BpeEncoder | None = None,
 ) -> list[float]: ...
 def TrainClassifier(
     model: Classifier, dataset: DatasetClassification, config: TrainConfig
@@ -536,6 +558,7 @@ def RL(
     rl_type: str = "policy",
     bpe_encoder: BytePairEncoder | None = None,
     unigram_encoder: UnigramEncoder | None = None,
+    gpt2_encoder: Gpt2BpeEncoder | None = None,
 ) -> None: ...
 def SPIN(
     model: Chatbot,
@@ -543,6 +566,7 @@ def SPIN(
     dataset: DatasetQA,
     bpe_encoder: BytePairEncoder | None = None,
     unigram_encoder: UnigramEncoder | None = None,
+    gpt2_encoder: Gpt2BpeEncoder | None = None,
 ) -> None: ...
 
 # ---------------------------------------------------------------------------
@@ -632,11 +656,14 @@ def dequantize_ggml(type_name: str, data: list[int], numel: int) -> list[float]:
 class Gpt2BpeEncoder:
     @staticmethod
     def from_vocab(tokens: list[str], merges: list[str] = []) -> Gpt2BpeEncoder: ...
+    @staticmethod
+    def from_hf_tokenizer_json(path: str) -> Gpt2BpeEncoder: ...
     def encode(self, text: str) -> list[int]: ...
     def decode(self, ids: list[int]) -> str: ...
     def token(self, id: int) -> str: ...
     @property
     def vocab_size(self) -> int: ...
+    def __repr__(self) -> str: ...
 
 # ---------------------------------------------------------------------------
 # Resources & vision helpers

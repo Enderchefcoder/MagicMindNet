@@ -1201,6 +1201,9 @@ pub struct MultiHeadAttention {
     pub causal: bool,
     /// When set, apply rotary position embedding to Q/K after projection.
     pub rope_theta: Option<f32>,
+    /// Sliding attention window: queries only attend to keys within this distance.
+    /// `Some(w)` masks out keys where `query_pos - key_pos >= w`.
+    pub attention_window: Option<usize>,
     pub q_proj: Linear,
     pub k_proj: Linear,
     pub v_proj: Linear,
@@ -1286,6 +1289,7 @@ impl MultiHeadAttention {
             head_dim,
             causal,
             rope_theta,
+            attention_window: None,
             q_proj: Linear::new_rng(d_model, q_dim, rng),
             k_proj: Linear::new_rng(d_model, kv_dim, rng),
             v_proj: Linear::new_rng(d_model, kv_dim, rng),
@@ -1316,13 +1320,14 @@ impl MultiHeadAttention {
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let (q, k, v, _, _) = self.project_qkv(x, None)?;
-        let (merged, _) = scaled_dot_product_attention_with_cache(
+        let (merged, _) = sdp_windowed_with_cache(
             &q,
             &k,
             &v,
             self.n_heads,
             self.n_kv_heads,
             self.causal,
+            self.attention_window,
         )?;
         self.out_proj.forward(&merged)
     }
@@ -1358,13 +1363,14 @@ impl MultiHeadAttention {
         SdpAttentionCache,
     )> {
         let (q, k, v, q_lin, k_lin) = self.project_qkv(x, deltas)?;
-        let (merged, sdp) = scaled_dot_product_attention_with_cache(
+        let (merged, sdp) = sdp_windowed_with_cache(
             &q,
             &k,
             &v,
             self.n_heads,
             self.n_kv_heads,
             self.causal,
+            self.attention_window,
         )?;
         let out = self.out_proj.forward(&merged)?;
         Ok((out, q, k, v, merged, q_lin, k_lin, sdp))
@@ -1674,27 +1680,15 @@ pub struct SdpAttentionCache {
     pub weights: Vec<Vec<Vec<f32>>>,
 }
 
-/// Self-attention over sequence rows of `q` `[seq_len, d_model]`, `k`/`v` `[seq_len, kv_dim]`.
-pub fn scaled_dot_product_attention(
+/// Internal helper: SDP with optional attention window (windowed causal masking).
+fn sdp_windowed_with_cache(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
     n_heads: usize,
     n_kv_heads: usize,
     causal: bool,
-) -> Result<Tensor> {
-    let (out, _) =
-        scaled_dot_product_attention_with_cache(q, k, v, n_heads, n_kv_heads, causal)?;
-    Ok(out)
-}
-
-pub fn scaled_dot_product_attention_with_cache(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    n_heads: usize,
-    n_kv_heads: usize,
-    causal: bool,
+    window: Option<usize>,
 ) -> Result<(Tensor, SdpAttentionCache)> {
     if q.shape.len() != 2 || k.shape.len() != 2 || v.shape.len() != 2 {
         return Err(MmnError::Shape {
@@ -1736,7 +1730,9 @@ pub fn scaled_dot_product_attention_with_cache(
         for s in 0..seq {
             let mut scores = vec![0.0f32; seq];
             for t in 0..seq {
-                if causal && t > s {
+                let masked = (causal && t > s)
+                    || window.is_some_and(|w| s + 1 > w && t + w <= s);
+                if masked {
                     scores[t] = f32::NEG_INFINITY;
                     continue;
                 }
@@ -1746,10 +1742,7 @@ pub fn scaled_dot_product_attention_with_cache(
                 }
                 scores[t] = dot * scale;
             }
-            let max = scores
-                .iter()
-                .copied()
-                .fold(f32::NEG_INFINITY, f32::max);
+            let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let mut row_weights: Vec<f32> = scores.iter().map(|&x| (x - max).exp()).collect();
             let sum: f32 = row_weights.iter().sum();
             if sum > 0.0 {
@@ -1775,6 +1768,31 @@ pub fn scaled_dot_product_attention_with_cache(
         ),
         SdpAttentionCache { weights },
     ))
+}
+
+/// Self-attention over sequence rows of `q` `[seq_len, d_model]`, `k`/`v` `[seq_len, kv_dim]`.
+pub fn scaled_dot_product_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    n_heads: usize,
+    n_kv_heads: usize,
+    causal: bool,
+) -> Result<Tensor> {
+    let (out, _) =
+        scaled_dot_product_attention_with_cache(q, k, v, n_heads, n_kv_heads, causal)?;
+    Ok(out)
+}
+
+pub fn scaled_dot_product_attention_with_cache(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    n_heads: usize,
+    n_kv_heads: usize,
+    causal: bool,
+) -> Result<(Tensor, SdpAttentionCache)> {
+    sdp_windowed_with_cache(q, k, v, n_heads, n_kv_heads, causal, None)
 }
 
 /// Backward through scaled dot-product attention (forward must have saved `cache`).

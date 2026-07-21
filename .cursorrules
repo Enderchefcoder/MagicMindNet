@@ -49,6 +49,8 @@
 - `json_mode` constrained decode is seed-sensitive; eval/smoke tasks should fix seed + `temperature=0.0` (keep out of default smoke if flaky).
 - Never commit PyPI API tokens; publish via `MATURIN_PYPI_TOKEN` / `TWINE_PASSWORD` env only and revoke the token after upload.
 - Docs site charts need local HTTP (`python -m http.server -d docs/site`) — `file://` often blocks `fetch` of JSON.
+- Glint-2 `loop_embed` / LoopLoRA tables are sized by `max_loops` (16), while forward iterates `n_loops` (8); IO shape checks must use `max_loops`, not `n_loops`.
+- Glint-2 exact MMN train: `examples/train_glint2.py` — FineWeb-Edu stream + official `tokenizer.json` via `Gpt2BpeEncoder.from_hf_tokenizer_json` + `gpt2_encoder=` on Train (no torch).
 
 # Scratchpad
 
@@ -418,7 +420,14 @@ example-only benches as the canonical API while keeping examples as thin demos.
 
 [X] Waves 1–3 + verify_gate (see prior scratchpad)
 
-## Task: 0.2.0 prod — PyPI, docs site, README pip-first
+## Task: Glint-2 exact parity (MMN-only train)
+
+[X] coda_layers / prelude_layers / max_loops / attention_window
+[X] Gpt2BpeEncoder in Train/generate (`gpt2_encoder=`) + from_hf_tokenizer_json
+[X] examples/train_glint2.py + generate_glint2.py (FineWeb-Edu, official tokenizer)
+[X] tests: test_glint2_exact_py, test_gpt2_train_encoder_py, test_train_glint2_example_py
+[ ] commit + push + PR update
+
 
 Goal: ship MagicMindNet as a production pip package on PyPI, professional
 docs site (HTML/CSS/charts), hub/examples polish, README as one install story.
