@@ -183,7 +183,7 @@ pip install magicmindnet
 pip install "magicmindnet[hub]"   # transformers / diffusers / modelscope
 ```
 
-Package metadata: version **0.2.0**, console scripts `mmn-serve` and `mmn-eval`, typed stubs (`py.typed`).
+Package metadata: version **0.2.1**, console scripts `mmn-serve` and `mmn-eval`, typed stubs (`py.typed`).
 
 ### Editable / from source
 
