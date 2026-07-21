@@ -19,7 +19,7 @@ MODEL_CLASSES = [ai.Chatbot, ai.Classifier, ai.Diffusion]
 
 def test_version_exported():
     assert "__version__" in ai.__all__
-    assert ai.__version__ == "0.2.0"
+    assert ai.__version__ == "0.2.1"
 
 
 @pytest.mark.parametrize("name", ai.__all__)

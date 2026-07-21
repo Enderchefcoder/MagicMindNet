@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "magicmindnet"
-version = "0.2.0"
+version = "0.2.1"
 description = "Production-ready beginner-friendly AI library: train chatbots, classifiers, and diffusion models with a from-scratch Rust core. Hub load (HF/ModelScope/Ollama), GGUF, OpenAI-compatible server, eval harness."
 readme = "README.md"
 license = "GPL-3.0-or-later"

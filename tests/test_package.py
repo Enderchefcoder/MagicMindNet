@@ -4,7 +4,7 @@ import magicmindnet as ai
 
 
 def test_version():
-    assert ai.__version__ == "0.2.0"
+    assert ai.__version__ == "0.2.1"
 
 
 def test_public_train_api_names():
