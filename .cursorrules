@@ -356,3 +356,11 @@ Private train+infer scripts — DO NOT COMMIT; final answer only.
 [ ] CI fixtures + optional network tests
 [ ] verify_gate + push PR
 
+## Task: Optional head_dim for Qwen-style GGUF/HF
+
+[X] MultiHeadAttention/TransformerBlock optional head_dim
+[X] ModelShape.head_dim + Chatbot/Python getter/ctor
+[X] GGUF key_length/value_length + Q-shape inference
+[X] HF/safetensors shape validation (q/k/v/out)
+[X] Rust + pytest synthetic; Qwen3-0.6B-Q8_0.gguf hands-on load+generate
+
