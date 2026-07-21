@@ -467,6 +467,43 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
             explanation: "merge() requires matching loop/norm/FFN/tie/LoRA configuration.".into(),
         });
     }
+    if a.prelude_blocks.len() != b.prelude_blocks.len()
+        || a.coda_blocks.len() != b.coda_blocks.len()
+    {
+        return Err(MmnError::ModelMismatch {
+            message: format!(
+                "Cannot merge models with different prelude/coda layers \
+                 (a: prelude={}, coda={}; b: prelude={}, coda={})",
+                a.prelude_blocks.len(),
+                a.coda_blocks.len(),
+                b.prelude_blocks.len(),
+                b.coda_blocks.len(),
+            ),
+            fix: "Use two models with the same prelude_layers and coda_layers.".into(),
+            explanation: "merge() requires matching Glint-2 prelude/coda block counts.".into(),
+        });
+    }
+    if a.max_loops != b.max_loops {
+        return Err(MmnError::ModelMismatch {
+            message: format!(
+                "Cannot merge models with different max_loops (a={}, b={})",
+                a.max_loops, b.max_loops
+            ),
+            fix: "Use two models with the same max_loops.".into(),
+            explanation: "merge() requires matching max_loops capacity for loop_embed/LoRA tables."
+                .into(),
+        });
+    }
+    if a.attention_window != b.attention_window {
+        return Err(MmnError::ModelMismatch {
+            message: format!(
+                "Cannot merge models with different attention_window (a={:?}, b={:?})",
+                a.attention_window, b.attention_window
+            ),
+            fix: "Use two models with the same attention_window.".into(),
+            explanation: "merge() requires matching sliding window configuration.".into(),
+        });
+    }
     let extras = ChatbotArchExtras {
         n_loops: a.n_loops,
         tie_embeddings: a.tie_embeddings,
@@ -573,6 +610,46 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         block.ln2.gamma = average_tensors(&ab.ln2.gamma, &bb.ln2.gamma);
         block.ln2.beta = average_tensors(&ab.ln2.beta, &bb.ln2.beta);
     }
+    for (i, block) in out.prelude_blocks.iter_mut().enumerate() {
+        let ab = &a.prelude_blocks[i];
+        let bb = &b.prelude_blocks[i];
+        block.attn.q_proj.weight = average_tensors(&ab.attn.q_proj.weight, &bb.attn.q_proj.weight);
+        block.attn.k_proj.weight = average_tensors(&ab.attn.k_proj.weight, &bb.attn.k_proj.weight);
+        block.attn.v_proj.weight = average_tensors(&ab.attn.v_proj.weight, &bb.attn.v_proj.weight);
+        block.attn.out_proj.weight =
+            average_tensors(&ab.attn.out_proj.weight, &bb.attn.out_proj.weight);
+        block.ffn.weight = average_tensors(&ab.ffn.weight, &bb.ffn.weight);
+        block.ffn2.weight = average_tensors(&ab.ffn2.weight, &bb.ffn2.weight);
+        if let (Some(ag), Some(bg), Some(og)) =
+            (&ab.ffn_gate, &bb.ffn_gate, block.ffn_gate.as_mut())
+        {
+            og.weight = average_tensors(&ag.weight, &bg.weight);
+        }
+        block.ln1.gamma = average_tensors(&ab.ln1.gamma, &bb.ln1.gamma);
+        block.ln1.beta = average_tensors(&ab.ln1.beta, &bb.ln1.beta);
+        block.ln2.gamma = average_tensors(&ab.ln2.gamma, &bb.ln2.gamma);
+        block.ln2.beta = average_tensors(&ab.ln2.beta, &bb.ln2.beta);
+    }
+    for (i, block) in out.coda_blocks.iter_mut().enumerate() {
+        let ab = &a.coda_blocks[i];
+        let bb = &b.coda_blocks[i];
+        block.attn.q_proj.weight = average_tensors(&ab.attn.q_proj.weight, &bb.attn.q_proj.weight);
+        block.attn.k_proj.weight = average_tensors(&ab.attn.k_proj.weight, &bb.attn.k_proj.weight);
+        block.attn.v_proj.weight = average_tensors(&ab.attn.v_proj.weight, &bb.attn.v_proj.weight);
+        block.attn.out_proj.weight =
+            average_tensors(&ab.attn.out_proj.weight, &bb.attn.out_proj.weight);
+        block.ffn.weight = average_tensors(&ab.ffn.weight, &bb.ffn.weight);
+        block.ffn2.weight = average_tensors(&ab.ffn2.weight, &bb.ffn2.weight);
+        if let (Some(ag), Some(bg), Some(og)) =
+            (&ab.ffn_gate, &bb.ffn_gate, block.ffn_gate.as_mut())
+        {
+            og.weight = average_tensors(&ag.weight, &bg.weight);
+        }
+        block.ln1.gamma = average_tensors(&ab.ln1.gamma, &bb.ln1.gamma);
+        block.ln1.beta = average_tensors(&ab.ln1.beta, &bb.ln1.beta);
+        block.ln2.gamma = average_tensors(&ab.ln2.gamma, &bb.ln2.gamma);
+        block.ln2.beta = average_tensors(&ab.ln2.beta, &bb.ln2.beta);
+    }
     if let (Some(aa), Some(bb), Some(oo)) = (&a.loop_embed, &b.loop_embed, out.loop_embed.as_mut())
     {
         oo.weight = average_tensors(&aa.weight, &bb.weight);
@@ -629,7 +706,12 @@ pub fn quantize_model(model: &mut Chatbot, mode: &str) -> Result<(), MmnError> {
                 quantize_tensor(&mut cross.k_proj.weight, scale);
                 quantize_tensor(&mut cross.v_proj.weight, scale);
             }
-            for block in &mut model.blocks {
+            let all_blocks = model
+                .blocks
+                .iter_mut()
+                .chain(model.prelude_blocks.iter_mut())
+                .chain(model.coda_blocks.iter_mut());
+            for block in all_blocks {
                 quantize_tensor(&mut block.attn.q_proj.weight, scale);
                 quantize_tensor(&mut block.attn.k_proj.weight, scale);
                 quantize_tensor(&mut block.attn.v_proj.weight, scale);

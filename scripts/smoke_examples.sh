@@ -127,6 +127,9 @@ echo "== examples/hub_local_roundtrip =="
 echo "== examples/glint_tiny =="
 "$PY" examples/glint_tiny.py
 
+echo "== examples/train_glint2 --demo --fast --steps 8 =="
+"$PY" examples/train_glint2.py --demo --fast --steps 8 --batch-size 2 --shard-rows 16 --save-every 0 --out /tmp/glint2_smoke.mmn --tokenizer tests/fixtures/glint_tokenizer_mini.json
+
 echo "== scripts/hub_hands_on local =="
 "$PY" scripts/hub_hands_on.py --only local
 

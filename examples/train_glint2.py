@@ -238,8 +238,13 @@ def main() -> None:
     p.add_argument(
         "--max-seq-len",
         type=int,
-        default=512,
-        help="train context (Glint config allows 4096; default 512 for practical CPU runs)",
+        default=4096,
+        help="train context (Glint-2 exact config is 4096; use --fast or override for CPU runs)",
+    )
+    p.add_argument(
+        "--fast",
+        action="store_true",
+        help="CPU smoke mode: sets max_seq_len=512 and shard_rows=64 (overrides --max-seq-len if smaller)",
     )
     p.add_argument(
         "--subset",
@@ -253,7 +258,7 @@ def main() -> None:
     p.add_argument(
         "--demo",
         action="store_true",
-        help="toy corpus; still uses official Glint tokenizer when downloadable",
+        help="toy built-in corpus; no FineWeb download needed (combine with --fast for quick CI)",
     )
     p.add_argument(
         "--sample",
@@ -261,6 +266,10 @@ def main() -> None:
         help="after training, generate from this prompt (Glint default sampling)",
     )
     args = p.parse_args()
+
+    if args.fast:
+        args.max_seq_len = min(args.max_seq_len, 512)
+        args.shard_rows = min(args.shard_rows, 64)
 
     bot = build_glint2(max_seq_len=args.max_seq_len, seed=args.seed)
     print(

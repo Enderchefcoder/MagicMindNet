@@ -33,6 +33,7 @@ Offline regression for `magicmindnet.eval` / `ai.run_suite` / `ai.EvalHarness`.
 | `lm_gqa_train` | lm, train | `n_kv_heads < n_heads` |
 | `lm_head_dim_train` | lm, train | Optional `head_dim` |
 | `lm_glint_train` | smoke, lm, glint, train | loops/RMS/SwiGLU/tied + `final_norm` + `lora_rank` |
+| `lm_glint2_exact` | lm, glint | Exact Glint-2 arch (`n_loops=8`, `max_loops=16`, `coda=1`, `window=256`, `lora=4`, `ffn=2112`) + train delta |
 | `lm_generate_latency` | smoke, lm, generate | `generate` wall time |
 | `lm_vision_flag` | smoke, lm | `vision=True` construct + generate |
 | `cls_mean_loss` / `cls_train` / `cls_accuracy` | cls (+smoke/train) | Fixture `labels_small.json` |

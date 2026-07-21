@@ -137,3 +137,121 @@ def test_glint2_train_updates_on_corpus():
     after = bot.compute_mean_loss(data)
     assert len(losses) == 2
     assert after < before
+
+# ---------------------------------------------------------------------------
+# Merge/quantize guards for Glint-2 knobs
+# ---------------------------------------------------------------------------
+
+def _glint2_tiny(*, coda: int = 1, prelude: int = 0, window: int = 32, max_loops: int = 4,
+                 seed: int = 0) -> ai.Chatbot:
+    return ai.Chatbot(
+        vocab_size=256,
+        n_layer=1,
+        d_model=32,
+        n_heads=4,
+        ffn_dim=64,
+        max_seq_len=64,
+        use_rope=True,
+        n_loops=2,
+        max_loops=max_loops,
+        norm="rms",
+        ffn="swiglu",
+        tie_embeddings=True,
+        loop_embed=True,
+        final_norm=True,
+        lora_rank=2,
+        coda_layers=coda,
+        prelude_layers=prelude,
+        attention_window=window,
+        seed=seed,
+    )
+
+
+def test_merge_glint2_same_arch_succeeds():
+    a = _glint2_tiny(seed=0)
+    b = _glint2_tiny(seed=1)
+    merged = ai.merge(a, b)
+    assert merged.coda_layers == 1
+    assert merged.attention_window == 32
+    assert merged.max_loops == 4
+
+
+def test_merge_glint2_different_coda_raises():
+    a = _glint2_tiny(coda=1)
+    b = _glint2_tiny(coda=0)
+    try:
+        ai.merge(a, b)
+        raise AssertionError("merge should have raised")
+    except Exception as exc:
+        assert "coda" in str(exc).lower() or "mismatch" in str(exc).lower() or "prelude" in str(exc).lower()
+
+
+def test_merge_glint2_different_prelude_raises():
+    a = _glint2_tiny(prelude=0)
+    b = _glint2_tiny(prelude=1, coda=0)
+    try:
+        ai.merge(a, b)
+        raise AssertionError("merge should have raised")
+    except Exception as exc:
+        assert "prelude" in str(exc).lower() or "mismatch" in str(exc).lower() or "coda" in str(exc).lower()
+
+
+def test_merge_glint2_different_window_raises():
+    a = _glint2_tiny(window=32)
+    b = _glint2_tiny(window=16)
+    try:
+        ai.merge(a, b)
+        raise AssertionError("merge should have raised")
+    except Exception as exc:
+        assert "window" in str(exc).lower() or "mismatch" in str(exc).lower() or "attention" in str(exc).lower()
+
+
+def test_merge_glint2_different_max_loops_raises():
+    a = _glint2_tiny(max_loops=4)
+    b = _glint2_tiny(max_loops=8)
+    try:
+        ai.merge(a, b)
+        raise AssertionError("merge should have raised")
+    except Exception as exc:
+        assert "max_loops" in str(exc).lower() or "mismatch" in str(exc).lower()
+
+
+def test_quantize_glint2_coda_covered(tmp_path):
+    """quantize_model must quantize coda blocks (not skip them)."""
+    bot = _glint2_tiny(coda=1, seed=5)
+    # Record initial coda block weight norm
+    path_pre = tmp_path / "pre.mmn"
+    bot.save(str(path_pre))
+    ai.quantize(bot, "int8")
+    path_q = tmp_path / "q.mmn"
+    bot.save(str(path_q))
+    loaded = ai.load(str(path_q))
+    # After quantize + reload, model is still functional
+    assert loaded.coda_layers == 1
+    result = loaded.generate("hello", max_new_tokens=2, temperature=0.0)
+    assert isinstance(result, str)
+
+
+def test_quantize_glint2_prelude_covered(tmp_path):
+    """quantize_model must quantize prelude blocks too."""
+    bot = ai.Chatbot(
+        vocab_size=256,
+        n_layer=1,
+        d_model=32,
+        n_heads=4,
+        ffn_dim=64,
+        max_seq_len=64,
+        n_loops=2,
+        norm="rms",
+        ffn="swiglu",
+        prelude_layers=1,
+        coda_layers=0,
+        seed=7,
+    )
+    ai.quantize(bot, "int8")
+    path = tmp_path / "q_prelude.mmn"
+    bot.save(str(path))
+    loaded = ai.load(str(path))
+    assert loaded.prelude_layers == 1
+    result = loaded.generate("hi", max_new_tokens=2, temperature=0.0)
+    assert isinstance(result, str)
