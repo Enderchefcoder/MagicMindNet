@@ -26,6 +26,9 @@ impl ChatXmlConfig {
         let parts: Vec<&str> = thinktag.split('|').collect();
         let (open, close) = if parts.len() >= 2 {
             (parts[0].to_string(), parts[1].to_string())
+        } else if !thinktag.is_empty() {
+            // Bare tag name → <tag>…</tag> so CoT training is one-liner friendly.
+            (format!("<{thinktag}>"), format!("</{thinktag}>"))
         } else {
             ("".into(), "".into())
         };

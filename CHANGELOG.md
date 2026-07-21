@@ -8,6 +8,11 @@
 - Safetensors/bin meta roundtrip for the new fields; KV-cache generation uses full forward when `n_loops>1`
 - Tests: Rust unit (`silu`/`rms`/`swiglu`/`n_loops`/`tie`) + `tests/test_glint_arch_py.py`
 
+### Added (load hardening + tiny train DX)
+- Hardened `ai.load` / `detect_checkpoint_kind`: structural safetensors sniff (no more false positives on noise), TorchScript `constants.pkl` ZIP, HDF5/TFLite/pickle redirect hints, extension-aware errors; `Chatbot.load` supports GGML/GGJT legacy
+- Training uses model `max_seq_len` (lifted hard 32-token cap); CoT `thinktag="think"` wraps Train targets; autoset presets `sub-1M` / `sub-10M` / `sub-50M`
+- Tests: `tests/test_detect_load_hardening_py.py`, `tests/test_seq_len_autoset_cot_py.py`
+
 ### Added (interop wave 21: from-scratch Zstandard — the last compression gap)
 - **zstd decoder (RFC 8878)**: frame headers, raw/RLE/compressed blocks,
   Huffman-coded literals (direct + FSE-compressed weight tables, 1- and

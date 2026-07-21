@@ -1,3 +1,5 @@
+//! Autoset parameter budgets → Chatbot shapes.
+
 #[derive(Clone, Debug)]
 pub struct ModelShape {
     pub n_layer: usize,
@@ -11,18 +13,34 @@ pub struct ModelShape {
 }
 
 /// Autoset presets accepted by `Chatbot(autoset=...)`.
-pub const VALID_AUTOSET_BUDGETS: [&str; 3] = ["sub-100M", "sub-1B", "sub-10B"];
+pub const VALID_AUTOSET_BUDGETS: [&str; 6] = [
+    "sub-1M", "sub-10M", "sub-50M", "sub-100M", "sub-1B", "sub-10B",
+];
 
 /// True when `budget` is a recognized autoset preset (either spelling).
 pub fn is_valid_autoset_budget(budget: &str) -> bool {
     matches!(
         budget,
-        "sub-100M" | "sub_100m" | "sub-1B" | "sub_1b" | "sub-10B" | "sub_10b"
+        "sub-1M"
+            | "sub_1m"
+            | "sub-10M"
+            | "sub_10m"
+            | "sub-50M"
+            | "sub_50m"
+            | "sub-100M"
+            | "sub_100m"
+            | "sub-1B"
+            | "sub_1b"
+            | "sub-10B"
+            | "sub_10b"
     )
 }
 
 pub fn autoset(budget: &str, vocab_size: usize) -> ModelShape {
     let param_budget = match budget {
+        "sub-1M" | "sub_1m" => 1_000_000,
+        "sub-10M" | "sub_10m" => 10_000_000,
+        "sub-50M" | "sub_50m" => 50_000_000,
         "sub-100M" | "sub_100m" => 100_000_000,
         "sub-1B" | "sub_1b" => 1_000_000_000,
         "sub-10B" | "sub_10b" => 10_000_000_000,
@@ -41,10 +59,27 @@ fn solve_shape(param_budget: usize, vocab_size: usize) -> ModelShape {
         vocab_size,
         estimated_params: 0,
     };
-    for d_model in [64usize, 128, 256, 384, 512, 768, 1024, 1536, 2048] {
+    // Tiny budgets need smaller dims than the classic grid.
+    let d_grid: &[usize] = if param_budget <= 1_000_000 {
+        &[32, 48, 64, 96, 128, 192, 256]
+    } else if param_budget <= 10_000_000 {
+        &[64, 96, 128, 192, 256, 384, 512]
+    } else if param_budget <= 50_000_000 {
+        &[64, 128, 256, 384, 512, 768]
+    } else {
+        &[64, 128, 256, 384, 512, 768, 1024, 1536, 2048]
+    };
+    let layer_grid: &[usize] = if param_budget <= 1_000_000 {
+        &[1, 2, 3, 4, 6]
+    } else if param_budget <= 10_000_000 {
+        &[2, 4, 6, 8, 12]
+    } else {
+        &[2, 4, 6, 8, 12, 16, 24, 32]
+    };
+    for &d_model in d_grid {
         let n_heads = (d_model / 64).max(1);
         let ffn_dim = d_model * 4;
-        for n_layer in [2usize, 4, 6, 8, 12, 16, 24, 32] {
+        for &n_layer in layer_grid {
             let params = estimate_params(n_layer, d_model, ffn_dim, vocab_size, n_heads, n_heads);
             if params <= param_budget && params >= best.estimated_params {
                 best = ModelShape {
@@ -61,13 +96,13 @@ fn solve_shape(param_budget: usize, vocab_size: usize) -> ModelShape {
     }
     if best.estimated_params == 0 {
         best = ModelShape {
-            n_layer: 2,
-            d_model: 64,
+            n_layer: 1,
+            d_model: 32,
             n_heads: 1,
             n_kv_heads: 1,
-            ffn_dim: 256,
+            ffn_dim: 128,
             vocab_size,
-            estimated_params: estimate_params(2, 64, 256, vocab_size, 1, 1),
+            estimated_params: estimate_params(1, 32, 128, vocab_size, 1, 1),
         };
     }
     best
@@ -97,5 +132,23 @@ mod tests {
     fn sub_100m_under_budget() {
         let s = autoset("sub-100M", 32000);
         assert!(s.estimated_params <= 105_000_000);
+    }
+
+    #[test]
+    fn tiny_presets_under_budget() {
+        for (name, budget) in [
+            ("sub-1M", 1_000_000usize),
+            ("sub-10M", 10_000_000),
+            ("sub-50M", 50_000_000),
+        ] {
+            let s = autoset(name, 4096);
+            assert!(
+                s.estimated_params <= budget + budget / 20,
+                "{name}: {} > {budget}",
+                s.estimated_params
+            );
+            assert!(s.n_layer >= 1);
+            assert!(s.d_model >= 16);
+        }
     }
 }

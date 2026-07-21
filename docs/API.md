@@ -144,11 +144,19 @@ bot = ai.Chatbot(
     d_model=128,
     n_heads=4,                 # optional; default 4 when not using autoset
     n_kv_heads=2,              # optional grouped-query attention (default = n_heads)
+    ffn_dim=None,              # optional FFN width (default 4 * d_model)
     vision=False,
-    autoset=None,              # or "sub-100M" | "sub-1B" | "sub-10B"
+    autoset=None,              # "sub-1M"|"sub-10M"|"sub-50M"|"sub-100M"|"sub-1B"|"sub-10B"
     seed=42,                   # optional deterministic init
     use_learned_pos_embed=False,  # default: fixed sinusoidal PE at runtime
-    max_seq_len=512,           # learned PE table rows when use_learned_pos_embed=True
+    max_seq_len=512,           # context / train seq length (+ learned PE rows)
+    use_rope=False,
+    # Glint-style architecture (defaults = classic stacked Chatbot)
+    n_loops=1,                 # reuse the block stack this many times
+    norm="layer",              # or "rms"
+    ffn="gelu",                # or "swiglu"
+    tie_embeddings=False,      # share lm_head with embed
+    loop_embed=False,          # per-loop additive embedding when n_loops>1
 )
 ```
 
@@ -158,9 +166,11 @@ bot = ai.Chatbot(
 |------|------|------------|----------------------|
 | Sinusoidal (default) | `use_learned_pos_embed=False` | none | no |
 | Learned table | `use_learned_pos_embed=True` | safetensors key `pos_embed` | yes |
+| RoPE | `use_rope=True` | none (theta in meta) | rotates Q/K |
 
 - Sinusoidal PE is applied at forward time (no extra checkpoint keys).
 - Learned `pos_embed` is `[max_seq_len, d_model]`; sequences longer than `max_seq_len` raise a shape error.
+- Training tokenization uses `max_seq_len` (no hard 32-token cap).
 - `export(..., "bin")` stores `use_learned_pos_embed` / `max_seq_len` in the architecture stub (weights are not saved in `bin`).
 - RL updates `lm_head` only; SPIN runs `Train()` and can update learned PE. See [position_encoding_coverage.md](position_encoding_coverage.md).
 - Runnable roundtrip: `python examples/learned_pos_embed_roundtrip.py`
@@ -169,8 +179,7 @@ bot = ai.Chatbot(
 `use_learned_pos_embed=True` and `use_rope=True` raise `ValueError` at
 construction time.
 
-**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`
-
+**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `tie_embeddings`, `norm_kind`, `ffn_kind`, `loop_embed`
 **Core methods:**
 
 - `train(dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None) -> list[float]` — accepts `DatasetQA` or `DatasetCorpus`; keyword overrides win over `config`; returns per-epoch mean losses

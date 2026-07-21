@@ -73,25 +73,49 @@ fn report_epoch(config: &TrainConfig, epoch: usize, mean_loss: f32) {
 }
 
 pub fn simple_tokenize(text: &str, vocab_size: usize) -> Vec<usize> {
+    simple_tokenize_n(text, vocab_size, 32)
+}
+
+/// Byte-level tokenize with an explicit max length (defaults historically used 32).
+pub fn simple_tokenize_n(text: &str, vocab_size: usize, max_tokens: usize) -> Vec<usize> {
+    let cap = max_tokens.max(1);
     text.bytes()
         .map(|b| (b as usize) % vocab_size)
-        .take(32)
+        .take(cap)
         .collect()
 }
 
-/// Tokenize for LM training: byte fallback or trained encoder when set (max 32 tokens).
+/// Tokenize for LM training: byte fallback or trained encoder when set.
+///
+/// `max_tokens` caps sequence length (use the model's `max_seq_len` for long-context training).
 pub fn tokenize_lm(text: &str, vocab_size: usize, encoder: Option<TextEncoderRef<'_>>) -> Vec<usize> {
+    tokenize_lm_n(text, vocab_size, encoder, 32)
+}
+
+/// Like [`tokenize_lm`] with an explicit max token count.
+pub fn tokenize_lm_n(
+    text: &str,
+    vocab_size: usize,
+    encoder: Option<TextEncoderRef<'_>>,
+    max_tokens: usize,
+) -> Vec<usize> {
+    let cap = max_tokens.max(1);
     match encoder {
         Some(enc) => {
             let mut ids = enc.encode(text);
-            ids.truncate(32);
+            ids.truncate(cap);
             ids
         }
-        None => simple_tokenize(text, vocab_size),
+        None => simple_tokenize_n(text, vocab_size, cap),
     }
 }
 
-/// Truncate input/target token streams to the same length for CE (min length, max 32 each).
+/// Resolve the training sequence length from the model context window.
+pub fn train_seq_len(model: &Chatbot) -> usize {
+    model.max_seq_len.max(1)
+}
+
+/// Truncate input/target token streams to the same length for CE.
 pub fn align_qa_token_pairs(tokens: &mut Vec<usize>, targets: &mut Vec<usize>) {
     let n = tokens.len().min(targets.len());
     tokens.truncate(n);
@@ -100,6 +124,25 @@ pub fn align_qa_token_pairs(tokens: &mut Vec<usize>, targets: &mut Vec<usize>) {
         tokens.push(0);
         targets.push(0);
     }
+}
+
+/// Build (input, output) strings for QA LM training.
+///
+/// When CoT think tags are configured (`thinktag="think"` or `"<think>|</think>"`),
+/// the assistant target is wrapped so training matches `format_sample` CoT markup.
+pub fn qa_train_texts(dataset: &DatasetQA, sample: &QaSample) -> (String, String) {
+    let input = sample.input.clone();
+    let output = if dataset.chatxml.cot
+        && (!dataset.chatxml.think_open.is_empty() || !dataset.chatxml.think_close.is_empty())
+    {
+        format!(
+            "{}{}{}",
+            dataset.chatxml.think_open, sample.output, dataset.chatxml.think_close
+        )
+    } else {
+        sample.output.clone()
+    };
+    (input, output)
 }
 
 /// Mean CE over all QA samples (aligned token pairs).
@@ -188,11 +231,13 @@ pub fn mean_qa_loss_with_encoder(
     encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<f32> {
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut total = 0.0f32;
     let mut count = 0usize;
     for sample in &dataset.samples {
-        let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
-        let mut targets = tokenize_lm(&sample.output, vocab, encoder);
+        let (in_text, out_text) = qa_train_texts(dataset, sample);
+        let mut tokens = tokenize_lm_n(&in_text, vocab, encoder, seq);
+        let mut targets = tokenize_lm_n(&out_text, vocab, encoder, seq);
         align_qa_token_pairs(&mut tokens, &mut targets);
         let patches = vision_patches_from_sample(
             model,
@@ -228,8 +273,9 @@ fn corpus_row_lm_pairs(
     text: &str,
     vocab_size: usize,
     encoder: Option<TextEncoderRef<'_>>,
+    max_tokens: usize,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
-    let tokens = tokenize_lm(text, vocab_size, encoder);
+    let tokens = tokenize_lm_n(text, vocab_size, encoder, max_tokens);
     if tokens.len() < 2 {
         return None;
     }
@@ -249,10 +295,11 @@ pub fn mean_corpus_loss_with_encoder(
     encoder: Option<TextEncoderRef<'_>>,
 ) -> Result<f32> {
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut total = 0.0f32;
     let mut count = 0usize;
     for row in &dataset.rows {
-        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder) {
+        if let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder, seq) {
             total += model.loss_on_batch(&tokens, &targets)?;
             count += 1;
         }
@@ -306,6 +353,7 @@ pub fn train_corpus_with_encoder(
         ..Default::default()
     });
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
     let mut epoch_losses = Vec::with_capacity(config.epochs);
@@ -323,7 +371,7 @@ pub fn train_corpus_with_encoder(
         let mut loss_sum = 0.0f32;
         for (i, &idx) in indices.iter().enumerate() {
             let row = &dataset.rows[idx];
-            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder) else {
+            let Some((tokens, targets)) = corpus_row_lm_pairs(&row.text, vocab, encoder, seq) else {
                 continue;
             };
             valid_steps += 1;
@@ -419,6 +467,7 @@ pub fn train_with_encoder(
         ..Default::default()
     });
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     let mut param_id = 0usize;
     let batch_size = config.batch_size.max(1);
     let mut epoch_losses = Vec::with_capacity(config.epochs);
@@ -435,8 +484,9 @@ pub fn train_with_encoder(
         let mut loss_sum = 0.0f32;
         for (i, &idx) in indices.iter().enumerate() {
             let sample = &dataset.samples[idx];
-            let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
-            let mut targets = tokenize_lm(&sample.output, vocab, encoder);
+            let (in_text, out_text) = qa_train_texts(dataset, sample);
+            let mut tokens = tokenize_lm_n(&in_text, vocab, encoder, seq);
+            let mut targets = tokenize_lm_n(&out_text, vocab, encoder, seq);
             align_qa_token_pairs(&mut tokens, &mut targets);
             let patch_list = vision_patches_from_sample(
                 model,
@@ -738,9 +788,11 @@ pub fn rl_with_encoder(
     let policy = rl_type.to_lowercase();
     enable_grad(true);
     let vocab = model.shape.vocab_size;
+    let seq = train_seq_len(model);
     for sample in &dataset.samples {
-        let mut tokens = tokenize_lm(&sample.input, vocab, encoder);
-        let mut targets = tokenize_lm(&sample.output, vocab, encoder);
+        let (in_text, out_text) = qa_train_texts(dataset, sample);
+        let mut tokens = tokenize_lm_n(&in_text, vocab, encoder, seq);
+        let mut targets = tokenize_lm_n(&out_text, vocab, encoder, seq);
         align_qa_token_pairs(&mut tokens, &mut targets);
         let logits = model.forward_logits(&tokens)?;
         let score = if sample.output.contains(' ') {

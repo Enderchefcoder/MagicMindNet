@@ -149,7 +149,7 @@ impl PyChatbot {
         if let Some(budget) = autoset.as_deref() {
             if !mmn_models::is_valid_autoset_budget(budget) {
                 return Err(PyValueError::new_err(format!(
-                    "Unknown autoset preset {budget:?}. Valid presets: \"sub-100M\", \"sub-1B\", \"sub-10B\".",
+                    "Unknown autoset preset {budget:?}. Valid presets: \"sub-1M\", \"sub-10M\", \"sub-50M\", \"sub-100M\", \"sub-1B\", \"sub-10B\".",
                 )));
             }
         }
