@@ -7,6 +7,8 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 | Script | Purpose |
 |--------|---------|
 | [pip_quickstart.py](pip_quickstart.py) | **After `pip install magicmindnet`**: train → chat → save → `ai.load` |
+| [train_glint2.py](train_glint2.py) | **Glint-2 exact** FineWeb-Edu train (coda/window/LoopLoRA/official BPE) |
+| [generate_glint2.py](generate_glint2.py) | Glint-2 generate defaults + `tokenizer.json` |
 | [hello_ai.py](hello_ai.py) | Beginner tour: in-memory data, `bot.train`, `bot.chat`, `save`/`ai.load`, `predict_label` |
 | [openai_server_demo.py](openai_server_demo.py) | Train tiny bot + hit local OpenAI `/v1/chat/completions` |
 | [hub_catalog.py](hub_catalog.py) | Offline hub family catalog + local `from_pretrained` |

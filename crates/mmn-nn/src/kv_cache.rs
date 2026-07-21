@@ -266,6 +266,7 @@ fn append_kv(cache: &mut LayerKvCache, k_new: &Tensor, v_new: &Tensor) -> Result
 }
 
 /// Self-attention where `q` has `q_len` rows at absolute positions `query_start_pos..`.
+/// `window` optionally limits attention to the last `w` key positions (Glint-style).
 pub fn scaled_dot_product_attention_with_kv(
     q: &Tensor,
     k: &Tensor,
@@ -274,6 +275,7 @@ pub fn scaled_dot_product_attention_with_kv(
     n_kv_heads: usize,
     causal: bool,
     query_start_pos: usize,
+    window: Option<usize>,
 ) -> Result<Tensor> {
     if q.shape.len() != 2 || k.shape.len() != 2 || v.shape.len() != 2 {
         return Err(MmnError::Shape {
@@ -316,7 +318,9 @@ pub fn scaled_dot_product_attention_with_kv(
             let abs_pos = query_start_pos + s;
             let mut scores = vec![0.0f32; kv_len];
             for t in 0..kv_len {
-                if causal && t > abs_pos {
+                let masked = (causal && t > abs_pos)
+                    || window.is_some_and(|w| abs_pos + 1 > w && t + w <= abs_pos);
+                if masked {
                     scores[t] = f32::NEG_INFINITY;
                     continue;
                 }
@@ -386,6 +390,7 @@ pub fn mha_forward_with_kv_cache(
         attn.n_kv_heads,
         attn.causal,
         start_pos,
+        attn.attention_window,
     )?;
     attn.out_proj.forward(&merged)
 }
@@ -564,5 +569,43 @@ mod tests {
             let b = full.data[[4, i]];
             assert!((a - b).abs() < 1e-4, "dim {i}: prefix-slide={a} full={b}");
         }
+    }
+
+    #[test]
+    fn attention_window_changes_output_vs_full_causal() {
+        // A block with a narrow attention window should produce different output than full causal
+        // when the sequence length exceeds the window.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let d_model = 32;
+        let seq = 8usize;
+        let window = 3usize;
+
+        let block_full = TransformerBlock::new_rng_rope_gqa(d_model, 4, 2, 64, None, &mut rng);
+        // Create a second block with same seed and set attention_window
+        let mut rng2 = rand::rngs::StdRng::seed_from_u64(42);
+        let mut block_windowed = TransformerBlock::new_rng_rope_gqa(d_model, 4, 2, 64, None, &mut rng2);
+        block_windowed.attn.attention_window = Some(window);
+
+        let mut data = vec![0.0f32; seq * d_model];
+        for (i, v) in data.iter_mut().enumerate() {
+            *v = ((i % 13) as f32) * 0.05 - 0.1;
+        }
+        let x = Tensor::from_array(
+            ArrayD::from_shape_vec(IxDyn(&[seq, d_model]), data).unwrap(),
+            false,
+        );
+
+        let out_full = block_full.forward(&x).unwrap();
+        let out_windowed = block_windowed.forward(&x).unwrap();
+
+        // Output differs for tokens beyond the window (row >= window - 1)
+        let mut any_diff = false;
+        for i in 0..d_model {
+            if (out_full.data[[seq - 1, i]] - out_windowed.data[[seq - 1, i]]).abs() > 1e-5 {
+                any_diff = true;
+                break;
+            }
+        }
+        assert!(any_diff, "windowed attention should differ from full causal at last row");
     }
 }

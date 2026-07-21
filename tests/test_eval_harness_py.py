@@ -72,6 +72,7 @@ def test_list_tasks_covers_feature_surface():
         "lm_bpe_train",
         "lm_gqa_train",
         "lm_glint_train",
+        "lm_glint2_exact",
         "lm_generate_latency",
         "lm_head_dim_train",
         "lm_unigram_train",

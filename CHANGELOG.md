@@ -1,6 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Glint-2 exact architecture parity
+- **`prelude_layers`**: unshared `TransformerBlock`s before the shared-weight loop (no LoRA).
+- **`coda_layers`**: unshared blocks after the loop and before `final_norm` (no LoRA).
+- **`max_loops`**: table capacity for `loop_embed` / LoopLoRA (must be ≥ `n_loops`). Glint-2 default: `n_loops=8, max_loops=16`.
+- **`attention_window`**: sliding causal attention window — query at position `s` only attends to keys where `s - key_pos < window`. Applies in training SDP (`sdp_windowed_with_cache`) and KV-cache generation (`scaled_dot_product_attention_with_kv`). `None` = full causal (default).
+- All four knobs are preserved in IO (`mmn-safetensors-v1` meta + `prelude.{i}.*` / `coda.{i}.*` tensors) and Python getters. Classic Chatbot defaults unchanged.
+
 ## 0.2.0 — 2026-07-21
+
+### Glint-2 exact parity (MagicMindNet)
+- Arch knobs: `coda_layers`, `prelude_layers`, `max_loops`, `attention_window`
+- `Gpt2BpeEncoder` in `Train` / `generate` via `gpt2_encoder=`; `from_hf_tokenizer_json`
+- Example: `examples/train_glint2.py` — FineWeb-Edu full stream, official Glint-2
+  tokenizer, release step budget 12_178_000; `examples/generate_glint2.py`
 
 ### Production packaging
 - First **PyPI** release: `pip install magicmindnet` (version aligned across

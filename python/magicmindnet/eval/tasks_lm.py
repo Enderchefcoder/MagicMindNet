@@ -347,3 +347,60 @@ def quantize_int8_roundtrip(*, seed: int = 1, work_dir: Path | None = None) -> T
             Metric("loss_after_quant", after, higher_is_better=False),
         ],
     )
+
+
+@register(
+    "lm_glint2_exact",
+    suites=("lm", "glint"),
+    description="Glint-2 exact arch (coda/prelude/window/max_loops) train delta",
+)
+def lm_glint2_exact(*, seed: int = 1, work_dir: Path | None = None) -> TaskResult:
+    del work_dir
+    # Exact Glint-2 arch knobs (small seq for speed).
+    bot = ai.Chatbot(
+        vocab_size=4096,
+        n_layer=1,
+        d_model=96,
+        n_heads=8,
+        ffn_dim=2112,
+        max_seq_len=64,
+        use_rope=True,
+        rope_theta=10000.0,
+        n_loops=8,
+        max_loops=16,
+        norm="rms",
+        ffn="swiglu",
+        tie_embeddings=True,
+        loop_embed=True,
+        final_norm=True,
+        lora_rank=4,
+        coda_layers=1,
+        prelude_layers=0,
+        attention_window=256,
+        seed=seed,
+    )
+    # Assert exact Glint-2 arch getter values.
+    assert bot.n_loops == 8, f"n_loops={bot.n_loops}"
+    assert bot.max_loops == 16, f"max_loops={bot.max_loops}"
+    assert bot.coda_layers == 1, f"coda_layers={bot.coda_layers}"
+    assert bot.prelude_layers == 0, f"prelude_layers={bot.prelude_layers}"
+    assert bot.attention_window == 256, f"attention_window={bot.attention_window}"
+    assert bot.lora_rank == 4, f"lora_rank={bot.lora_rank}"
+    assert bot.ffn_dim == 2112, f"ffn_dim={bot.ffn_dim}"
+    assert bot.d_model == 96, f"d_model={bot.d_model}"
+    return _loss_train_result(
+        "lm_glint2_exact",
+        bot,
+        corpus_dataset(),
+        epochs=2,
+        meta={
+            "n_loops": bot.n_loops,
+            "max_loops": bot.max_loops,
+            "coda_layers": bot.coda_layers,
+            "prelude_layers": bot.prelude_layers,
+            "attention_window": bot.attention_window,
+            "lora_rank": bot.lora_rank,
+            "ffn_dim": bot.ffn_dim,
+            "d_model": bot.d_model,
+        },
+    )

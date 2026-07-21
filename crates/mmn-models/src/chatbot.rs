@@ -84,6 +84,10 @@ pub struct ChatbotKvCache {
     pub vision_mem: Option<Tensor>,
     /// Patches used at prefill (for sliding-window re-prefill).
     pub vision_patches: Option<Vec<Vec<f32>>>,
+    /// KV cache for prelude blocks (run before the shared loop).
+    pub prelude_kv: mmn_nn::TransformerKvCache,
+    /// KV cache for coda blocks (run after the shared loop).
+    pub coda_kv: mmn_nn::TransformerKvCache,
 }
 
 pub struct Chatbot {
@@ -123,6 +127,14 @@ pub struct Chatbot {
     pub final_norm: Option<LayerNorm>,
     /// Optional per-loop LoRA QKV adapters (`lora_rank > 0`).
     pub loop_lora: Option<LoopLora>,
+    /// Unshared blocks run BEFORE the shared loop (Glint-2 prelude).
+    pub prelude_blocks: Vec<TransformerBlock>,
+    /// Unshared blocks run AFTER the shared loop (Glint-2 coda).
+    pub coda_blocks: Vec<TransformerBlock>,
+    /// Table capacity for loop_embed / LoopLoRA (≥ n_loops).
+    pub max_loops: usize,
+    /// Sliding attention window applied in all blocks.
+    pub attention_window: Option<usize>,
 }
 
 /// Optional Glint-like architecture knobs (defaults preserve classic Chatbot).
@@ -137,6 +149,14 @@ pub struct ChatbotArchExtras {
     pub final_norm: bool,
     /// LoopLoRA rank; `0` disables adapters (default).
     pub lora_rank: usize,
+    /// Unshared blocks run BEFORE the shared-block loop (Glint-2 prelude).
+    pub prelude_layers: usize,
+    /// Unshared blocks run AFTER the shared-block loop (Glint-2 coda).
+    pub coda_layers: usize,
+    /// Table size for loop_embed / LoopLoRA (≥ n_loops). `None` → equals n_loops.
+    pub max_loops: Option<usize>,
+    /// Sliding attention window (applies to ALL blocks including coda/prelude).
+    pub attention_window: Option<usize>,
 }
 
 impl Default for ChatbotArchExtras {
@@ -149,6 +169,10 @@ impl Default for ChatbotArchExtras {
             loop_embed: false,
             final_norm: false,
             lora_rank: 0,
+            prelude_layers: 0,
+            coda_layers: 0,
+            max_loops: None,
+            attention_window: None,
         }
     }
 }
@@ -491,6 +515,7 @@ impl Chatbot {
             panic!("Chatbot cannot use both use_learned_pos_embed and use_rope");
         }
         let n_loops = extras.n_loops.max(1);
+        let max_loops = extras.max_loops.unwrap_or(n_loops).max(n_loops);
         let mut rng = mmn_nn::rng_from_seed(seed);
         let shape = if let Some(b) = autoset_budget {
             let mut s = autoset(b, vocab_size);
@@ -513,10 +538,12 @@ impl Chatbot {
                 estimated_params: 0,
             }
         };
-        let mut blocks = Vec::new();
         let rope = if use_rope { Some(rope_theta) } else { None };
+        let attention_window = extras.attention_window;
+
+        let mut blocks = Vec::new();
         for _ in 0..shape.n_layer {
-            blocks.push(TransformerBlock::new_rng_rope_gqa_arch_head_dim(
+            let mut b = TransformerBlock::new_rng_rope_gqa_arch_head_dim(
                 shape.d_model,
                 shape.n_heads,
                 shape.n_kv_heads,
@@ -526,15 +553,50 @@ impl Chatbot {
                 extras.use_rms_norm,
                 extras.use_swiglu,
                 &mut rng,
-            ));
+            );
+            b.attn.attention_window = attention_window;
+            blocks.push(b);
         }
+        let mut prelude_blocks = Vec::new();
+        for _ in 0..extras.prelude_layers {
+            let mut b = TransformerBlock::new_rng_rope_gqa_arch_head_dim(
+                shape.d_model,
+                shape.n_heads,
+                shape.n_kv_heads,
+                shape.head_dim,
+                shape.ffn_dim,
+                rope,
+                extras.use_rms_norm,
+                extras.use_swiglu,
+                &mut rng,
+            );
+            b.attn.attention_window = attention_window;
+            prelude_blocks.push(b);
+        }
+        let mut coda_blocks = Vec::new();
+        for _ in 0..extras.coda_layers {
+            let mut b = TransformerBlock::new_rng_rope_gqa_arch_head_dim(
+                shape.d_model,
+                shape.n_heads,
+                shape.n_kv_heads,
+                shape.head_dim,
+                shape.ffn_dim,
+                rope,
+                extras.use_rms_norm,
+                extras.use_swiglu,
+                &mut rng,
+            );
+            b.attn.attention_window = attention_window;
+            coda_blocks.push(b);
+        }
+
         let pos_embed = if use_learned_pos_embed {
             Some(Embedding::new_rng(max_seq_len, shape.d_model, &mut rng))
         } else {
             None
         };
         let loop_embed = if extras.loop_embed && n_loops > 1 {
-            Some(Embedding::new_rng(n_loops, shape.d_model, &mut rng))
+            Some(Embedding::new_rng(max_loops, shape.d_model, &mut rng))
         } else {
             None
         };
@@ -553,7 +615,7 @@ impl Chatbot {
                 shape.q_dim(),
                 shape.kv_dim(),
                 extras.lora_rank,
-                n_loops,
+                max_loops,
                 &mut rng,
             ))
         } else {
@@ -619,6 +681,10 @@ impl Chatbot {
             loop_embed,
             final_norm,
             loop_lora,
+            prelude_blocks,
+            coda_blocks,
+            max_loops,
+            attention_window,
         }
     }
 
@@ -705,7 +771,24 @@ impl Chatbot {
                 .as_ref()
                 .map(|c| 4 * c.d_model * c.d_model)
                 .unwrap_or(0);
-        total + pe + loop_pe + final_n + lora_n + vision
+        // Prelude and coda blocks each contribute same params as one n_layer block.
+        let d = self.shape.d_model;
+        let f = self.shape.ffn_dim;
+        let has_gate = self.ffn_kind == "swiglu";
+        let block_params = |n: usize| {
+            // qkv projections + out: d*(q_dim+kv_dim+kv_dim+q_dim)
+            // ffn + ffn2: d*f + f*d; gate (optional): d*f
+            // ln1 + ln2: 2*d*2 = 4*d
+            let q_dim = self.shape.n_heads * self.shape.effective_head_dim();
+            let kv_dim = self.shape.n_kv_heads * self.shape.effective_head_dim();
+            let attn_p = d * q_dim + d * kv_dim + d * kv_dim + q_dim * d;
+            let ffn_p = d * f + f * d + if has_gate { d * f } else { 0 };
+            let ln_p = 4 * d;
+            n * (attn_p + ffn_p + ln_p)
+        };
+        let prelude_n = block_params(self.prelude_blocks.len());
+        let coda_n = block_params(self.coda_blocks.len());
+        total + pe + loop_pe + final_n + lora_n + vision + prelude_n + coda_n
     }
 
     pub fn vision_patch_dim(&self) -> usize {
@@ -887,6 +970,11 @@ impl Chatbot {
     ) -> Result<Tensor> {
         let (mut h, n_patch, _, _) = self.embed_with_optional_patches(token_ids, patches)?;
         h = self.apply_position_encoding(h)?;
+        // Prelude: unshared blocks before the loop
+        for block in &self.prelude_blocks {
+            h = block.forward(&h)?;
+        }
+        // Shared-weight loop
         for loop_i in 0..self.n_loops {
             if let Some(le) = &self.loop_embed {
                 let row = le.forward(&[loop_i.min(le.vocab_size.saturating_sub(1))])?;
@@ -909,6 +997,10 @@ impl Chatbot {
                     }
                 }
             }
+        }
+        // Coda: unshared blocks after the loop
+        for block in &self.coda_blocks {
+            h = block.forward(&h)?;
         }
         if let Some(fnorm) = &self.final_norm {
             h = fnorm.forward(&h)?;
@@ -955,6 +1047,8 @@ impl Chatbot {
             n_vision_prefix: 0,
             vision_mem: None,
             vision_patches: None,
+            prelude_kv: mmn_nn::TransformerKvCache::new(self.prelude_blocks.len()),
+            coda_kv: mmn_nn::TransformerKvCache::new(self.coda_blocks.len()),
         }
     }
 
@@ -999,26 +1093,44 @@ impl Chatbot {
         start_pos: usize,
     ) -> Result<Tensor> {
         let mut h = h;
-        if self.blocks.is_empty() {
-            return Ok(h);
-        }
-        h = mmn_nn::block_forward_with_kv_cache(
-            &self.blocks[0],
-            &h,
-            &mut cache.transformer.layers[0],
-            start_pos,
-        )?;
-        if cache.n_vision_prefix > 0 {
-            if let (Some(cross), Some(mem)) = (&self.vision_cross_attn, &cache.vision_mem) {
-                let (cross_out, _) = cross.forward_with_cache(&h, mem)?;
-                h = h.add(&cross_out)?;
-            }
-        }
-        for (i, block) in self.blocks.iter().enumerate().skip(1) {
+        // Prelude blocks
+        for (i, block) in self.prelude_blocks.iter().enumerate() {
             h = mmn_nn::block_forward_with_kv_cache(
                 block,
                 &h,
-                &mut cache.transformer.layers[i],
+                &mut cache.prelude_kv.layers[i],
+                start_pos,
+            )?;
+        }
+        // Shared-weight blocks (n_loops iterations but single KV slot per block)
+        if !self.blocks.is_empty() {
+            h = mmn_nn::block_forward_with_kv_cache(
+                &self.blocks[0],
+                &h,
+                &mut cache.transformer.layers[0],
+                start_pos,
+            )?;
+            if cache.n_vision_prefix > 0 {
+                if let (Some(cross), Some(mem)) = (&self.vision_cross_attn, &cache.vision_mem) {
+                    let (cross_out, _) = cross.forward_with_cache(&h, mem)?;
+                    h = h.add(&cross_out)?;
+                }
+            }
+            for (i, block) in self.blocks.iter().enumerate().skip(1) {
+                h = mmn_nn::block_forward_with_kv_cache(
+                    block,
+                    &h,
+                    &mut cache.transformer.layers[i],
+                    start_pos,
+                )?;
+            }
+        }
+        // Coda blocks
+        for (i, block) in self.coda_blocks.iter().enumerate() {
+            h = mmn_nn::block_forward_with_kv_cache(
+                block,
+                &h,
+                &mut cache.coda_kv.layers[i],
                 start_pos,
             )?;
         }
@@ -1057,6 +1169,8 @@ impl Chatbot {
             });
         }
         cache.transformer.clear();
+        cache.prelude_kv.clear();
+        cache.coda_kv.clear();
         cache.seq_len = 0;
         cache.n_vision_prefix = 0;
         cache.vision_mem = None;
@@ -1067,36 +1181,44 @@ impl Chatbot {
         h = self.apply_position_encoding_at_offset(h, 0)?;
         let seq = h.shape[0];
 
-        if self.blocks.is_empty() {
-            cache.seq_len = seq;
-            return self.logits_from_hidden(&h);
+        // Prelude blocks
+        for (i, block) in self.prelude_blocks.iter().enumerate() {
+            h = mmn_nn::block_forward_with_kv_cache(block, &h, &mut cache.prelude_kv.layers[i], 0)?;
         }
 
-        h = mmn_nn::block_forward_with_kv_cache(
-            &self.blocks[0],
-            &h,
-            &mut cache.transformer.layers[0],
-            0,
-        )?;
-        if n_patch > 0 {
-            if let Some(cross) = &self.vision_cross_attn {
-                let (h_new, _) = mmn_nn::vision_cross_attn_residual(cross, &h, n_patch)?;
-                cache.vision_mem =
-                    Some(mmn_nn::slice_sequence_rows(&h_new, 0, n_patch)?);
-                h = h_new;
-            } else {
-                cache.vision_mem = Some(mmn_nn::slice_sequence_rows(&h, 0, n_patch)?);
+        // Shared blocks
+        if !self.blocks.is_empty() {
+            h = mmn_nn::block_forward_with_kv_cache(
+                &self.blocks[0],
+                &h,
+                &mut cache.transformer.layers[0],
+                0,
+            )?;
+            if n_patch > 0 {
+                if let Some(cross) = &self.vision_cross_attn {
+                    let (h_new, _) = mmn_nn::vision_cross_attn_residual(cross, &h, n_patch)?;
+                    cache.vision_mem =
+                        Some(mmn_nn::slice_sequence_rows(&h_new, 0, n_patch)?);
+                    h = h_new;
+                } else {
+                    cache.vision_mem = Some(mmn_nn::slice_sequence_rows(&h, 0, n_patch)?);
+                }
+            }
+            for (i, block) in self.blocks.iter().enumerate().skip(1) {
+                h = mmn_nn::block_forward_with_kv_cache(
+                    block,
+                    &h,
+                    &mut cache.transformer.layers[i],
+                    0,
+                )?;
             }
         }
 
-        for (i, block) in self.blocks.iter().enumerate().skip(1) {
-            h = mmn_nn::block_forward_with_kv_cache(
-                block,
-                &h,
-                &mut cache.transformer.layers[i],
-                0,
-            )?;
+        // Coda blocks
+        for (i, block) in self.coda_blocks.iter().enumerate() {
+            h = mmn_nn::block_forward_with_kv_cache(block, &h, &mut cache.coda_kv.layers[i], 0)?;
         }
+
         cache.seq_len = seq;
         self.logits_from_hidden(&h)
     }
@@ -1123,6 +1245,10 @@ impl Chatbot {
                 message: "slide_kv_cache_one on empty cache".into(),
             });
         }
+        for (i, block) in self.prelude_blocks.iter().enumerate() {
+            let theta = block.attn.rope_theta.unwrap_or(self.rope_theta);
+            mmn_nn::slide_rope_kv_window_one(&mut cache.prelude_kv.layers[i], block.attn.n_kv_heads, theta)?;
+        }
         for (i, block) in self.blocks.iter().enumerate() {
             let theta = block.attn.rope_theta.unwrap_or(self.rope_theta);
             if cache.n_vision_prefix > 0 {
@@ -1139,6 +1265,10 @@ impl Chatbot {
                     theta,
                 )?;
             }
+        }
+        for (i, block) in self.coda_blocks.iter().enumerate() {
+            let theta = block.attn.rope_theta.unwrap_or(self.rope_theta);
+            mmn_nn::slide_rope_kv_window_one(&mut cache.coda_kv.layers[i], block.attn.n_kv_heads, theta)?;
         }
         cache.seq_len = cache.seq_len.saturating_sub(1);
         Ok(())
@@ -1213,6 +1343,14 @@ impl Chatbot {
         }
         i += 1;
 
+        // Coda blocks (reversed)
+        for block in self.coda_blocks.iter_mut().rev() {
+            let n = block.n_param_grads();
+            let g: Vec<ArrayD<f32>> = (0..n).map(|k| accum.averaged_grad(i + k)).collect();
+            apply_block_lm_grads(&mut *block, &g, &mut hybrid_opt, adamw, use_hybrid, param_id_base);
+            i += n;
+        }
+
         let n_blocks = self.blocks.len();
         for (rev_pos, block) in self.blocks.iter_mut().rev().enumerate() {
             if rev_pos == n_blocks - 1 {
@@ -1244,6 +1382,14 @@ impl Chatbot {
                 use_hybrid,
                 param_id_base,
             );
+            i += n;
+        }
+
+        // Prelude blocks (reversed)
+        for block in self.prelude_blocks.iter_mut().rev() {
+            let n = block.n_param_grads();
+            let g: Vec<ArrayD<f32>> = (0..n).map(|k| accum.averaged_grad(i + k)).collect();
+            apply_block_lm_grads(&mut *block, &g, &mut hybrid_opt, adamw, use_hybrid, param_id_base);
             i += n;
         }
 
@@ -1395,6 +1541,13 @@ impl Chatbot {
             );
         }
         i += 1;
+        // Coda blocks (reversed order: last coda first)
+        for block in self.coda_blocks.iter_mut().rev() {
+            let n = block.n_param_grads();
+            let g = grads[i..i + n].to_vec();
+            apply_block_lm_grads(&mut *block, &g, &mut hybrid_opt, adamw, use_hybrid, param_id_base);
+            i += n;
+        }
         let n_blocks = self.blocks.len();
         for (rev_pos, block) in self.blocks.iter_mut().rev().enumerate() {
             if rev_pos == n_blocks - 1 {
@@ -1426,6 +1579,13 @@ impl Chatbot {
                 use_hybrid,
                 param_id_base,
             );
+            i += n;
+        }
+        // Prelude blocks (reversed order: last prelude first)
+        for block in self.prelude_blocks.iter_mut().rev() {
+            let n = block.n_param_grads();
+            let g = grads[i..i + n].to_vec();
+            apply_block_lm_grads(&mut *block, &g, &mut hybrid_opt, adamw, use_hybrid, param_id_base);
             i += n;
         }
         optim_step_weight(
@@ -1540,6 +1700,14 @@ impl Chatbot {
         let seq = token_ids.len();
         let n_blocks = self.blocks.len();
 
+        // Prelude forward (unshared blocks before the loop)
+        let mut prelude_caches: Vec<BlockFfnCache> = Vec::with_capacity(self.prelude_blocks.len());
+        for block in &self.prelude_blocks {
+            let (out, cache) = block.forward_with_cache(&h)?;
+            prelude_caches.push(BlockFfnCache { block: cache });
+            h = out;
+        }
+
         struct LoopCache {
             loop_i: usize,
             /// Hidden before adding loop_embed (for loop_embed backward).
@@ -1596,6 +1764,14 @@ impl Chatbot {
             });
         }
 
+        // Coda forward (unshared blocks after the loop)
+        let mut coda_caches: Vec<BlockFfnCache> = Vec::with_capacity(self.coda_blocks.len());
+        for block in &self.coda_blocks {
+            let (out, cache) = block.forward_with_cache(&h)?;
+            coda_caches.push(BlockFfnCache { block: cache });
+            h = out;
+        }
+
         let h_before_final_norm = if self.final_norm.is_some() {
             Some(h.clone())
         } else {
@@ -1630,6 +1806,15 @@ impl Chatbot {
                 layernorm_backward(fnorm, h_before_final_norm.as_ref().unwrap(), &grad_h)?;
             grad_h = grad_h_new;
             final_norm_grads = Some((grad_gamma, grad_beta));
+        }
+
+        // Coda backward (reversed) — grads pushed right after lm_head grad.
+        for (block, fc) in self.coda_blocks.iter().zip(coda_caches.iter()).rev() {
+            let (grad_h_new, block_grads) = block.backward_attn_ffn(&fc.block, &grad_h)?;
+            for g in block_grads {
+                grads.push(g);
+            }
+            grad_h = grad_h_new;
         }
 
         // Accumulate shared-weight grads across loops.
@@ -1786,6 +1971,15 @@ impl Chatbot {
                     grads.push(g);
                 }
             }
+        }
+
+        // Prelude backward (reversed) — grads pushed after loop block grads.
+        for (block, fc) in self.prelude_blocks.iter().zip(prelude_caches.iter()).rev() {
+            let (grad_h_new, block_grads) = block.backward_attn_ffn(&fc.block, &grad_h)?;
+            for g in block_grads {
+                grads.push(g);
+            }
+            grad_h = grad_h_new;
         }
 
         let grad_h2 = grad_h
@@ -2794,6 +2988,127 @@ mod chatbot_tests {
             .weight
             .data[[0, 0]];
         assert_ne!(w_before, w_after);
+    }
+
+    #[test]
+    fn coda_blocks_change_output_and_add_params() {
+        let make = |coda: usize| {
+            Chatbot::new_with_arch(
+                false,
+                None,
+                32,
+                Some(1),
+                Some(16),
+                Some(32),
+                Some(4),
+                Some(4),
+                None,
+                Some(42),
+                false,
+                64,
+                false,
+                DEFAULT_ROPE_THETA,
+                ChatbotArchExtras {
+                    coda_layers: coda,
+                    use_rms_norm: true,
+                    use_swiglu: true,
+                    ..Default::default()
+                },
+            )
+        };
+        let base = make(0);
+        let with_coda = make(2);
+        assert_eq!(with_coda.coda_blocks.len(), 2);
+        assert!(with_coda.parameters() > base.parameters());
+        let tokens = [1usize, 2, 3];
+        let out_base = base.forward_logits(&tokens).unwrap();
+        let out_coda = with_coda.forward_logits(&tokens).unwrap();
+        let diff: f32 = out_base.data.iter()
+            .zip(out_coda.data.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(diff > 0.0, "coda blocks must change logits");
+    }
+
+    #[test]
+    fn max_loops_sets_loop_embed_table_size() {
+        let bot = Chatbot::new_with_arch(
+            false,
+            None,
+            32,
+            Some(1),
+            Some(16),
+            Some(32),
+            Some(4),
+            Some(4),
+            None,
+            Some(5),
+            false,
+            64,
+            false,
+            DEFAULT_ROPE_THETA,
+            ChatbotArchExtras {
+                n_loops: 4,
+                max_loops: Some(8),
+                loop_embed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(bot.n_loops, 4);
+        assert_eq!(bot.max_loops, 8);
+        // loop_embed table should have max_loops rows
+        assert_eq!(bot.loop_embed.as_ref().unwrap().vocab_size, 8);
+    }
+
+    #[test]
+    fn attention_window_changes_hidden_vs_full_causal() {
+        let make = |window: Option<usize>| {
+            Chatbot::new_with_arch(
+                false,
+                None,
+                64,
+                Some(1),
+                Some(16),
+                Some(32),
+                Some(4),
+                Some(4),
+                None,
+                Some(7),
+                false,
+                64,
+                false,
+                DEFAULT_ROPE_THETA,
+                ChatbotArchExtras {
+                    attention_window: window,
+                    ..Default::default()
+                },
+            )
+        };
+        let full = make(None);
+        let mut windowed = make(Some(2));
+        // Copy weights so only the mask differs
+        windowed.embed.weight = full.embed.weight.clone();
+        windowed.lm_head.weight = full.lm_head.weight.clone();
+        for (w, f) in windowed.blocks.iter_mut().zip(full.blocks.iter()) {
+            w.attn.q_proj.weight = f.attn.q_proj.weight.clone();
+            w.attn.k_proj.weight = f.attn.k_proj.weight.clone();
+            w.attn.v_proj.weight = f.attn.v_proj.weight.clone();
+            w.attn.out_proj.weight = f.attn.out_proj.weight.clone();
+            w.ffn.weight = f.ffn.weight.clone();
+            w.ffn2.weight = f.ffn2.weight.clone();
+            w.ln1.gamma = f.ln1.gamma.clone();
+            w.ln1.beta = f.ln1.beta.clone();
+            w.ln2.gamma = f.ln2.gamma.clone();
+            w.ln2.beta = f.ln2.beta.clone();
+        }
+        let tokens = [1usize, 2, 3, 4, 5, 6, 7, 8];
+        let out_full = full.forward_logits(&tokens).unwrap();
+        let out_windowed = windowed.forward_logits(&tokens).unwrap();
+        let diff: f32 = out_full.data.iter()
+            .zip(out_windowed.data.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(diff > 0.0, "window should change logits for long sequences");
     }
 }
 

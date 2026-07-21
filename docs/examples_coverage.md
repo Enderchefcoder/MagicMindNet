@@ -5,6 +5,8 @@ Runnable scripts under `examples/` and how they are regression-tested.
 | Script | Purpose | Smoke (`smoke_examples`) | pytest (`test_examples_scripts_py`) |
 |--------|---------|--------------------------|-------------------------------------|
 | [pip_quickstart.py](../examples/pip_quickstart.py) | Post-`pip install` train → chat → save → load | yes | yes |
+| [train_glint2.py](../examples/train_glint2.py) | **Glint-2 exact** FineWeb-Edu trainer (MMN-only; coda/window/LoopLoRA) | demo | yes |
+| [generate_glint2.py](../examples/generate_glint2.py) | Glint-2 sampling defaults + official tokenizer | — | via train_glint2 |
 | [hello_ai.py](../examples/hello_ai.py) | Beginner tour: in-memory data, `bot.train`/`chat`/`save`, `ai.load`, `predict_label` | yes | yes |
 | [openai_server_demo.py](../examples/openai_server_demo.py) | Local OpenAI `/v1/chat/completions` smoke | yes | yes |
 | [hub_catalog.py](../examples/hub_catalog.py) | Hub family catalog + local `from_pretrained` | yes | yes |

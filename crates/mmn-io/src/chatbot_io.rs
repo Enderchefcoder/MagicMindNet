@@ -1,4 +1,4 @@
-use crate::block_tensors::{export_block_tensors, import_block_tensors};
+use crate::block_tensors::{export_block_tensors, export_named_block_list, import_block_tensors, import_named_block_list};
 use crate::checkpoint_util::{
     expect_tensor_shape, optional_tensor_entry, quantize_tensor, require_tensor_entry,
     tensor_from_entry, tensor_to_entry, write_file_create_parents, TensorMap,
@@ -52,6 +52,20 @@ pub fn export_safetensors<'a>(
     }
     if model.n_loops != 1 {
         meta["n_loops"] = serde_json::json!(model.n_loops);
+    }
+    if model.max_loops != model.n_loops {
+        meta["max_loops"] = serde_json::json!(model.max_loops);
+    }
+    if !model.prelude_blocks.is_empty() {
+        meta["prelude_layers"] = serde_json::json!(model.prelude_blocks.len());
+        export_named_block_list(&model.prelude_blocks, "prelude", &mut map);
+    }
+    if !model.coda_blocks.is_empty() {
+        meta["coda_layers"] = serde_json::json!(model.coda_blocks.len());
+        export_named_block_list(&model.coda_blocks, "coda", &mut map);
+    }
+    if let Some(w) = model.attention_window {
+        meta["attention_window"] = serde_json::json!(w);
     }
     if model.tie_embeddings {
         meta["tie_embeddings"] = serde_json::json!(true);
@@ -242,7 +256,7 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
     }
     if let Some(le) = model.loop_embed.as_mut() {
         le.weight = tensor_from_entry(require_tensor_entry(tensors, "loop_embed.weight")?)?;
-        expect_tensor_shape(&le.weight, &[model.n_loops, d_model], "loop_embed.weight")?;
+        expect_tensor_shape(&le.weight, &[model.max_loops, d_model], "loop_embed.weight")?;
     }
     if let Some(fnorm) = model.final_norm.as_mut() {
         fnorm.gamma = tensor_from_entry(require_tensor_entry(tensors, "final_norm.gamma")?)?;
@@ -347,11 +361,43 @@ fn import_mmn_json_safetensors(text: &str) -> Result<Chatbot, MmnError> {
         }
     }
     import_block_tensors(&mut model, tensors)?;
+    // Import prelude and coda blocks if present
+    if !model.prelude_blocks.is_empty() {
+        import_named_block_list(
+            &mut model.prelude_blocks,
+            "prelude",
+            tensors,
+            d_model,
+            model.shape.ffn_dim,
+            model.shape.q_dim(),
+            model.shape.kv_dim(),
+            model.norm_kind == "rms",
+        )?;
+        for block in &mut model.prelude_blocks {
+            block.attn.attention_window = model.attention_window;
+        }
+    }
+    if !model.coda_blocks.is_empty() {
+        import_named_block_list(
+            &mut model.coda_blocks,
+            "coda",
+            tensors,
+            d_model,
+            model.shape.ffn_dim,
+            model.shape.q_dim(),
+            model.shape.kv_dim(),
+            model.norm_kind == "rms",
+        )?;
+        for block in &mut model.coda_blocks {
+            block.attn.attention_window = model.attention_window;
+        }
+    }
     Ok(model)
 }
 
 fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
     let n_loops = meta["n_loops"].as_u64().unwrap_or(1) as usize;
+    let max_loops = meta.get("max_loops").and_then(|v| v.as_u64()).map(|v| v as usize);
     let tie_embeddings = meta["tie_embeddings"].as_bool().unwrap_or(false);
     let norm = meta["norm"].as_str().unwrap_or("layer");
     let ffn = meta
@@ -362,6 +408,9 @@ fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
     let loop_embed = meta["loop_embed"].as_bool().unwrap_or(false);
     let final_norm = meta["final_norm"].as_bool().unwrap_or(false);
     let lora_rank = meta["lora_rank"].as_u64().unwrap_or(0) as usize;
+    let prelude_layers = meta.get("prelude_layers").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let coda_layers = meta.get("coda_layers").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let attention_window = meta.get("attention_window").and_then(|v| v.as_u64()).map(|v| v as usize);
     ChatbotArchExtras {
         n_loops: n_loops.max(1),
         tie_embeddings,
@@ -370,6 +419,10 @@ fn arch_extras_from_meta(meta: &serde_json::Value) -> ChatbotArchExtras {
         loop_embed: loop_embed && n_loops > 1,
         final_norm,
         lora_rank,
+        prelude_layers,
+        coda_layers,
+        max_loops,
+        attention_window,
     }
 }
 
@@ -414,6 +467,43 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
             explanation: "merge() requires matching loop/norm/FFN/tie/LoRA configuration.".into(),
         });
     }
+    if a.prelude_blocks.len() != b.prelude_blocks.len()
+        || a.coda_blocks.len() != b.coda_blocks.len()
+    {
+        return Err(MmnError::ModelMismatch {
+            message: format!(
+                "Cannot merge models with different prelude/coda layers \
+                 (a: prelude={}, coda={}; b: prelude={}, coda={})",
+                a.prelude_blocks.len(),
+                a.coda_blocks.len(),
+                b.prelude_blocks.len(),
+                b.coda_blocks.len(),
+            ),
+            fix: "Use two models with the same prelude_layers and coda_layers.".into(),
+            explanation: "merge() requires matching Glint-2 prelude/coda block counts.".into(),
+        });
+    }
+    if a.max_loops != b.max_loops {
+        return Err(MmnError::ModelMismatch {
+            message: format!(
+                "Cannot merge models with different max_loops (a={}, b={})",
+                a.max_loops, b.max_loops
+            ),
+            fix: "Use two models with the same max_loops.".into(),
+            explanation: "merge() requires matching max_loops capacity for loop_embed/LoRA tables."
+                .into(),
+        });
+    }
+    if a.attention_window != b.attention_window {
+        return Err(MmnError::ModelMismatch {
+            message: format!(
+                "Cannot merge models with different attention_window (a={:?}, b={:?})",
+                a.attention_window, b.attention_window
+            ),
+            fix: "Use two models with the same attention_window.".into(),
+            explanation: "merge() requires matching sliding window configuration.".into(),
+        });
+    }
     let extras = ChatbotArchExtras {
         n_loops: a.n_loops,
         tie_embeddings: a.tie_embeddings,
@@ -422,6 +512,10 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         loop_embed: a.loop_embed.is_some(),
         final_norm: a.final_norm.is_some(),
         lora_rank: a.loop_lora.as_ref().map(|l| l.rank).unwrap_or(0),
+        prelude_layers: a.prelude_blocks.len(),
+        coda_layers: a.coda_blocks.len(),
+        max_loops: Some(a.max_loops),
+        attention_window: a.attention_window,
     };
     let mut out = Chatbot::new_with_arch(
         a.vision || b.vision,
@@ -516,6 +610,46 @@ pub fn merge_models(a: &Chatbot, b: &Chatbot) -> Result<Chatbot, MmnError> {
         block.ln2.gamma = average_tensors(&ab.ln2.gamma, &bb.ln2.gamma);
         block.ln2.beta = average_tensors(&ab.ln2.beta, &bb.ln2.beta);
     }
+    for (i, block) in out.prelude_blocks.iter_mut().enumerate() {
+        let ab = &a.prelude_blocks[i];
+        let bb = &b.prelude_blocks[i];
+        block.attn.q_proj.weight = average_tensors(&ab.attn.q_proj.weight, &bb.attn.q_proj.weight);
+        block.attn.k_proj.weight = average_tensors(&ab.attn.k_proj.weight, &bb.attn.k_proj.weight);
+        block.attn.v_proj.weight = average_tensors(&ab.attn.v_proj.weight, &bb.attn.v_proj.weight);
+        block.attn.out_proj.weight =
+            average_tensors(&ab.attn.out_proj.weight, &bb.attn.out_proj.weight);
+        block.ffn.weight = average_tensors(&ab.ffn.weight, &bb.ffn.weight);
+        block.ffn2.weight = average_tensors(&ab.ffn2.weight, &bb.ffn2.weight);
+        if let (Some(ag), Some(bg), Some(og)) =
+            (&ab.ffn_gate, &bb.ffn_gate, block.ffn_gate.as_mut())
+        {
+            og.weight = average_tensors(&ag.weight, &bg.weight);
+        }
+        block.ln1.gamma = average_tensors(&ab.ln1.gamma, &bb.ln1.gamma);
+        block.ln1.beta = average_tensors(&ab.ln1.beta, &bb.ln1.beta);
+        block.ln2.gamma = average_tensors(&ab.ln2.gamma, &bb.ln2.gamma);
+        block.ln2.beta = average_tensors(&ab.ln2.beta, &bb.ln2.beta);
+    }
+    for (i, block) in out.coda_blocks.iter_mut().enumerate() {
+        let ab = &a.coda_blocks[i];
+        let bb = &b.coda_blocks[i];
+        block.attn.q_proj.weight = average_tensors(&ab.attn.q_proj.weight, &bb.attn.q_proj.weight);
+        block.attn.k_proj.weight = average_tensors(&ab.attn.k_proj.weight, &bb.attn.k_proj.weight);
+        block.attn.v_proj.weight = average_tensors(&ab.attn.v_proj.weight, &bb.attn.v_proj.weight);
+        block.attn.out_proj.weight =
+            average_tensors(&ab.attn.out_proj.weight, &bb.attn.out_proj.weight);
+        block.ffn.weight = average_tensors(&ab.ffn.weight, &bb.ffn.weight);
+        block.ffn2.weight = average_tensors(&ab.ffn2.weight, &bb.ffn2.weight);
+        if let (Some(ag), Some(bg), Some(og)) =
+            (&ab.ffn_gate, &bb.ffn_gate, block.ffn_gate.as_mut())
+        {
+            og.weight = average_tensors(&ag.weight, &bg.weight);
+        }
+        block.ln1.gamma = average_tensors(&ab.ln1.gamma, &bb.ln1.gamma);
+        block.ln1.beta = average_tensors(&ab.ln1.beta, &bb.ln1.beta);
+        block.ln2.gamma = average_tensors(&ab.ln2.gamma, &bb.ln2.gamma);
+        block.ln2.beta = average_tensors(&ab.ln2.beta, &bb.ln2.beta);
+    }
     if let (Some(aa), Some(bb), Some(oo)) = (&a.loop_embed, &b.loop_embed, out.loop_embed.as_mut())
     {
         oo.weight = average_tensors(&aa.weight, &bb.weight);
@@ -572,7 +706,12 @@ pub fn quantize_model(model: &mut Chatbot, mode: &str) -> Result<(), MmnError> {
                 quantize_tensor(&mut cross.k_proj.weight, scale);
                 quantize_tensor(&mut cross.v_proj.weight, scale);
             }
-            for block in &mut model.blocks {
+            let all_blocks = model
+                .blocks
+                .iter_mut()
+                .chain(model.prelude_blocks.iter_mut())
+                .chain(model.coda_blocks.iter_mut());
+            for block in all_blocks {
                 quantize_tensor(&mut block.attn.q_proj.weight, scale);
                 quantize_tensor(&mut block.attn.k_proj.weight, scale);
                 quantize_tensor(&mut block.attn.v_proj.weight, scale);

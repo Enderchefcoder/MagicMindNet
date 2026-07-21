@@ -9,3 +9,4 @@ pub use chatbot::{
     ChatbotKvCache, Classifier, Diffusion, DEFAULT_MAX_SEQ_LEN, DEFAULT_ROPE_THETA,
     VISION_PATCH_DIM, VISION_RGB_CHANNELS, VISION_RGB_DIM, VISION_RGB_SPATIAL,
 };
+pub use mmn_nn::TransformerBlock;

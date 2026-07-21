@@ -322,6 +322,8 @@ Format details: [docs/checkpoints.md](docs/checkpoints.md).
 | `examples/learned_pos_embed_roundtrip.py` | Learned `pos_embed` export → import + loss parity |
 | `examples/rope_roundtrip.py` | RoPE chatbot export → import + loss parity |
 | `examples/classifier_roundtrip.py` | Classifier export → import |
+| `examples/train_glint2.py` | Glint-2 exact training (looped, RMS, SwiGLU, coda, window, BPE) |
+| `examples/generate_glint2.py` | Generate with a trained Glint-2 MagicMindNet checkpoint |
 
 Full catalog: [examples/README.md](examples/README.md).
 

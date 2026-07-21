@@ -194,12 +194,17 @@ bot = ai.Chatbot(
     use_rope=False,
     # Glint-style architecture (defaults = classic stacked Chatbot)
     n_loops=1,                 # reuse the block stack this many times
+    max_loops=None,            # capacity for loop_embed/LoRA tables (≥ n_loops; default = n_loops)
     norm="layer",              # or "rms"
     ffn="gelu",                # or "swiglu"
     tie_embeddings=False,      # share lm_head with embed
     loop_embed=False,          # per-loop additive embedding when n_loops>1
     final_norm=False,          # optional final LayerNorm/RMSNorm (Glint output_norm)
     lora_rank=0,               # LoopLoRA QKV adapters (0 = off; zero-init up = identity)
+    # Glint-2 extended knobs
+    prelude_layers=0,          # unshared blocks run BEFORE the shared loop (Glint-2 prelude)
+    coda_layers=0,             # unshared blocks run AFTER the shared loop (Glint-2 coda)
+    attention_window=None,     # sliding attention window size (None = full causal)
 )
 ```
 
@@ -222,7 +227,43 @@ bot = ai.Chatbot(
 `use_learned_pos_embed=True` and `use_rope=True` raise `ValueError` at
 construction time.
 
-**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `head_dim`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `tie_embeddings`, `norm`, `ffn`, `loop_embed`, `final_norm`, `lora_rank`
+**Getters:** `vocab_size`, `n_layer`, `d_model`, `n_heads`, `n_kv_heads`, `head_dim`, `ffn_dim`, `parameters`, `layer_size`, `tokenizer`, `has_vision`, `init_seed`, `uses_causal_attention`, `use_learned_pos_embed`, `max_seq_len`, `n_loops`, `max_loops`, `tie_embeddings`, `norm`, `ffn`, `loop_embed`, `final_norm`, `lora_rank`, `prelude_layers`, `coda_layers`, `attention_window`
+
+**Glint-2 arch notes:**
+
+| Knob | Default | Glint-2 value | Notes |
+|------|---------|---------------|-------|
+| `n_loops` | `1` | `8` | Number of times the shared block stack is reused |
+| `max_loops` | `n_loops` | `16` | Table capacity for `loop_embed` / `LoopLoRA` (allows growing loops at inference) |
+| `norm` | `"layer"` | `"rms"` | `"rms"` = RMSNorm; affects all blocks + final_norm |
+| `ffn` | `"gelu"` | `"swiglu"` | `"swiglu"` adds a gated linear unit (SwiGLU) alongside the up-projection |
+| `tie_embeddings` | `False` | `True` | Share `embed` and `lm_head` weights |
+| `loop_embed` | `False` | `True` | Per-loop additive position embedding `[max_loops, d_model]` |
+| `final_norm` | `False` | `True` | Final normalization layer after all loops |
+| `lora_rank` | `0` | `4` | LoopLoRA QKV rank per loop; `0` = disabled |
+| `prelude_layers` | `0` | `0` | Unshared blocks run once **before** the shared loop |
+| `coda_layers` | `0` | `1` | Unshared blocks run once **after** the shared loop |
+| `attention_window` | `None` | `256` | Sliding window masking (tokens attend only to previous `window` tokens) |
+
+Complete Glint-2 construction:
+
+```python
+bot = ai.Chatbot(
+    vocab_size=4096, n_layer=1, d_model=96, n_heads=8,
+    ffn_dim=2112, max_seq_len=4096,
+    use_rope=True, rope_theta=10000.0,
+    n_loops=8, max_loops=16,
+    norm="rms", ffn="swiglu",
+    tie_embeddings=True, loop_embed=True, final_norm=True,
+    lora_rank=4, prelude_layers=0, coda_layers=1,
+    attention_window=256, seed=0,
+)
+assert bot.coda_layers == 1
+assert bot.attention_window == 256
+assert bot.max_loops == 16
+```
+
+See `examples/train_glint2.py` (full training) and `examples/generate_glint2.py` (generation).
 **Core methods:**
 
 - `train(dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None) -> list[float]` — accepts `DatasetQA` or `DatasetCorpus`; keyword overrides win over `config`; returns per-epoch mean losses
@@ -344,6 +385,29 @@ text = uni.decode(ids)
 Pass `unigram_encoder=uni` to `Train()` / `RL` / `SPIN` / `compute_mean_loss` (do not pass both `bpe_encoder` and `unigram_encoder`).
 
 Persist with `uni.save("tokenizer.mmn")` and `UnigramEncoder.load("tokenizer.mmn")` (`mmn-unigram-v1` JSON).
+
+### Gpt2BpeEncoder
+
+GPT-2 byte-level BPE tokenizer, compatible with the official Glint-2 `tokenizer.json` (HuggingFace `tokenizers` format).
+
+```python
+# Load from a HuggingFace tokenizer.json (Glint-2, GPT-2, etc.)
+enc = ai.Gpt2BpeEncoder.from_hf_tokenizer_json("path/to/tokenizer.json")
+
+# Or build directly from a vocab list + merge rule strings ("left right")
+enc = ai.Gpt2BpeEncoder.from_vocab(vocab_tokens, merges)
+
+ids = enc.encode("hello world")   # list[int] token ids
+text = enc.decode(ids)            # str decoded text
+print(enc.vocab_size)             # int
+print(repr(enc))                  # Gpt2BpeEncoder(vocab_size=4096, merges=50000)
+```
+
+Pass `gpt2_encoder=enc` to `Train()`, `ai.Train()`, `Chatbot.generate()`, `Chatbot.chat()`, `Chatbot.compute_mean_loss()`, `Chatbot.compute_loss()`, `RL()`, and `SPIN()` for GPT-2 BPE tokenization. Do not pass alongside `bpe_encoder` or `unigram_encoder`.
+
+`from_hf_tokenizer_json` reads the HuggingFace `tokenizers` JSON format (field `model.vocab` + `model.merges`). Merges may be `[left, right]` arrays or `"left right"` strings.
+
+See `examples/train_glint2.py` and `examples/generate_glint2.py` for full end-to-end usage with the official Glint-2 tokenizer.
 
 | API | Required dataset |
 |-----|------------------|

@@ -322,6 +322,7 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         loop_embed: loop_embed && n_loops > 1,
         final_norm,
         lora_rank,
+        ..Default::default()
     };
     let mut model = Chatbot::new_with_arch(
         vision,
@@ -395,7 +396,7 @@ pub(crate) fn load_chatbot_from_mmn_tensors(
         le.weight = tensor_from_entry(require_tensor_entry(&json_tensors, "loop_embed.weight")?)?;
         expect_tensor_shape(
             &le.weight,
-            &[model.n_loops, d_model],
+            &[model.max_loops, d_model],
             "loop_embed.weight",
         )?;
     }

@@ -10,7 +10,7 @@ use crate::datasets::{PyDatasetCorpus, PyDatasetQA};
 use crate::encoder_util::resolve_text_encoder;
 use crate::errors::{mmn_err_to_py, DataMismatchError};
 use crate::io::{expect_checkpoint_family, export_chatbot_to_path, import_chatbot_from_path};
-use crate::tokenizer::{PyBytePairEncoder, PyUnigramEncoder};
+use crate::tokenizer::{PyBytePairEncoder, PyGpt2BpeEncoder, PyUnigramEncoder};
 use crate::train::train_chatbot_dispatch;
 use crate::train_config::{resolve_train_config, PyTrainConfig};
 
@@ -140,6 +140,10 @@ impl PyChatbot {
         loop_embed=false,
         final_norm=false,
         lora_rank=0,
+        coda_layers=0,
+        prelude_layers=0,
+        max_loops=None,
+        attention_window=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -164,6 +168,10 @@ impl PyChatbot {
         loop_embed: bool,
         final_norm: bool,
         lora_rank: isize,
+        coda_layers: usize,
+        prelude_layers: usize,
+        max_loops: Option<usize>,
+        attention_window: Option<usize>,
     ) -> PyResult<Self> {
         if use_learned_pos_embed && use_rope {
             return Err(PyValueError::new_err(
@@ -234,6 +242,10 @@ impl PyChatbot {
                     loop_embed,
                     final_norm,
                     lora_rank: lora_rank as usize,
+                    coda_layers,
+                    prelude_layers,
+                    max_loops,
+                    attention_window,
                 },
             ),
         })
@@ -285,7 +297,7 @@ impl PyChatbot {
     /// All settings are optional: `bot.train(data)` uses sensible defaults, or
     /// pass `epochs=`, `learning_rate=`, ... to override (a full `TrainConfig`
     /// in `config=` also works).
-    #[pyo3(signature = (dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None))]
+    #[pyo3(signature = (dataset, config=None, *, epochs=None, batch_size=None, learning_rate=None, optimizer=None, cuda=None, verbose=None, bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None))]
     #[allow(clippy::too_many_arguments)]
     fn train(
         &mut self,
@@ -299,6 +311,7 @@ impl PyChatbot {
         verbose: Option<bool>,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
     ) -> PyResult<Vec<f32>> {
         let cfg = resolve_train_config(
             config,
@@ -309,13 +322,13 @@ impl PyChatbot {
             cuda,
             verbose,
         )?;
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         train_chatbot_dispatch(self, dataset, &cfg, enc)
     }
 
     /// Generate a reply with beginner-friendly sampling defaults
     /// (temperature 0.8, top-p 0.95, light repetition penalty).
-    #[pyo3(signature = (prompt, *, max_new_tokens=64, temperature=0.8, top_p=0.95, top_k=0, repetition_penalty=1.1, stop_strings=None, bpe_encoder=None, unigram_encoder=None))]
+    #[pyo3(signature = (prompt, *, max_new_tokens=64, temperature=0.8, top_p=0.95, top_k=0, repetition_penalty=1.1, stop_strings=None, bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None))]
     #[allow(clippy::too_many_arguments)]
     fn chat(
         &self,
@@ -328,8 +341,9 @@ impl PyChatbot {
         stop_strings: Option<Vec<String>>,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
     ) -> PyResult<String> {
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         let cfg = mmn_train::GenerateConfig {
             max_new_tokens,
             temperature,
@@ -491,6 +505,26 @@ impl PyChatbot {
             .unwrap_or(0)
     }
 
+    #[getter]
+    fn coda_layers(&self) -> usize {
+        self.inner.coda_blocks.len()
+    }
+
+    #[getter]
+    fn prelude_layers(&self) -> usize {
+        self.inner.prelude_blocks.len()
+    }
+
+    #[getter]
+    fn max_loops(&self) -> usize {
+        self.inner.max_loops
+    }
+
+    #[getter]
+    fn attention_window(&self) -> Option<usize> {
+        self.inner.attention_window
+    }
+
     fn __repr__(&self) -> String {
         let s = &self.inner.shape;
         let vision = if self.inner.vision { "True" } else { "False" };
@@ -513,18 +547,19 @@ impl PyChatbot {
     }
 
     /// Mean cross-entropy for tokenized `input` → `target` (same tokenization as `Train`).
-    #[pyo3(signature = (input, target, bpe_encoder=None, unigram_encoder=None, image_patch=None, image_patches=None))]
+    #[pyo3(signature = (input, target, bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None, image_patch=None, image_patches=None))]
     fn compute_loss(
         &self,
         input: &str,
         target: &str,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
         image_patch: Option<Vec<f32>>,
         image_patches: Option<Vec<Vec<f32>>>,
     ) -> PyResult<f32> {
         let vocab = self.inner.shape.vocab_size;
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         let mut tokens = tokenize_lm(input, vocab, enc);
         let mut targets = tokenize_lm(target, vocab, enc);
         align_qa_token_pairs(&mut tokens, &mut targets);
@@ -575,14 +610,15 @@ impl PyChatbot {
     }
 
     /// Mean CE over all rows in a `DatasetQA` or `DatasetCorpus`.
-    #[pyo3(signature = (dataset, bpe_encoder=None, unigram_encoder=None))]
+    #[pyo3(signature = (dataset, bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None))]
     fn compute_mean_loss(
         &self,
         dataset: &Bound<'_, PyAny>,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
     ) -> PyResult<f32> {
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         if let Ok(ds) = dataset.downcast::<PyDatasetQA>() {
             return mean_qa_loss_with_encoder(&self.inner, &ds.borrow().inner, enc)
                 .map_err(mmn_err_to_py);
@@ -615,6 +651,7 @@ impl PyChatbot {
         use_kv_cache=true,
         bpe_encoder=None,
         unigram_encoder=None,
+        gpt2_encoder=None,
         image_patch=None,
         image_patches=None,
         stop_token_ids=None,
@@ -641,6 +678,7 @@ impl PyChatbot {
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
         image_patch: Option<Vec<f32>>,
         image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
@@ -648,7 +686,7 @@ impl PyChatbot {
         json_mode: bool,
         grammar: Option<String>,
     ) -> PyResult<String> {
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         let vision_patches =
             resolve_generate_vision_patches(&self.inner, prompt, image_patch, image_patches)?;
         let cfg = build_generate_config(
@@ -693,6 +731,7 @@ impl PyChatbot {
         use_kv_cache=true,
         bpe_encoder=None,
         unigram_encoder=None,
+        gpt2_encoder=None,
         image_patch=None,
         image_patches=None,
         stop_token_ids=None,
@@ -719,6 +758,7 @@ impl PyChatbot {
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
         image_patch: Option<Vec<f32>>,
         image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
@@ -726,7 +766,7 @@ impl PyChatbot {
         json_mode: bool,
         grammar: Option<String>,
     ) -> PyResult<Vec<String>> {
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         let vision_patches =
             resolve_generate_vision_patches(&self.inner, prompt, image_patch, image_patches)?;
         let cfg = build_generate_config(
@@ -771,6 +811,7 @@ impl PyChatbot {
         use_kv_cache=true,
         bpe_encoder=None,
         unigram_encoder=None,
+        gpt2_encoder=None,
         image_patch=None,
         image_patches=None,
         stop_token_ids=None,
@@ -797,6 +838,7 @@ impl PyChatbot {
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
         image_patch: Option<Vec<f32>>,
         image_patches: Option<Vec<Vec<f32>>>,
         stop_token_ids: Option<Vec<usize>>,
@@ -804,7 +846,7 @@ impl PyChatbot {
         json_mode: bool,
         grammar: Option<String>,
     ) -> PyResult<Vec<usize>> {
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         let vision_patches =
             resolve_generate_vision_patches(&self.inner, prompt, image_patch, image_patches)?;
         let cfg = build_generate_config(
@@ -831,15 +873,16 @@ impl PyChatbot {
     }
 
     /// Mean-pool hidden states for one string or a list of strings.
-    #[pyo3(signature = (texts, *, bpe_encoder=None, unigram_encoder=None))]
+    #[pyo3(signature = (texts, *, bpe_encoder=None, unigram_encoder=None, gpt2_encoder=None))]
     fn embed(
         &self,
         py: Python<'_>,
         texts: &Bound<'_, PyAny>,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
     ) -> PyResult<PyObject> {
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         let max_ctx = if self.inner.use_learned_pos_embed || self.inner.uses_rope() {
             self.inner.max_seq_len
         } else {
@@ -879,6 +922,7 @@ impl PyChatbot {
         use_kv_cache=true,
         bpe_encoder=None,
         unigram_encoder=None,
+        gpt2_encoder=None,
         stop_token_ids=None,
         stop_strings=None,
         json_mode=false,
@@ -903,6 +947,7 @@ impl PyChatbot {
         use_kv_cache: bool,
         bpe_encoder: Option<&PyBytePairEncoder>,
         unigram_encoder: Option<&PyUnigramEncoder>,
+        gpt2_encoder: Option<&PyGpt2BpeEncoder>,
         stop_token_ids: Option<Vec<usize>>,
         stop_strings: Option<Vec<String>>,
         json_mode: bool,
@@ -923,7 +968,7 @@ impl PyChatbot {
             pairs.push((role, content));
         }
         let prompt = mmn_train::format_chat_messages(&pairs, true);
-        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder)?;
+        let enc = resolve_text_encoder(bpe_encoder, unigram_encoder, gpt2_encoder)?;
         let cfg = build_generate_config(
             max_new_tokens,
             temperature,
