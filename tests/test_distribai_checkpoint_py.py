@@ -7,6 +7,7 @@ saves. The wrapper fixture below is crafted with CPython's own ``pickle`` +
 ``zipfile`` so it is byte-level identical to what torch.save would emit.
 """
 
+import contextlib
 import io
 import pickle
 import struct
@@ -187,29 +188,48 @@ class _FakeModelConfig:
     """Stands in for DistribAI's ModelConfig dataclass inside the pickle."""
 
 
+@contextlib.contextmanager
+def _torch_pickle_modules():
+    """Provide torch modules for pickling without leaking stubs.
+
+    ``install_fake_torch`` registers stand-in ``torch`` modules when the real
+    package was never imported; tests running later (hub/transformers) would
+    then import the stub. Pop the stubs afterwards so this file stays
+    order-independent in the full suite.
+    """
+    had_torch = "torch" in sys.modules
+    torch_module, _ = _install_fake_torch()
+    try:
+        yield torch_module
+    finally:
+        if not had_torch and getattr(sys.modules.get("torch"), "__file__", None) is None:
+            sys.modules.pop("torch", None)
+            sys.modules.pop("torch._utils", None)
+
+
 def _write_distribai_wrapper_checkpoint(path, tensors, extras):
     """Craft the exact archive DistribAIModelWrapper.save_checkpoint writes."""
-    torch_module, _ = _install_fake_torch()
+    with _torch_pickle_modules() as torch_module:
 
-    class TorchStylePickler(pickle.Pickler):
-        def persistent_id(self, obj):
-            if isinstance(obj, _StorageRef):
-                return ("storage", torch_module.FloatStorage, obj.key, "cpu", obj.numel)
-            return None
+        class TorchStylePickler(pickle.Pickler):
+            def persistent_id(self, obj):
+                if isinstance(obj, _StorageRef):
+                    return ("storage", torch_module.FloatStorage, obj.key, "cpu", obj.numel)
+                return None
 
-    state = OrderedDict()
-    payloads = {}
-    for index, (name, (shape, fill)) in enumerate(tensors.items()):
-        key = str(index)
-        state[name] = _TensorStub(key, shape)
-        numel = 1
-        for dim in shape:
-            numel *= dim
-        payloads[key] = struct.pack(f"<{numel}f", *([fill] * numel))
-    wrapper = {"model_state": state, **extras}
+        state = OrderedDict()
+        payloads = {}
+        for index, (name, (shape, fill)) in enumerate(tensors.items()):
+            key = str(index)
+            state[name] = _TensorStub(key, shape)
+            numel = 1
+            for dim in shape:
+                numel *= dim
+            payloads[key] = struct.pack(f"<{numel}f", *([fill] * numel))
+        wrapper = {"model_state": state, **extras}
 
-    buffer = io.BytesIO()
-    TorchStylePickler(buffer, protocol=2).dump(wrapper)
+        buffer = io.BytesIO()
+        TorchStylePickler(buffer, protocol=2).dump(wrapper)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
         archive.writestr("archive/data.pkl", buffer.getvalue())
         archive.writestr("archive/version", "3\n")
