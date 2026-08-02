@@ -35,6 +35,7 @@ Regression matrices live under `docs/*_coverage.md`. Extend the relevant doc whe
 | [interop.md](interop.md) | Global formats: GGUF, PyTorch `.pt`, NumPy `.npy`/`.npz`, universal `ai.load` |
 | [hub.md](hub.md) | `ai.from_pretrained` — HF / ModelScope / Ollama / local |
 | [hub_coverage.md](hub_coverage.md) | Hub offline + hands-on coverage matrix |
+| [distribai.md](distribai.md) | DistribAI grid bridge: architecture configs, script jobs, checkpoints (coverage matrix inside) |
 | [benchmarks.md](benchmarks.md) | Unified eval harness + legacy example benches |
 | [eval_coverage.md](eval_coverage.md) | `magicmindnet.eval` task/suite matrix |
 | [training_coverage.md](training_coverage.md) | `Train`, `TrainClassifier`, RL/SPIN, mean loss |

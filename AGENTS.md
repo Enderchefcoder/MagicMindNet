@@ -52,7 +52,7 @@ CUDA: `maturin develop --release --features cuda -m crates/mmn-py/Cargo.toml`
 
 When adding or changing behavior, extend the matching regression doc and tests. Full index: [docs/testing.md](docs/testing.md). Contributor table: [CONTRIBUTING.md](CONTRIBUTING.md#coverage-matrices).
 
-Key docs: `checkpoint_coverage.md`, `training_coverage.md`, `examples_coverage.md`, `attention_coverage.md`, `layernorm_coverage.md`, `nn_coverage.md`, `interop.md` (GGUF / PyTorch / NumPy formats).
+Key docs: `checkpoint_coverage.md`, `training_coverage.md`, `examples_coverage.md`, `attention_coverage.md`, `layernorm_coverage.md`, `nn_coverage.md`, `interop.md` (GGUF / PyTorch / NumPy formats), `distribai.md` (DistribAI grid bridge; repo doubles as their `external/mytrainer` tree via `configs/grid_architectures.json`).
 
 ## Subagents
 

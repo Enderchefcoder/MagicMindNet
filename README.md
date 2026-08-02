@@ -164,6 +164,7 @@ flowchart TB
 | **RL / SPIN** | Toy alignment loops on small models |
 | **IO** | Universal `ai.load(path)` auto-detects model family + format; `mmn-safetensors-v1`, `mmn-hf-safetensors-v1` (binary HF Chatbot), `mmn-hf-classifier-v1`, `mmn-classifier-v1`, `mmn-bin-v1` stub; **strict import** |
 | **Global formats** | **Zero format libraries anywhere** (safetensors container included — from scratch). **GGUF**: reads every current GGML tensor type, encodes classic quants byte-identical to the reference plus the **complete k-quant family Q2_K–Q6_K + Q8_K** (the reference Python package can't encode k-quants at all), cross-validated against llama.cpp's `gguf` package; embedded SentencePiece and gpt2 byte-BPE tokenizers. **PyTorch** zip + legacy `.pt` + sharded `*.index.json`. **NumPy `.npy`/`.npz`** with from-scratch DEFLATE both ways. **TensorFlow**: Keras `.h5`/`.keras` and checkpoint v2, read AND write — h5py and `tf.train.load_checkpoint` open our output. **ONNX** read + write (passes `onnx.checker`). **Flax/JAX** msgpack pytrees read + write (from-scratch MessagePack codec). Generic `.safetensors` arrays in every spec dtype. Official `safetensors` package opens our containers — [docs/interop.md](docs/interop.md) |
+| **DistribAI grids** | `magicmindnet.distribai` bridge to [DistribAI](https://github.com/naxium-oss/DistribAI) installs: architecture-config mapping (loops ⇄ logical layers), MyTrainer sync tree (this repo clones straight into `external/mytrainer`), worker script packages, admin-API job submission, and state-dict checkpoint interop both ways (strict-load verified against their real torch models) — [docs/distribai.md](docs/distribai.md) |
 | **Merge** | Element-wise mean of all weights; vision OR; init_seed from first model |
 | **Quantize** | `int8` / `int4` on chatbot + classifier weights |
 | **Diffusion** | VAE encode/decode, UNet denoise training, inpainting, sampling, checkpoint IO |
@@ -396,6 +397,7 @@ MagicMindNet/
 | [docs/API.md](docs/API.md) | Public Python surface |
 | [docs/feature_parity.md](docs/feature_parity.md) | PyTorch / llama.cpp / Ollama parity matrix |
 | [docs/hub.md](docs/hub.md) | Universal `from_pretrained` routing |
+| [docs/distribai.md](docs/distribai.md) | **DistribAI compatibility** — grid jobs, MyTrainer sync, checkpoint bridge |
 | [docs/benchmarks.md](docs/benchmarks.md) | Eval harness suites |
 | [docs/training.md](docs/training.md) | Losses, optimizers, batching |
 | [docs/training_coverage.md](docs/training_coverage.md) | **Training regression matrix** |
