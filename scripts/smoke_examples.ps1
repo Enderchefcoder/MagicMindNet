@@ -169,6 +169,9 @@ Write-Host "== examples/vision_chatbot =="
 Write-Host "== examples/eval_harness smoke =="
 & $PY examples/eval_harness.py smoke
 
+Write-Host "== examples/distribai_bridge =="
+& $PY examples/distribai_bridge.py
+
 Write-Host "== examples/train_glint2 --demo --fast --steps 8 =="
 & $PY examples/train_glint2.py --demo --fast --steps 8 --batch-size 2 --shard-rows 16 --save-every 0 --out "$env:TEMP\glint2_smoke.mmn" --tokenizer tests/fixtures/glint_tokenizer_mini.json
 

@@ -282,21 +282,46 @@ fn stubs_from_state_dict(
 ) -> Result<(NamedStubs, Option<serde_json::Value>), MmnError> {
     let mut stubs = Vec::new();
     let mut meta = None;
+    collect_stubs(pairs, "", &mut stubs, &mut meta)?;
+    Ok((stubs, meta))
+}
+
+/// Walk a (possibly nested) pickled dict, naming tensors with dotted paths.
+///
+/// Wrapper checkpoints such as `torch.save({"model_state": model.state_dict(),
+/// "step": 10})` (the DistribAI / Lightning convention) keep their tensors one
+/// dict level down; flattening them as `model_state.<key>` makes every wrapper
+/// readable by `load_pt` / `load_arrays` without torch.
+fn collect_stubs(
+    pairs: &[(PickleValue, PickleValue)],
+    prefix: &str,
+    stubs: &mut NamedStubs,
+    meta: &mut Option<serde_json::Value>,
+) -> Result<(), MmnError> {
     for (key, value) in pairs {
         let Some(name) = key.as_str() else { continue };
-        if name == META_KEY {
+        if prefix.is_empty() && name == META_KEY {
             if let Some(json) = value.as_str() {
-                meta = Some(serde_json::from_str(json).map_err(|e| {
+                *meta = Some(serde_json::from_str(json).map_err(|e| {
                     err(format!("torch checkpoint {META_KEY} JSON invalid: {e}"))
                 })?);
             }
             continue;
         }
+        let full = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        if let PickleValue::Dict(inner) = value {
+            collect_stubs(inner, &full, stubs, meta)?;
+            continue;
+        }
         if let Some(stub) = tensor_stub_from_reduce(value)? {
-            stubs.push((name.to_string(), stub));
+            stubs.push((full, stub));
         }
     }
-    Ok((stubs, meta))
+    Ok(())
 }
 
 fn array_from_stub(
@@ -629,6 +654,66 @@ mod tests {
         assert_eq!(back[0].0, "w");
         assert_eq!(back[0].1, vec![2, 3]);
         assert_eq!(back[1].2, vec![-1.0, 0.5, 2.0]);
+    }
+
+    /// Wrapper checkpoints (`torch.save({"model_state": state_dict, "step": n,
+    /// "config": <arbitrary object>})` — the DistribAI convention) flatten
+    /// nested dict tensors into dotted names and skip non-tensor entries.
+    #[test]
+    fn nested_wrapper_state_dict_flattens_with_dotted_names() {
+        let mut w = PickleWriter::new();
+        w.empty_dict();
+        w.mark();
+        w.string("model_state");
+        w.empty_dict();
+        w.mark();
+        w.string("embedding.weight");
+        write_tensor_reduce(&mut w, "0", &[2, 2]);
+        w.string("fc_out.weight");
+        write_tensor_reduce(&mut w, "1", &[3]);
+        w.set_items();
+        w.string("step");
+        w.int(25);
+        w.string("loss");
+        w.string("2.5");
+        // Arbitrary non-torch object (DistribAI pickles its ModelConfig dataclass).
+        w.string("config");
+        w.global("some.module", "ModelConfig");
+        w.empty_tuple();
+        w.reduce();
+        w.set_items();
+        let pickle = w.finish();
+        let storage0: Vec<u8> = [1.0f32, 2.0, 3.0, 4.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let storage1: Vec<u8> = [9.0f32, 8.0, 7.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let bytes = write_zip_stored(&[
+            ("archive/data.pkl".to_string(), pickle),
+            ("archive/data/0".to_string(), storage0),
+            ("archive/data/1".to_string(), storage1),
+        ])
+        .unwrap();
+        let (arrays, meta) = read_torch_arrays_bytes(&bytes).unwrap();
+        assert!(meta.is_none());
+        assert_eq!(
+            arrays,
+            vec![
+                (
+                    "model_state.embedding.weight".to_string(),
+                    vec![2, 2],
+                    vec![1.0, 2.0, 3.0, 4.0]
+                ),
+                (
+                    "model_state.fc_out.weight".to_string(),
+                    vec![3],
+                    vec![9.0, 8.0, 7.0]
+                ),
+            ]
+        );
     }
 
     #[test]

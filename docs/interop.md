@@ -146,6 +146,12 @@ The **legacy pre-1.6 format** (raw pickle stream with the
 `0x1950a86a20f9469cfc6c` magic, protocol/sys-info pickles, and appended raw
 storages) is auto-detected and read by the same APIs.
 
+**Nested wrapper checkpoints** — `torch.save({"model_state": state_dict,
+"config": ..., "step": ...})`, the DistribAI / Lightning trainer convention —
+flatten with dotted names (`model_state.model.embedding.weight`); non-tensor
+entries are skipped. See [distribai.md](distribai.md) for the full DistribAI
+bridge built on top.
+
 **Sharded checkpoints** (`pytorch_model.bin.index.json` /
 `model.safetensors.index.json` + shard files, the Hugging Face layout for
 large models) load through `ai.load(index_path)`: the `weight_map` resolves

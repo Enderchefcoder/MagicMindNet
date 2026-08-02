@@ -17,6 +17,7 @@ Save and reload any model with one call each::
 See docs/getting_started.md for the full beginner tutorial.
 """
 
+from magicmindnet import distribai
 from magicmindnet._native import (
     RL,
     SPIN,
@@ -151,6 +152,7 @@ __all__ = [
     "DatasetQA",
     "Diffusion",
     "ModelMismatchError",
+    "distribai",
     "TrainConfig",
     "Train",
     "TrainClassifier",

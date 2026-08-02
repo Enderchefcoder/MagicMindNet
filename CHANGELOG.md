@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+### DistribAI compatibility (`magicmindnet.distribai`)
+- New bridge module making MagicMindNet interoperable with
+  [DistribAI](https://github.com/naxium-oss/DistribAI) installs (contract
+  mirror of their 0.9.0 orchestrator/worker):
+  - `detect_install` / `check_compatibility` — find checkouts, the pip
+    package, node data dirs, or a configured `ORCHESTRATOR_ADMIN_URL`
+    (magicmindnet has zero required deps, so it coexists with DistribAI's
+    torch/grpcio/protobuf pins in one venv).
+  - `architecture_config(bot)` ⇄ `chatbot_from_architecture(config)` —
+    decoder-transformer mapping with `n_loops ⇄ n_logical_layers`, GQA, and
+    sliding window; bounds validated with a faithful mirror of DistribAI's
+    `validate_architecture_config` (same error messages, checked locally).
+  - MyTrainer sync contract: committed `configs/grid_architectures.json` +
+    `models/model.py` make a MagicMindNet checkout a valid
+    `external/mytrainer` tree (passes their `verify_mytrainer_submodule.py
+    --require`; `MyTrainerSync.sync()` registers the `mmn-*` profiles);
+    `export_mytrainer_tree(dir)` writes the same tree anywhere.
+  - Script jobs: `build_script_package` (worker tarball with `run.py` /
+    `requirements.txt` / `config.json` / `dataset.json`, deterministic,
+    preflight + AST rules mirrored) and `default_run_py` implementing the
+    ScriptRunner contract (`hyperparams.json` in; `results.json`,
+    `metrics.json`, `checkpoint.pt` out).
+  - `DistribAIClient` — stdlib-HTTP admin API client (`health`, `jobs`,
+    `submit_job` with base64 package + pinned SHA-256, `cancel`, `retry`,
+    `submit_training_job` one-call flow; Bearer `DISTRIBAI_ADMIN_SECRET`).
+  - Checkpoint interop: `export_checkpoint` writes DistribAI-native state
+    dicts (`.pt` / `.safetensors`, fused `in_proj` or GQA block names,
+    synthesized sinusoidal `position_embedding`); `import_checkpoint` reads
+    flat state dicts, safetensors, and nested
+    `{"model_state": ...}` wrapper checkpoints — no torch needed either way.
+    Cross-validated against DistribAI's real code with torch:
+    `load_state_dict(strict=True)` both flavours, full-circle loss parity.
+- `.pt` reader now flattens **nested** state dicts with dotted names
+  (`model_state.model.embedding.weight`), covering DistribAI/Lightning-style
+  wrapper checkpoints in `ai.load_pt` / `ai.load_arrays`.
+- Example: `examples/distribai_bridge.py` (+ smoke); guide:
+  `docs/distribai.md`; ~105 new pytest cases + a nested-wrapper Rust test.
+
 ## 0.2.1 — 2026-07-21
 
 ### Glint-2 exact architecture parity

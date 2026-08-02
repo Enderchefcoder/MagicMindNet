@@ -41,6 +41,7 @@ Every name below is defined on `import magicmindnet as ai` and listed in `ai.__a
 | Tokenizers | `BytePairEncoder`, `UnigramEncoder`, `Gpt2BpeEncoder` |
 | Aliases | `load_checkpoint` (= `load`), `export_classifier_model`, `import_classifier_model`, `quantize_classifier_model` (same as non-`_model` names) |
 | Resource | `limit`, `limit_percent` |
+| Submodules | `distribai` (DistribAI grid bridge — [distribai.md](distribai.md)) |
 | Errors | `CPUError`, `CUDAError`, `DataMismatchError`, `DataMissingRowError`, `ModelMismatchError` |
 
 Typing: the package ships `py.typed` and `_native.pyi` stubs, so IDEs autocomplete
@@ -543,6 +544,32 @@ bot = ai.load("pytorch_model.bin.index.json")  # sharded HF checkpoints
 ```
 
 Details: [interop.md](interop.md).
+
+### DistribAI bridge (`magicmindnet.distribai`)
+
+Compatibility layer for devices running [DistribAI](https://github.com/naxium-oss/DistribAI)
+nodes/orchestrators — architecture-config mapping, MyTrainer sync trees,
+worker script packages, admin-API job submission, and DistribAI-native
+checkpoint interop:
+
+```python
+from magicmindnet import distribai as bridge
+
+bridge.check_compatibility()                     # install detection + report
+config = bridge.architecture_config(bot)         # Chatbot -> architecture_config
+bot = bridge.chatbot_from_architecture(config)   # ... and back (n_loops mapping)
+bridge.grid_architectures()                      # mmn-* profiles for MyTrainer sync
+bridge.export_mytrainer_tree("mytrainer/")       # external/mytrainer-shaped tree
+
+package = bridge.build_script_package(dataset=[{"input": "hi", "output": "yo"}])
+client = bridge.DistribAIClient()                # ORCHESTRATOR_ADMIN_URL / :8766
+client.submit_training_job(bot, dataset=[...], steps=100)
+
+bridge.export_checkpoint(bot, "ck.pt")           # DistribAI state-dict names
+bot = bridge.import_checkpoint("ck.pt")          # incl. {"model_state": ...} wrappers
+```
+
+Details: [distribai.md](distribai.md).
 
 ---
 

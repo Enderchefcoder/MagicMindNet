@@ -38,6 +38,7 @@ Runnable demos live here. From the repo root, activate `.venv` and run `maturin 
 | [vision_chatbot.py](vision_chatbot.py) | Vision-flag chatbot train + export roundtrip |
 | [eval_mean_loss.py](eval_mean_loss.py) | `qa`, `cls`, `corpus`, `diffusion`, or `diffusion-edit` (add `--train`, `--learned-pe`, `--rope`, `--bpe`) |
 | [eval_harness.py](eval_harness.py) | Unified eval suites (`smoke`/`lm`/`cls`/`io`/`all`…) + JSON reports |
+| [distribai_bridge.py](distribai_bridge.py) | DistribAI grid bridge: install detect, arch config, script package, checkpoint roundtrip |
 
 ## Quick commands
 

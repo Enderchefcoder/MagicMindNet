@@ -51,6 +51,12 @@
 - Docs site charts need local HTTP (`python -m http.server -d docs/site`) — `file://` often blocks `fetch` of JSON.
 - Glint-2 `loop_embed` / LoopLoRA tables are sized by `max_loops` (16), while forward iterates `n_loops` (8); IO shape checks must use `max_loops`, not `n_loops`.
 - Glint-2 exact MMN train: `examples/train_glint2.py` — FineWeb-Edu stream + official `tokenizer.json` via `Gpt2BpeEncoder.from_hf_tokenizer_json` + `gpt2_encoder=` on Train (no torch).
+- DistribAI (naxium-oss) contract: arch configs are pure-data `decoder_transformer|gru|...` dicts (dim 16–4096, transformer seq_len ≤8192, ≤512M est. params); worker script jobs = gzip tar ≤5MB with `run.py` (no exec/eval/subprocess/ctypes/multiprocessing), worker writes `hyperparams.json` + collects `results.json`/`metrics.json`/`checkpoint.pt`; MyTrainer sync reads `external/mytrainer/configs/grid_architectures.json`; admin HTTP default `127.0.0.1:8766` + Bearer `DISTRIBAI_ADMIN_SECRET`.
+- DistribAI decoder always ends in LayerNorm → exact checkpoint roundtrips need `final_norm=True` Chatbots; loop count / head count are NOT in torch state dicts (pass `n_loops=`/`n_heads=` on import; their head default is 4→1 fallback).
+- mmn checkpoint meta only stores `max_seq_len` when `use_learned_pos_embed` — read live `bot.max_seq_len` when synthesizing PE tables.
+- mmn pt reader (`stubs_from_state_dict`) now flattens nested dicts as dotted names; keep non-tensor wrapper entries (dataclass configs) skipped, never erroring.
+- Keep `magicmindnet` modules under ~1000 lines — split as packages like `magicmindnet.eval` (`distribai/` = `__init__` + `checkpoints.py`).
+- This VM reaches HF hub; `pip install --index-url https://download.pytorch.org/whl/cpu torch` gives CPU torch for cross-validation without CUDA bloat; hub extras (`transformers`/`huggingface_hub`) must be installed or 3 hub pytest cases fail on plain `pytest -q`.
 
 # Scratchpad
 
@@ -441,4 +447,14 @@ docs site (HTML/CSS/charts), hub/examples polish, README as one install story.
 [X] Build wheel/sdist; publish to PyPI (manylinux2014 + sdist); pip install verified
 [X] verify_gate; commit LICENSE/sdist fix; push; update PR #3
 # verify_gate: OK — 619 Rust / 1206 pytest; PyPI 0.2.0 wheel+sdist live
+
+## Task: DistribAI compatibility (naxium-oss/DistribAI installs)
+
+[X] Study DistribAI 0.9.0: arch validator, MyTrainer sync, ScriptRunner, preflight, admin API, checkpoints
+[X] Rust: pt reader flattens nested `{"model_state": ...}` wrappers (dotted names) + test
+[X] `magicmindnet.distribai` package: detect/compat, arch config both ways (n_loops⇄logical), grid profiles, mytrainer tree, script packages + run.py, DistribAIClient, checkpoint export/import
+[X] Repo root `configs/grid_architectures.json` + `models/model.py` → checkout doubles as external/mytrainer
+[X] 105 pytest (bridge/client/script-job/checkpoints) + example + smoke + docs (docs/distribai.md)
+[X] Cross-validated vs real DistribAI code + torch 2.13: strict load_state_dict both flavours, MyTrainerSync registers profiles, preflight passes, full-circle loss parity
+# verify_gate: OK — 624 Rust / 1343 pytest collected (1332 passed, 11 skipped); fake-torch stub leak fixed (order-independent)
 
