@@ -398,3 +398,11 @@ def test_vision_chatbot_example_runs(run_example):
     assert proc.returncode == 0, proc.stderr or proc.stdout
     assert "has_vision:" in proc.stdout
     assert "loaded has_vision:" in proc.stdout
+
+
+def test_distribai_bridge_example_runs(run_example):
+    proc = run_example("distribai_bridge.py")
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "architecture_config:" in proc.stdout
+    assert "Script package:" in proc.stdout
+    assert "Loss parity after roundtrip:" in proc.stdout

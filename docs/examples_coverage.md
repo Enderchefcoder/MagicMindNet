@@ -33,6 +33,7 @@ Runnable scripts under `examples/` and how they are regression-tested.
 | [vision_chatbot.py](../examples/vision_chatbot.py) | Vision-flag train + export | yes | yes |
 | [hub_local_roundtrip.py](../examples/hub_local_roundtrip.py) | `ai.from_pretrained` local Chatbot generate/finetune/save | yes | via hub wave2 |
 | [glint_tiny.py](../examples/glint_tiny.py) | Glint-style RMSNorm/SwiGLU/`n_loops`/tie train smoke | yes | via glint tests |
+| [distribai_bridge.py](../examples/distribai_bridge.py) | DistribAI bridge: detect, arch config, script package, checkpoint parity | yes | yes |
 | [eval_harness.py](../examples/eval_harness.py) | Unified `magicmindnet.eval` suites + JSON | yes (`smoke`) | `test_eval_harness_py.py` |
 | [hub_hands_on.py](../scripts/hub_hands_on.py) (`--only local`) | Offline hub matrix smoke | yes | yes (`test_hands_on_local_subprocess`) |
 
