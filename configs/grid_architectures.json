@@ -1,0 +1,86 @@
+{
+  "mmn-base": {
+    "architecture": "decoder_transformer",
+    "dim": 256,
+    "family": "decoder_transformer",
+    "ffn_dim": 1024,
+    "n_heads": 8,
+    "n_kv_heads": 8,
+    "n_logical_layers": 6,
+    "n_unique_layers": 6,
+    "seq_len": 2048,
+    "version": 1
+  },
+  "mmn-glint2-mini": {
+    "architecture": "decoder_transformer",
+    "dim": 256,
+    "family": "decoder_transformer",
+    "ffn_dim": 1024,
+    "n_heads": 8,
+    "n_kv_heads": 8,
+    "n_logical_layers": 32,
+    "n_unique_layers": 4,
+    "seq_len": 2048,
+    "version": 1
+  },
+  "mmn-gqa-small": {
+    "architecture": "decoder_transformer",
+    "dim": 256,
+    "family": "decoder_transformer",
+    "ffn_dim": 1024,
+    "n_heads": 8,
+    "n_kv_heads": 2,
+    "n_logical_layers": 6,
+    "n_unique_layers": 6,
+    "seq_len": 2048,
+    "version": 1
+  },
+  "mmn-large": {
+    "architecture": "decoder_transformer",
+    "dim": 768,
+    "family": "decoder_transformer",
+    "ffn_dim": 3072,
+    "n_heads": 12,
+    "n_kv_heads": 12,
+    "n_logical_layers": 12,
+    "n_unique_layers": 12,
+    "seq_len": 4096,
+    "version": 1
+  },
+  "mmn-medium": {
+    "architecture": "decoder_transformer",
+    "dim": 512,
+    "family": "decoder_transformer",
+    "ffn_dim": 2048,
+    "n_heads": 8,
+    "n_kv_heads": 8,
+    "n_logical_layers": 8,
+    "n_unique_layers": 8,
+    "seq_len": 2048,
+    "version": 1
+  },
+  "mmn-small": {
+    "architecture": "decoder_transformer",
+    "dim": 128,
+    "family": "decoder_transformer",
+    "ffn_dim": 512,
+    "n_heads": 4,
+    "n_kv_heads": 4,
+    "n_logical_layers": 4,
+    "n_unique_layers": 4,
+    "seq_len": 1024,
+    "version": 1
+  },
+  "mmn-tiny": {
+    "architecture": "decoder_transformer",
+    "dim": 64,
+    "family": "decoder_transformer",
+    "ffn_dim": 256,
+    "n_heads": 4,
+    "n_kv_heads": 4,
+    "n_logical_layers": 2,
+    "n_unique_layers": 2,
+    "seq_len": 512,
+    "version": 1
+  }
+}
