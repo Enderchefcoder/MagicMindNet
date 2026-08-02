@@ -456,4 +456,5 @@ docs site (HTML/CSS/charts), hub/examples polish, README as one install story.
 [X] Repo root `configs/grid_architectures.json` + `models/model.py` → checkout doubles as external/mytrainer
 [X] 105 pytest (bridge/client/script-job/checkpoints) + example + smoke + docs (docs/distribai.md)
 [X] Cross-validated vs real DistribAI code + torch 2.13: strict load_state_dict both flavours, MyTrainerSync registers profiles, preflight passes, full-circle loss parity
+# verify_gate: OK — 624 Rust / 1343 pytest collected (1332 passed, 11 skipped); fake-torch stub leak fixed (order-independent)
 
